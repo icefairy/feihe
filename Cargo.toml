@@ -1,0 +1,33 @@
+[package]
+name = "feihe"
+version = "0.1.0"
+edition = "2021"
+description = "飞鹤输入法 - TSF (Text Services Framework) 中文输入法，小鹤双拼"
+license = "MIT"
+
+[lib]
+name = "feihe"
+crate-type = ["cdylib"]
+
+[dependencies]
+windows = { version = "0.62", features = [
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+    # TSF 核心
+    "Win32_UI_TextServices",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_Foundation",
+] }
+windows-core = "0.62"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
