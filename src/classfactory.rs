@@ -1,4 +1,5 @@
 // COM 类工厂：CTF 用它创建 TextService 实例
+use crate::dllcount;
 use crate::textservice::{self, FeiheTextService};
 use windows::core::*;
 use windows_core::implement;
@@ -8,6 +9,20 @@ use windows::Win32::UI::TextServices::*;
 
 #[implement(IClassFactory)]
 pub struct FeiheClassFactory;
+
+impl FeiheClassFactory {
+    /// 创建并登记一个类工厂对象（DLL 计数 +1）
+    pub fn new() -> Self {
+        dllcount::object_created();
+        Self
+    }
+}
+
+impl Drop for FeiheClassFactory {
+    fn drop(&mut self) {
+        dllcount::object_destroyed();
+    }
+}
 
 impl IClassFactory_Impl for FeiheClassFactory_Impl {
     fn CreateInstance(
@@ -28,7 +43,8 @@ impl IClassFactory_Impl for FeiheClassFactory_Impl {
         Ok(())
     }
 
-    fn LockServer(&self, _flock: BOOL) -> Result<()> {
+    fn LockServer(&self, flock: BOOL) -> Result<()> {
+        dllcount::lock_server(flock.as_bool());
         Ok(())
     }
 }

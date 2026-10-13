@@ -2,6 +2,7 @@
 // M1：注册用外部 installer（reg 脚本），DLL 只需 DllGetClassObject/DllCanUnloadNow
 mod classfactory;
 mod clsid;
+mod dllcount;
 mod textservice;
 
 use windows::core::*;
@@ -33,12 +34,20 @@ extern "system" fn DllGetClassObject(
         if *rclsid != clsid::CLSID_FEIHE_TEXTSERVICE {
             return CLASS_E_CLASSNOTAVAILABLE;
         }
-        let factory: IClassFactory = classfactory::FeiheClassFactory.into();
-        factory.query(riid, ppv)
+        let factory: IClassFactory = classfactory::FeiheClassFactory::new().into();
+        let hr = factory.query(riid, ppv);
+        hr
     }
 }
 
+/// 是否可以卸载 DLL。
+/// 只要有活对象（类工厂 / 文本服务）或 LockServer 锁，就必须返回 S_FALSE，
+/// 否则 MSCTF 仍持有本 DLL 内的指针时 DLL 被卸载 -> use-after-unload -> 宿主 AV 崩溃。
 #[no_mangle]
 extern "system" fn DllCanUnloadNow() -> HRESULT {
-    S_OK
+    if dllcount::can_unload() {
+        S_OK
+    } else {
+        S_FALSE
+    }
 }

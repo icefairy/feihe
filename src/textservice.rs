@@ -2,6 +2,7 @@
 // M1 冒烟：激活 → 收键 → 同步 edit session 上屏（打全链路）
 // M2 接入点：OnKeyDown（双拼/候选引擎）
 use crate::clsid::LANGID_CHS;
+use crate::dllcount;
 use windows::core::*;
 use windows_core::{implement, IUnknownImpl};
 use windows::Win32::Foundation::*;
@@ -25,12 +26,35 @@ pub struct FeiheTextService {
 
 impl FeiheTextService {
     pub fn new() -> Self {
+        dllcount::object_created();
         Self {
             tid: Cell::new(0),
             thread_mgr: RefCell::new(None),
             context: RefCell::new(None),
             pending_text: RefCell::new(None),
         }
+    }
+
+    /// 反注册 key event sink 并释放持有的 TSF 接口。可重复调用（幂等）。
+    fn deactivate_sink(&self) {
+        if let Some(tim) = self.thread_mgr.borrow().as_ref() {
+            if let Ok(mgr) = tim.cast::<ITfKeystrokeMgr>() {
+                unsafe {
+                    let _ = mgr.UnadviseKeyEventSink(self.tid.get());
+                }
+            }
+        }
+        self.thread_mgr.borrow_mut().take();
+        self.context.borrow_mut().take();
+    }
+}
+
+impl Drop for FeiheTextService {
+    fn drop(&mut self) {
+        // 对象销毁时务必反注册 key sink，避免 MSCTF 持有指向本对象的悬空指针。
+        // 正常情况下 Deactivate 已做，这里作为兜底（重复 Unadvise 无害）。
+        self.deactivate_sink();
+        dllcount::object_destroyed();
     }
 }
 
@@ -56,15 +80,7 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
     }
 
     fn Deactivate(&self) -> Result<()> {
-        if let Some(tim) = self.thread_mgr.borrow().as_ref() {
-            if let Ok(mgr) = tim.cast::<ITfKeystrokeMgr>() {
-                unsafe {
-                    let _ = mgr.UnadviseKeyEventSink(self.tid.get());
-                }
-            }
-        }
-        self.thread_mgr.borrow_mut().take();
-        self.context.borrow_mut().take();
+        self.deactivate_sink();
         Ok(())
     }
 }
