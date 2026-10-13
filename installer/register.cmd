@@ -1,33 +1,50 @@
 @echo off
-REM é£é¹¤è¾“å…¥æ³• M1 å®‰è£…è„šæœ¬ï¼ˆç®¡ç†å‘˜è¿è¡Œï¼‰
-REM å‰æï¼šfeihe.dll å·²æ„å»ºï¼ˆè¿è¡Œ build.ps1ï¼‰
+REM ·Éº×ÊäÈë·¨ M1 °²×°½Å±¾£¨¹ÜÀíÔ±ÔËĞĞ£©
+REM Ç°Ìá£ºfeihe.dll ÒÑ¹¹½¨£¨ÔËĞĞ build.ps1£©
+setlocal
 
 set CLSID={70CB823D-D08A-4B57-B8BE-08BCE2539FF3}
 set PROFILE={DA6B9170-1DB7-495F-8741-D2C6F3B5E28F}
-set LANGID=0804
+set KEYBOARD={34745C63-B2F0-4784-8B67-5E12C8701A31}
+set TIPKEY=HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%
 set DLL=%~dp0..\target\x86_64-pc-windows-gnullvm\release\feihe.dll
-set CLSID_NOSTR={70CB823D-D08A-4B57-B8BE-08BCE2539FF3}
+set NAME=·Éº×Æ´Òô
 
-REM 1) COM æ³¨å†Œ
-reg add "HKCR\CLSID\%CLSID%" /ve /d "é£é¹¤æ‹¼éŸ³" /f
+if not exist "%DLL%" (
+  echo [´íÎó] ÕÒ²»µ½ %DLL%
+  echo ÇëÏÈÔËĞĞ build.ps1 ¹¹½¨¡£
+  exit /b 1
+)
+
+REM ========== 0) ÇåÀí¾É°æ/´íÎó½á¹¹£¨ÃİµÈ£©==========
+reg delete "%TIPKEY%\0804" /f >nul 2>&1
+reg delete "%TIPKEY%\Enable" /f >nul 2>&1
+reg delete "%TIPKEY%\Category\{6A497209-DF5C-4CF4-A7AA-3E2A11198019}" /f >nul 2>&1
+
+REM ========== 1) COM ×¢²á ==========
+reg add "HKCR\CLSID\%CLSID%" /ve /d "%NAME%" /f
 reg add "HKCR\CLSID\%CLSID%\InprocServer32" /ve /d "%DLL%" /f
 reg add "HKCR\CLSID\%CLSID%\InprocServer32" /v "ThreadingModel" /d "Apartment" /f
 
-REM 2) CTF TIP æ³¨å†Œï¼ˆè¾“å…¥æ³•æ¡ç›®ï¼‰
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%" /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\Enable" /v "00000804" /t REG_DWORD /d 1 /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\%LANGID%" /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\%LANGID%\%PROFILE%" /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\%LANGID%\%PROFILE%" /v "Enable" /t REG_DWORD /d 1 /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\%LANGID%\%PROFILE%" /v "Description" /d "é£é¹¤æ‹¼éŸ³" /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\%LANGID%\%PROFILE%" /v "IconFile" /d "%%SystemRoot%%\System32\imjp9_0.dll" /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\%LANGID%\%PROFILE%" /v "IconIndex" /t REG_DWORD /d 0 /f
+REM ========== 2) ÓïÑÔÅäÖÃ LanguageProfile ==========
+set LPKEY=%TIPKEY%\LanguageProfile\0x00000804\%PROFILE%
+reg add "%LPKEY%" /f
+reg add "%LPKEY%" /v "Description" /d "%NAME%" /f
+reg add "%LPKEY%" /v "Enable" /t REG_DWORD /d 1 /f
+reg add "%LPKEY%" /v "IconFile" /t REG_EXPAND_SZ /d "%DLL%,-101" /f
+reg add "%LPKEY%" /v "IconIndex" /t REG_DWORD /d 0 /f
 
-REM 3) ç±»åˆ«ï¼šé”®ç›˜è¾“å…¥æ³•ï¼ˆCTF åˆ†ç±»ï¼‰
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\Category" /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\Category\{6A497209-DF5C-4CF4-A7AA-3E2A11198019}" /f
-reg add "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%\Category\{6A497209-DF5C-4CF4-A7AA-3E2A11198019}\{34745C9C-66ED-42A3-90CD-2F34F1C0BA4B}" /f
+REM ========== 3) Àà±ğ£º¼üÅÌÊäÈë·¨ ==========
+set CATKEY=%TIPKEY%\Category\Category\%KEYBOARD%\%CLSID%
+reg add "%CATKEY%" /f
+reg add "%TIPKEY%\Category\Item\%CLSID%" /v "Description" /d "%NAME%" /f
+
+REM ========== 4) µ±Ç°ÓÃ»§ÓïÑÔµµ°¸£¨Ê¹ÉèÖÃÀïÁ¢¼´³öÏÖ£©==========
+set UPKEY=HKCU\Control Panel\International\User Profile
+reg add "%UPKEY%\zh-Hans-CN" /v "0804:%CLSID%%PROFILE%" /t REG_DWORD /d 4 /f
 
 echo.
-echo æ³¨å†Œå®Œæˆã€‚åˆ° Windows è®¾ç½® - æ—¶é—´å’Œè¯­è¨€ - è¯­è¨€ - ä¸­æ–‡ - é”®ç›˜ é‡Œå¯ç”¨ "é£é¹¤æ‹¼éŸ³"
-echo å¸è½½ï¼šinstaller\unregister.cmd
+echo ×¢²áÍê³É¡£Çëµ½ ÉèÖÃ - Ê±¼äºÍÓïÑÔ - ÓïÑÔºÍÇøÓò - ÖĞÎÄ(¼òÌå,ÖĞ¹ú) - ÓïÑÔÑ¡Ïî - ¼üÅÌ
+echo ÀïÌí¼Ó/ÆôÓÃ "%NAME%"¡£ÈôÁĞ±íÎ´¼û£¬×¢ÏúºóÖØĞÂµÇÂ¼ÔÙ¿´¡£
+echo Ğ¶ÔØ£ºinstaller\unregister.cmd
+endlocal

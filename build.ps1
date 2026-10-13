@@ -48,14 +48,39 @@ Copy-Item $builtins.FullName (Join-Path $libdir 'libgcc.a') -Force
 Copy-Item $unwind          (Join-Path $libdir 'libgcc_eh.a') -Force
 Write-Host "[build] shim installed: libgcc.a (compiler-rt), libgcc_eh.a (libunwind)"
 
+# --- 2b. 消除 libunwind.dll 动态依赖（关键）---
+# llvm-mingw 同时提供 libunwind.a 与 libunwind.dll.a，gcc 默认优先 .dll.a，
+# 导致 feihe.dll 依赖 libunwind.dll。CTF 把 DLL 加载进 ctfmon.exe /
+# TextInputHost.exe，其搜索路径找不到 libunwind.dll -> 加载失败 -> 输入法不出现。
+# 将 .dll.a 重命名禁用，使 -lunwind 解析到静态库 libunwind.a。
+$unwindDllA = Join-Path $libdir 'libunwind.dll.a'
+$unwindDisabled = Join-Path $libdir 'libunwind.dll.a.disabled'
+if (Test-Path $unwindDllA) {
+    # 若目标文件被占用，先尝试删除旧的禁用文件（Windows 允许重命名占用文件）
+    if (Test-Path $unwindDisabled) { Remove-Item $unwindDisabled -Force -ErrorAction SilentlyContinue }
+    Move-Item $unwindDllA $unwindDisabled -Force
+    Write-Host "[build] libunwind.dll.a disabled -> static libunwind.a used"
+}
+
 # --- 3. 构建 ---
 $env:PATH = (Join-Path $mingw 'bin') + ';' + $env:PATH
 Push-Location $repo
 try {
-    $args = @('build')
-    if (-not $Debug) { $args += '--release' }
-    & cargo @args
-    if ($LASTEXITCODE -ne 0) { throw "cargo build 失败 ($LASTEXITCODE)" }
+    $cargoArgs = @('build')
+    if (-not $Debug) { $cargoArgs += '--release' }
+    & cargo @cargoArgs
+    if ($LASTEXITCODE -ne 0) {
+        # Windows 允许重命名被占用的文件（如已注册后被 ctfmon/explorer 加载），
+        # 此处自动重命名旧 DLL 后重试一次。
+        $profile0 = if ($Debug) { 'debug' } else { 'release' }
+        $dll0 = Join-Path $repo "target\x86_64-pc-windows-gnullvm\$profile0\feihe.dll"
+        if (Test-Path $dll0) {
+            Write-Host "[build] feihe.dll 被占用，重命名后重试..." -ForegroundColor Yellow
+            Move-Item $dll0 "$dll0.old-$([DateTime]::Now.ToString('HHmmss'))" -Force
+            & cargo @cargoArgs
+        }
+        if ($LASTEXITCODE -ne 0) { throw "cargo build 失败 ($LASTEXITCODE)" }
+    }
 } finally {
     Pop-Location
 }

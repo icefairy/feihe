@@ -1,6 +1,18 @@
 @echo off
-REM é£žé¹¤è¾“å…¥æ³•å¸è½½ï¼ˆç®¡ç†å‘˜è¿è¡Œï¼‰
+REM ·Éº×ÊäÈë·¨Ð¶ÔØ£¨¹ÜÀíÔ±ÔËÐÐ£©
+setlocal
+
 set CLSID={70CB823D-D08A-4B57-B8BE-08BCE2539FF3}
-reg delete "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%" /f
-reg delete "HKCR\CLSID\%CLSID%" /f
-echo å·²å¸è½½ï¼Œæ³¨é”€æˆ–é‡å¯åŽç”Ÿæ•ˆã€‚
+set PROFILE={DA6B9170-1DB7-495F-8741-D2C6F3B5E28F}
+
+REM COM
+reg delete "HKCR\CLSID\%CLSID%" /f >nul 2>&1
+
+REM TSF TIP
+reg delete "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%" /f >nul 2>&1
+
+REM µ±Ç°ÓÃ»§ÓïÑÔµµ°¸
+reg delete "HKCU\Control Panel\International\User Profile\zh-Hans-CN" /v "0804:%CLSID%%PROFILE%" /f >nul 2>&1
+
+echo ÒÑÐ¶ÔØ£¬×¢Ïú»òÖØÆôºóÉúÐ§¡£
+endlocal

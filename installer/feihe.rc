@@ -1,0 +1,6 @@
+#include <windows.h>
+#include "resource.h"
+
+// 飞鹤输入法图标资源
+// IconFile 引用：feihe.dll,-101
+IDI_FEIHE ICON "assets/feihe.ico"
