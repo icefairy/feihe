@@ -1,11 +1,11 @@
 @echo off
 REM 飞鹤输入法 M1 安装脚本（管理员运行）
-REM 前提：feihe.dll 已构建（cargo build --target x86_64-pc-windows-msvc --release）
+REM 前提：feihe.dll 已构建（运行 build.ps1）
 
 set CLSID={70CB823D-D08A-4B57-B8BE-08BCE2539FF3}
 set PROFILE={DA6B9170-1DB7-495F-8741-D2C6F3B5E28F}
 set LANGID=0804
-set DLL=%~dp0..\target\x86_64-pc-windows-msvc\release\feihe.dll
+set DLL=%~dp0..\target\x86_64-pc-windows-gnullvm\release\feihe.dll
 set CLSID_NOSTR={70CB823D-D08A-4B57-B8BE-08BCE2539FF3}
 
 REM 1) COM 注册

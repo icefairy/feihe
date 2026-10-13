@@ -24,7 +24,8 @@ impl IClassFactory_Impl for FeiheClassFactory_Impl {
             ));
         }
         let svc: ITfTextInputProcessorEx = FeiheTextService::new().into();
-        unsafe { svc.query(riid, ppvobject) }
+        unsafe { svc.query(riid, ppvobject).ok()?; }
+        Ok(())
     }
 
     fn LockServer(&self, _flock: BOOL) -> Result<()> {

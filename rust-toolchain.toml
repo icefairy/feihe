@@ -1,0 +1,4 @@
+# Rust 工具链固定：使用 gnu host 以配合 llvm-mingw（无需 MSVC）
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"
+targets = ["x86_64-pc-windows-gnullvm"]

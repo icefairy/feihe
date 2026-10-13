@@ -1,0 +1,17 @@
+# 构建配置：llvm-mingw (gnullvm) 路线（无需 MSVC）
+#
+# 直接 `cargo build --release` 前请先运行 build.ps1（准备 PATH 与 shim 库），
+# 或手动：
+#   set PATH=C:\llvm-mingw\llvm-mingw-<ver>-ucrt-x86_64\bin;%PATH%
+#
+# 说明：Rust 的 *-gnu target 硬编码 -lgcc/-lgcc_eh，而 llvm-mingw 用
+#       compiler-rt + libunwind，故由 build.ps1 把 shim/libgcc*.a 复制进
+#       llvm-mingw 的 x86_64-w64-mingw32\lib\。该复制必须放在默认库搜索
+#       目录内，因为 build script / proc-macro 按 HOST(gnu) 编译，而 cross
+#       构建时 [target.<host>] 的 rustflags 不生效。
+
+[target.x86_64-pc-windows-gnullvm]
+linker = "x86_64-w64-mingw32-gcc"
+
+[build]
+target = "x86_64-pc-windows-gnullvm"
