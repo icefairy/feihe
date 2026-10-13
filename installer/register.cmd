@@ -39,12 +39,12 @@ set CATKEY=%TIPKEY%\Category\Category\%KEYBOARD%\%CLSID%
 reg add "%CATKEY%" /f
 reg add "%TIPKEY%\Category\Item\%CLSID%" /v "Description" /d "%NAME%" /f
 
-REM ========== 4) 当前用户语言档案（使设置里立即出现）==========
-set UPKEY=HKCU\Control Panel\International\User Profile
-reg add "%UPKEY%\zh-Hans-CN" /v "0804:%CLSID%%PROFILE%" /t REG_DWORD /d 4 /f
+REM ========== 4) 注册进当前用户输入法列表（官方 API）==========
+REM InstallLayoutOrTip (input.dll) 会写 HKCU 的 SortOrder/Assemblies/User Profile，
+REM 与"设置-添加键盘"行为一致。比手写注册表可靠。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tip.ps1"
 
 echo.
-echo 注册完成。请到 设置 - 时间和语言 - 语言和区域 - 中文(简体,中国) - 语言选项 - 键盘
-echo 里添加/启用 "%NAME%"。若列表未见，注销后重新登录再看。
+echo 注册完成。注销/重新登录后，用 Ctrl+Shift 或 Win+Space 即可切到 "%NAME%"。
 echo 卸载：installer\unregister.cmd
 endlocal
