@@ -1,4 +1,4 @@
-# 构建配置：llvm-mingw (gnullvm) 路线（无需 MSVC）
+# 构建配置：llvm-mingw (gnullvm / gnu) 路线（无需 MSVC）
 #
 # 直接 `cargo build --release` 前请先运行 build.ps1（准备 PATH 与 shim 库），
 # 或手动：
@@ -6,12 +6,24 @@
 #
 # 说明：Rust 的 *-gnu target 硬编码 -lgcc/-lgcc_eh，而 llvm-mingw 用
 #       compiler-rt + libunwind，故由 build.ps1 把 shim/libgcc*.a 复制进
-#       llvm-mingw 的 x86_64-w64-mingw32\lib\。该复制必须放在默认库搜索
-#       目录内，因为 build script / proc-macro 按 HOST(gnu) 编译，而 cross
-#       构建时 [target.<host>] 的 rustflags 不生效。
+#       llvm-mingw 的 <triple>\lib\。该复制必须放在默认库搜索目录内，
+#       因为 build script / proc-macro 按 HOST(gnu) 编译，而 cross 构建时
+#       [target.<host>] 的 rustflags 不生效。
+#
+# 64 位（默认）： cargo build --release
+# 32 位（可选）： cargo build --release --target i686-pc-windows-gnullvm
+#                产物 target\i686-pc-windows-gnullvm\release\feihe.dll
 
 [target.x86_64-pc-windows-gnullvm]
 linker = "x86_64-w64-mingw32-gcc"
+
+[target.i686-pc-windows-gnullvm]
+linker = "i686-w64-mingw32-gcc"
+
+# 备用：i686-pc-windows-gnu 也能用，但会多带 rsbegin.o，需要额外的 libgcc 符号垫片。
+# 既然官方有 i686-pc-windows-gnullvm，就不要走 gnu 那条。
+[target.i686-pc-windows-gnu]
+linker = "i686-w64-mingw32-gcc"
 
 [build]
 target = "x86_64-pc-windows-gnullvm"

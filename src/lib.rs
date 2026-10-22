@@ -1,9 +1,23 @@
 // 飞鹤输入法 · DLL 入口与 COM 导出
 // M1：注册用外部 installer（reg 脚本），DLL 只需 DllGetClassObject/DllCanUnloadNow
+mod assist;
+mod candidate;
 mod classfactory;
 mod clsid;
+mod config;
+mod dict;
+mod dictbin;
 mod dllcount;
+mod font;
+mod insert;
+mod log;
+mod quick;
+mod settings;
+mod shuangpin;
+mod softkbd;
+mod statusbar;
 mod textservice;
+mod theme;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -32,10 +46,13 @@ extern "system" fn DllGetClassObject(
             return E_POINTER;
         }
         if *rclsid != clsid::CLSID_FEIHE_TEXTSERVICE {
+            crate::trace!("DllGetClassObject: wrong clsid");
             return CLASS_E_CLASSNOTAVAILABLE;
         }
+        crate::trace!("DllGetClassObject: creating factory");
         let factory: IClassFactory = classfactory::FeiheClassFactory::new().into();
         let hr = factory.query(riid, ppv);
+        crate::trace!("DllGetClassObject: query hr={hr:?}");
         hr
     }
 }

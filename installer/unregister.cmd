@@ -1,24 +1,28 @@
 @echo off
-REM 飞鹤输入法卸载（管理员运行）
+REM Feihe IME - unregister (run as Administrator)
 setlocal
 
-set CLSID={70CB823D-D08A-4B57-B8BE-08BCE2539FF3}
-set PROFILE={DA6B9170-1DB7-495F-8741-D2C6F3B5E28F}
-set KEYBOARD={34745C63-B2F0-4784-8B67-5E12C8701A31}
-set TIP=0804:%CLSID%%PROFILE%
+set "DESTDIR=%ProgramData%\Feihe"
 
-REM 从当前用户输入法列表移除（官方 API）
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=@'
-using System;using System.Runtime.InteropServices;
-public static class U{[DllImport(\"input.dll\",CharSet=CharSet.Unicode,SetLastError=true)]public static extern bool UninstallLayoutOrTip(string p,uint f);}
-'@;Add-Type -TypeDefinition $s;[U]::UninstallLayoutOrTip('%TIP%',0) | Out-Null"
+REM --- Administrator check ---
+fltmc >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Administrator privileges required.
+  echo         Right-click this file and choose "Run as administrator".
+  exit /b 1
+)
 
-REM COM
-reg delete "HKCR\CLSID\%CLSID%" /f >nul 2>&1
+REM --- Remove from the user keyboard list + COM/TIP registration ---
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall_tip.ps1"
 
-REM TSF TIP
-reg delete "HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%" /f >nul 2>&1
-reg delete "HKCU\SOFTWARE\Microsoft\CTF\TIP\%CLSID%" /f >nul 2>&1
+REM --- Drop the deployed dlls ---
+for %%F in (feihe.dll feihe32.dll feihe.dll.old feihe32.dll.old) do (
+  if exist "%DESTDIR%\%%F" (
+    del /f /q "%DESTDIR%\%%F" >nul 2>&1
+    if errorlevel 1 echo [warn] %%F still loaded; it will be removable after sign-out.
+  )
+)
 
-echo 已卸载，注销或重启后生效。
+echo.
+echo [done] Feihe IME unregistered.
 endlocal

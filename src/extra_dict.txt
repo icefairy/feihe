@@ -1,0 +1,86 @@
+# 常用词补充表（build.rs 会把它并进 base.bin，优先级低于 dict.txt / user_dict.txt）
+#
+# 为什么需要它：`tools/gen_dict.py` 拉的是雾凇拼音的 base.dict.yaml，那份词表偏「书面
+# 词组」，缺一批日常技术词——最典型的是「处理器」：整张表里有「处理器调度」「处理器分配」
+# 「微处理器」，就是没有「处理器」本身。结果敲 `iuliqi` 只能出更长的词。
+#
+# 格式和 dict.txt 一致：`词<TAB>全拼`，音节空格分隔。只放确实缺失的词，
+# 重复的会在 build.rs 里按「先到先得」被跳过，不会覆盖高频词。
+处理器	chu li qi
+内存条	nei cun tiao
+吞吐	tun tu
+钩子	gou zi
+句柄	ju bing
+灰度	hui du
+用例	yong li
+泄漏	xie lou
+死锁	si suo
+全拼	quan pin
+固态硬盘	gu tai ying pan
+电源适配器	dian yuan shi pei qi
+需求文档	xu qiu wen dang
+集成测试	ji cheng ce shi
+回归测试	hui gui ce shi
+压力测试	ya li ce shi
+性能优化	xing neng you hua
+内存泄漏	nei cun xie lou
+垃圾回收	la ji hui shou
+时间复杂度	shi jian fu za du
+空间复杂度	kong jian fu za du
+递归函数	di gui han shu
+匿名函数	ni ming han shu
+闭包	bi bao
+泛型	fan xing
+枚举	mei ju
+迭代器	die dai qi
+反序列化	fan xu lie hua
+并发编程	bing fa bian cheng
+线程池	xian cheng chi
+连接池	lian jie chi
+消息队列	xiao xi dui lie
+微服务	wei fu wu
+单体架构	dan ti jia gou
+持续集成	chi xu ji cheng
+持续交付	chi xu jiao fu
+自动化测试	zi dong hua ce shi
+日志系统	ri zhi xi tong
+监控告警	jian kong gao jing
+链路追踪	lian lu zhui zong
+灰度发布	hui du fa bu
+埋点	mai dian
+限流	xian liu
+熔断	rong duan
+幂等	mi deng
+缓存穿透	huan cun chuan tou
+缓存雪崩	huan cun xue beng
+热点数据	re dian shu ju
+分库分表	fen ku fen biao
+读写分离	du xie fen li
+主从复制	zhu cong fu zhi
+分布式锁	fen bu shi suo
+批处理	pi chu li
+流式处理	liu shi chu li
+数据仓库	shu ju cang ku
+数据湖	shu ju hu
+数据清洗	shu ju qing xi
+特征工程	te zheng gong cheng
+深度学习	shen du xue xi
+神经网络	shen jing wang luo
+语料库	yu liao ku
+语音识别	yu yin shi bie
+语音合成	yu yin he cheng
+热更新	re geng xin
+粘包	nian bao
+心跳包	xin tiao bao
+长连接	chang lian jie
+短连接	duan lian jie
+幂等性	mi deng xing
+降本增效	jiang ben zeng xiao
+复盘	fu pan
+拉齐	la qi
+抓手	zhua shou
+颗粒度	ke li du
+打法	da fa
+赋能	fu neng
+李四	li si
+张三李四	zhang san li si

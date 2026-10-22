@@ -1,50 +1,73 @@
 @echo off
-REM 飞鹤输入法 M1 安装脚本（管理员运行）
-REM 前提：feihe.dll 已构建（运行 build.ps1）
+REM Feihe IME - register (run as Administrator)
+REM Prerequisite: feihe.dll built by build.ps1
+REM
+REM Deploys BOTH architectures:
+REM   feihe.dll   (64-bit) -> registered in HKLM\SOFTWARE\Classes\CLSID
+REM   feihe32.dll (32-bit) -> registered in HKLM\SOFTWARE\Classes\Wow6432Node\CLSID
+REM In-proc COM requires the DLL bitness to match the host process, so a 64-bit
+REM Explorer and a 32-bit Office need two different files behind the same CLSID.
 setlocal
 
-set CLSID={70CB823D-D08A-4B57-B8BE-08BCE2539FF3}
-set PROFILE={DA6B9170-1DB7-495F-8741-D2C6F3B5E28F}
-set KEYBOARD={34745C63-B2F0-4784-8B67-5E12C8701A31}
-set TIPKEY=HKLM\SOFTWARE\Microsoft\CTF\TIP\%CLSID%
-set DLL=%~dp0..\target\x86_64-pc-windows-gnullvm\release\feihe.dll
-set NAME=飞鹤拼音
+set "SRC64=%~dp0..\target\x86_64-pc-windows-gnullvm\release\feihe.dll"
+set "SRC32=%~dp0..\target\i686-pc-windows-gnullvm\release\feihe.dll"
+set "DESTDIR=%ProgramData%\Feihe"
+set "DEST64=%DESTDIR%\feihe.dll"
+set "DEST32=%DESTDIR%\feihe32.dll"
 
-if not exist "%DLL%" (
-  echo [错误] 找不到 %DLL%
-  echo 请先运行 build.ps1 构建。
+REM --- Administrator check ---
+fltmc >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Administrator privileges required.
+  echo         Right-click this file and choose "Run as administrator".
   exit /b 1
 )
 
-REM ========== 0) 清理旧版/错误结构（幂等）==========
-reg delete "%TIPKEY%\0804" /f >nul 2>&1
-reg delete "%TIPKEY%\Enable" /f >nul 2>&1
-reg delete "%TIPKEY%\Category\{6A497209-DF5C-4CF4-A7AA-3E2A11198019}" /f >nul 2>&1
+if not exist "%SRC64%" (
+  echo [ERROR] %SRC64% not found.
+  echo         Build it first:  powershell -ExecutionPolicy Bypass -File build.ps1
+  exit /b 1
+)
 
-REM ========== 1) COM 注册 ==========
-reg add "HKCR\CLSID\%CLSID%" /ve /d "%NAME%" /f
-reg add "HKCR\CLSID\%CLSID%\InprocServer32" /ve /d "%DLL%" /f
-reg add "HKCR\CLSID\%CLSID%\InprocServer32" /v "ThreadingModel" /d "Apartment" /f
+if not exist "%DESTDIR%" mkdir "%DESTDIR%" >nul 2>&1
 
-REM ========== 2) 语言配置 LanguageProfile ==========
-set LPKEY=%TIPKEY%\LanguageProfile\0x00000804\%PROFILE%
-reg add "%LPKEY%" /f
-reg add "%LPKEY%" /v "Description" /d "%NAME%" /f
-reg add "%LPKEY%" /v "Enable" /t REG_DWORD /d 1 /f
-reg add "%LPKEY%" /v "IconFile" /t REG_EXPAND_SZ /d "%DLL%,-101" /f
-reg add "%LPKEY%" /v "IconIndex" /t REG_DWORD /d 0 /f
+REM --- Deploy to a stable path; target\ is wiped by cargo clean ---
+call :deploy "%SRC64%" "%DEST64%"
+if errorlevel 1 exit /b 1
+echo [dll] %DEST64%
 
-REM ========== 3) 类别：键盘输入法 ==========
-set CATKEY=%TIPKEY%\Category\Category\%KEYBOARD%\%CLSID%
-reg add "%CATKEY%" /f
-reg add "%TIPKEY%\Category\Item\%CLSID%" /v "Description" /d "%NAME%" /f
+if exist "%SRC32%" (
+  call :deploy "%SRC32%" "%DEST32%"
+  if errorlevel 1 exit /b 1
+  echo [dll] %DEST32%
+  REM --- Registry work is done in PowerShell (UTF-8 BOM keeps the Chinese name intact) ---
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tip.ps1" -DllPath "%DEST64%" -DllPath32 "%DEST32%"
+) else (
+  echo [warn] 32-bit DLL not found: %SRC32%
+  echo        Only 64-bit hosts will work. To build it:
+  echo            powershell -ExecutionPolicy Bypass -File build.ps1 -Arch x86
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tip.ps1" -DllPath "%DEST64%"
+)
+if errorlevel 1 (
+  echo [ERROR] registration failed.
+  exit /b 1
+)
 
-REM ========== 4) 注册进当前用户输入法列表（官方 API）==========
-REM InstallLayoutOrTip (input.dll) 会写 HKCU 的 SortOrder/Assemblies/User Profile，
-REM 与"设置-添加键盘"行为一致。比手写注册表可靠。
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_tip.ps1"
-
-echo.
-echo 注册完成。注销/重新登录后，用 Ctrl+Shift 或 Win+Space 即可切到 "%NAME%"。
-echo 卸载：installer\unregister.cmd
 endlocal
+exit /b 0
+
+REM ------------------------------------------------------------------
+:deploy
+REM %1 = source dll, %2 = destination dll
+copy /y %1 %2 >nul 2>&1
+if not errorlevel 1 exit /b 0
+REM DLL may be loaded by ctfmon/explorer; Windows allows renaming a mapped file.
+echo [warn] %~nx2 is in use, renaming the old copy and retrying...
+if exist %2.old del /f /q %2.old >nul 2>&1
+move /y %2 %2.old >nul 2>&1
+copy /y %1 %2 >nul 2>&1
+if not exist %2 (
+  echo [ERROR] failed to deploy %1 to %2
+  exit /b 1
+)
+exit /b 0

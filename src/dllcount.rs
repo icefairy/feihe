@@ -1,4 +1,4 @@
-// 曲鹤输入法 · COM 服务计数
+// 飞鹤输入法 · COM 服务计数
 // 用于 DllCanUnloadNow：只要有活对象或服务器锁，就不能卸载 DLL。
 // 否则 MSCTF 仍持有指向本 DLL 的指针时 DLL 被卸载 -> use-after-unload -> 宿主进程 AV 崩溃。
 

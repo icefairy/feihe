@@ -4,32 +4,215 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 
 ## 里程碑
 
-- **M1（当前）**：TSF 骨架——注册为系统输入法、收键、edit session 上屏（冒烟字符 `飞X`）
-- **M2**：librime 引擎接入（全拼候选）
-- **M3**：小鹤双拼 schema + 候选窗 UI
-- **M4**：词库导入导出（RIME userdict，txt 格式：`词\t编码\t频次`）
+- **M1（已完成）**：TSF 骨架——注册为系统输入法、收键、组合态、edit session 上屏
+- **M2（已完成）**：小鹤双拼引擎 + 内置词库 + 候选窗（纯 Rust，暂不引 librime，原因见下）
+- **M2.5（已完成）**：状态浮窗、设置窗（方案 / 皮肤 / 词库管理）、符号软键盘、
+  小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、全角标点
+- **M3**：候选窗鼠标点击选词、组合串下划线（`ITfDisplayAttributeProvider`）、Shift 中英切换
 - **M5**（v2）：语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关）
+
+> 关于 librime：它是 C++17 + CMake，与当前的 llvm-mingw/gnullvm 无 MSVC 路线在 C++ 标准库
+> ABI 上摩擦较大。双拼本质是「两键 → 一个全拼音节」的查表映射，纯 Rust 几百行即可跑通，
+> 等确实需要 rime 的 schema 生态（模糊音、多方案、用户词典）时再引入。
+
+## 怎么打字（小鹤双拼）
+
+**不是全拼。** 每个音节固定两键：声母键 + 韵母键。
+
+```text
+声母键位
+zh=v   ch=i   sh=u
+其余声母直接用字母本身（b p m f d t n l g k h j q x r z c s y w）
+
+韵母键位（口诀：秋闱软月云梳翅，松拥黛粉更航安，快莺两望奏夏蛙，撇草追鱼滨鸟眠）
+q=iu   w=ei   e=e    r=uan   t=ue   y=un   u=u   i=i   o=o/uo  p=ie
+a=a    s=ong  d=ai   f=en    g=eng  h=ang  j=an  k=uai  l=iang
+z=ou   x=ia   c=ao   v=ui    b=in   n=iao  m=ian
+```
+
+规则：
+- `zh` / `ch` / `sh` 落在 `v` / `i` / `u`（`zhong`→`vs`、`chi`→`ii`、`shi`→`ui`）。
+  注意这三个键与韵母键复用，位置不同不冲突
+- 零声母用「韵母首字母 + 韵母键」（`an`→`aj`、`ai`→`ad`、`er`→`er`）
+- `ü` 写作 `v`（`lv`→`lv`、`xue`→`xt`）
+
+例子：
+
+| 想打 | 全拼 | 实际敲 |
+|---|---|---|
+| 你好 | ni hao | `nihc` |
+| 中国 | zhong guo | `vsgo` |
+| 我们 | wo men | `womf` |
+| 世界 | shi jie | `uijp` |
+| 是 | shi | `ui` |
+| 水 | shui | `uv` |
+| 的 | de | `de` |
+
+操作：**空格**选第一个候选，**回车**把已敲的编码原样上屏（`iuliqi` → `iuliqi`，
+不选候选），数字键 `1-9` 选对应候选，`←/→` 页内移动，`↑/↓` 翻页，退格删一个键，
+`Esc` 取消。`Ctrl` / `Alt` / `Win` 组合键一律放行不拦截。
+
+**单击 Shift** 切中英文（按住期间按过别的键就不算单击，`Shift+A` 照常是大写 A）。
+切到英文后所有按键原样进应用，候选窗不弹。
+
+**边打边上屏**：一个音节的键敲完了、整串却查不到候选时，输入法会把左边能匹配的
+部分先上屏，剩下的编码开新一轮。比如词库里没有「张三李四」，打 `vhsjlisi` 会
+自动得到「张三」+ 组合串 `lisi` →「李四」，而不是挂着一串没人可选的字母。
+（奇数长度不拆——小鹤的 `vhsjl` 第三个音节还差一个键，等下一个键再说。）
+
+### 长句：智能分隔 + 分词选择
+
+打得多、整串又查不到词的时候（`nihaoshijie` 这种），飞鹤会先把编码切成音节，
+再按「每段都能出候选」切成若干段，进入**分词模式**：
+
+```text
+组合串显示：[你好]世界      ← [] 里是当前段
+←/→   移到上一段 / 下一段
+1-9   给当前段换词（候选窗显示的是这一段的候选）
+空格  确认当前段并跳到下一段（最后一段则整体上屏）
+回车  一次性整体上屏
+退格  退出分词模式，回到普通编码态
+```
+
+全拼和双拼都支持。全拼的音节边界不定长（`ni` 两字符、`hao` 三字符、`zhuang` 六字符），
+用 DP + 音节合法性校验来切，长音节优先（`xian` 不会切成 `xi`+`an`）。
+
+### 手动分隔
+
+自动切分不理想时，可以用 `;` 强制断一刀：
+
+| 模式 | 分隔键 | 原因 |
+| --- | --- | --- |
+| 全拼 / 小鹤双拼 | `;` | 这两种编码里没有分号 |
+| 微软双拼 | `'` | 分号被 `ing` 韵母占用（`;` = ing），只能换成单引号 |
+
+例子：`xi'an` 强制切成 `xi`+`an` 而不是 `xian`；`ni'hao` 断在 `ni` 后面。
+分隔符只是打字辅助，**不会进文档**（回车原样上屏时会去掉）。
+位置不合理的分隔符（开头、连续两个、双拼切在半截音节上）会被直接吞掉，不打扰输入。
+
+`Tab` 进入**辅助码**筛选（组合串会显示成 `de b` 这种形式），再按 `Tab` 退出。
+辅助码方案在设置里选：自然码辅助码（1 键，取部首声母，如 的→白→`b`）或
+小鹤音形（2 键，首末部件，如 打→扌+丁→`sd`）。关掉时 `Tab` 原样还给应用。
+
+## 快捷输入（日期 / 时间）
+
+先敲 `\`，后面接命令码。**只打首字母也行**——五个命令的首字母互不相同，`\r` 就等于 `\rq`。
+
+| 输入 | 得到 |
+|---|---|
+| `\rq` | `2026年10月22日` / `2026-10-22` / `2026/10/22` / `2026.10.22` / `10月22日` / `22日` |
+| `\sj` | `17:40` / `17:40:06` / `下午5点40分` / `下午5:40` |
+| `\xq` | `星期四` / `周四` |
+| `\dt` | `2026-10-22 17:40:07` / `2026-10-22 17:40` / `2026年10月22日 17:40` / `… 星期四` |
+| `\ts` | Unix 秒 / Unix 毫秒 |
+
+只敲一个 `\` 会列出全部命令的**当前值预览**（按空格拿日期，按数字选别的），不用记码。
+
+> **为什么不像搜狗那样直接打 `rq`？** 搜狗是全拼，`rq`、`sj` 不会撞车。飞鹤是双拼，
+> 两字母恰好就是一个音节：`sj` = `s`+`an` = `san`（三），`xq` = `x`+`iu` = `xiu`（休）。
+> 照搬的话一半命令会被词库吃掉，行为不可预测。所以统一加引导符 `\`。
+>
+> `\` 因此不再映射全角顿号（全角模式下 `/` 仍然出 `、`）。想要字面量反斜杠，切到英文态。
+
+## 状态浮窗与设置
+
+屏幕右下角（可拖动，位置会记住）有一条小横条，五个按钮：
+
+| 按钮 | 作用 |
+|---|---|
+| 中 / 英 | 切换中英文（等价于单击 Shift） |
+| 全 / 半 | 全角标点开关（`,。;、·【】、’－＝` 这一排） |
+| 全拼 / 双拼 | 临时切到全拼（访客用）。**不写盘**，进程结束自动复原 |
+| 符号 | 弹出 9×5 特殊符号面板，点一下插到光标处 |
+| 皮肤 | 循环切换 浅色 / 深色 / 护眼（候选窗、浮窗、软键盘一起变） |
+| 设置 | 打开设置窗 |
+
+全拼模式是给访客的应急通道：点一下「双拼」变「全拼」，就能直接敲 `nihao` 出「你好」，
+不用学双拼。词库走另一套「全拼去空格」索引，第一次切过去时建索引约 60ms，之后复用。
+刻意不写进配置——借电脑的人用完忘了切回来，下次开机一脸问号就麻烦了。
+
+设置窗：双拼方案（小鹤 / 微软）、辅助码方案（关闭 / 自然码 / 小鹤音形）、
+皮肤、全角、浮窗是否跟随光标、词库统计 + 导入 / 导出。
+
+配置存在 `%APPDATA%\Feihe\config.ini`，改完立即生效（同一进程内即时，其它已打开
+的应用要重新切一下输入法）。
 
 ## 构建（Windows 机）
 
-本机环境走 **llvm-mingw / gnullvm** 路线，**无需 MSVC**（VS 未装 C++ 工具集）。
+本机环境走 **llvm-mingw** 路线，**无需 MSVC**（VS 未装 C++ 工具集）。
+默认**同时产出 64 位和 32 位两份 DLL**。
 
 前置依赖：
 - Rust（rustup）
-- [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) 解压到 `C:\llvm-mingw`（需含顶层 `bin\`，即 `x86_64-w64-mingw32-gcc.exe`）
+- [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) 解压到 `C:\llvm-mingw`（需含顶层 `bin\`，即 `x86_64-w64-mingw32-gcc.exe`；`i686-w64-mingw32-*` 同一份压缩包里就有）
 - `rustup target add x86_64-pc-windows-gnullvm`
+- 32 位额外需要：`rustup target add i686-pc-windows-gnullvm`
+  （国内直连不通时用镜像：`$env:RUSTUP_DIST_SERVER='https://mirrors.ustc.edu.cn/rust-static'`
+  ——清华/阿里镜像不保留历史日期目录，会 404）
 
 一键构建（推荐）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1
-# 产物：target\x86_64-pc-windows-gnullvm\release\feihe.dll
+powershell -ExecutionPolicy Bypass -File build.ps1            # 64 + 32 位
+powershell -ExecutionPolicy Bypass -File build.ps1 -Arch x64  # 只编 64 位
+powershell -ExecutionPolicy Bypass -File build.ps1 -Arch x86  # 只编 32 位
+# 产物：
+#   target\x86_64-pc-windows-gnullvm\release\feihe.dll   (Machine=0x8664, 64 位)
+#   target\i686-pc-windows-gnullvm\release\feihe.dll     (Machine=0x014c, 32 位)
 ```
 
-`build.ps1` 会自动：定位 llvm-mingw → 生成 `-lgcc`/`-lgcc_eh` 兼容库（compiler-rt + libunwind）→ 设置 PATH → `cargo build --release`。
+`build.ps1` 会自动：定位 llvm-mingw → 为每个架构生成 `-lgcc`/`-lgcc_eh` 兼容库
+（compiler-rt + libunwind）→ 禁用 `libunwind.dll.a`（强制静态链接，否则 ctfmon 找不到该 DLL
+导致输入法加载失败）→ 设置 PATH → `cargo build` → **校验 PE 头机器类型** →
+用对应位数的测试程序跑一遍 `LoadLibrary` + `DllGetClassObject` + `CreateInstance`。
 
 > 背景：Rust 的 `*-gnu` target 硬编码链接 `-lgcc`/`-lgcc_eh`，而 llvm-mingw 用 compiler-rt/libunwind，故需 shim 库。
 > `rust-toolchain.toml` / `.cargo/config.toml` 已固定 toolchain 与 target，无需手动指定。
+
+### 为什么要两份 DLL
+
+in-proc COM 的位数**必须**和宿主进程一致，64 位 DLL 塞不进 32 位进程（反之亦然）。
+所以同一个 CLSID 背后挂了两个文件：
+
+| 宿主 | 加载 | 注册表位置 |
+| --- | --- | --- |
+| 资源管理器 / TextInputHost / 64 位 Office | `%ProgramData%\Feihe\feihe.dll` | `HKLM\SOFTWARE\Classes\CLSID\{...}` |
+| 32 位 Office、IE 插件、老的 32 位应用 | `%ProgramData%\Feihe\feihe32.dll` | `HKLM\SOFTWARE\Classes\Wow6432Node\CLSID\{...}` |
+
+`installer\register.cmd` 两份都会部署并分别注册；`unregister.cmd` 两处都清。
+如果只编了 64 位，安装脚本会给出警告并只注册 64 位那份。
+
+### 32 位构建
+
+`i686-pc-windows-gnullvm` 是官方 target，和 64 位同一条路线，`build.ps1` 里就是多跑一次
+`cargo build --target i686-pc-windows-gnullvm`，没有额外垫片。
+
+> 别用 `i686-pc-windows-gnu`。它也能编出来，但会多带 `rsbegin.o`，引用 GCC 老式的
+> `___register_frame_info` / `___deregister_frame_info`；llvm-mingw 用 libunwind + SEH，
+> 没有这两个符号，链接直接失败，得自己写空实现垫上。既然有 gnullvm，没必要绕这一圈。
+> （本项目早期误判「官方没有 i686 gnullvm」，走过一次弯路，已切回 gnullvm。）
+
+### 32 位 TIP 注册表要写两遍
+
+`HKLM\SOFTWARE\Microsoft\CTF\TIP` 是**被 WOW64 重定向**的（CTF 下只有 `SystemShared` 是共享键），
+32 位进程读的是 `HKLM\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP`。
+只写 64 位那份的话，32 位宿主里飞鹤根本不出现在输入法列表。
+`installer\install_tip.ps1` 用同一个函数把 CLSID + Category + LanguageProfile 写进两个视图。
+
+
+## 测试
+
+```bash
+# 单元测试（双拼编码 + 词库查询）
+cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
+
+# COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
+python tools/smoke_com.py
+```
+
+冒烟测试覆盖：`DllCanUnloadNow` 初始 S_OK、类厂可创建、文本服务对象可实例化、
+对象存活时 S_FALSE、`LockServer` 生效、全部释放后回到 S_OK。任何一步失败都说明
+注册或导出有问题，不用去 GUI 里瞎试。
 
 原生 MSVC 路线（若日后补装 VS Build Tools C++ 工作负载）：
 
@@ -38,30 +221,208 @@ rustup target add x86_64-pc-windows-msvc
 cargo build --target x86_64-pc-windows-msvc --release
 ```
 
-## 安装 / 卸载（管理员 cmd）
+## 安装 / 卸载
+
+**需要管理员**（要写 HKLM 的 COM 注册与 CTF TIP 定义）：
 
 ```cmd
-cd installer && register.cmd      :: 注册（写入 CTF\TIP）
-:: 到 设置-时间和语言-语言-中文-选项-键盘 里出现"飞鹤拼音"，启用它
-unregister.cmd                    :: 卸载
+cd installer
+register.cmd      :: 部署 DLL 到 C:\ProgramData\Feihe\ + 注册 COM/TIP + 加入当前用户键盘列表
+unregister.cmd    :: 全部移除
 ```
+
+安装后到 `设置 → 时间和语言 → 语言和区域 → 中文(简体) → 语言选项 → 键盘` 里应出现「飞鹤拼音」，
+用 `Win+Space` 或 `Ctrl+Shift` 切换。**若列表未刷新，注销重登一次**（输入法列表由 shell 缓存）。
+
+### 关键实现要点（踩过的坑）
+
+- DLL 必须部署到**稳定路径**（`%ProgramData%\Feihe\`）。早先直接注册 `target\...\release\feihe.dll`，
+  一次 `cargo clean` 输入法就变砖。
+- 用户键盘列表的真实位置是 `HKCU\Control Panel\International\User Profile\zh-Hans-CN`，
+  值是 `0804:{CLSID}{PROFILE}` = 顺序号(DWORD)，**不是** `SortOrder`。两处都要有。
+- `input.dll` **没有** `UninstallLayoutOrTip` 导出；卸载要用 `InstallLayoutOrTip(psz, ILOT_UNINSTALL=0x1)`。
+  `InstallLayoutOrTipUserReg` 虽然存在但实测返回 FALSE，不要用。
+- 历史遗留的 `HKCU\SOFTWARE\Microsoft\CTF\TIP\{CLSID}\LanguageProfile\...\Enable = 0` 会让条目
+  即使注册成功也不可见，安装前要先清掉。
 
 ## 目录
 
 ```
-src/lib.rs            DLL 入口（DllGetClassObject）
+src/lib.rs            DLL 入口（DllGetClassObject / DllCanUnloadNow）
 src/clsid.rs          固定 GUID
 src/classfactory.rs   IClassFactory
-src/textservice.rs    TSF 核心（Activate/按键/上屏）
-installer/            注册脚本
-build.ps1             一键构建（llvm-mingw/gnullvm）
+src/dllcount.rs       COM 对象计数（DllCanUnloadNow 用）
+src/textservice.rs    TSF 核心（Activate / 按键 sink / 组合态 / edit session / 候选调度）
+src/shuangpin.rs      小鹤双拼编码（全拼→两键码，带单测当规格）
+src/dict.rs           词库查询（静态二进制 + 运行时覆盖层，二分前缀扫描）
+src/dictbin.rs        词库二进制的零解析读取器（段偏移 + 索引表 + 字节池）
+src/dict.txt          基础词库（33500 条 / 586KB，gen_dict.py 生成，勿手改）
+src/extra_dict.txt    常用词补充表（76 条，手工维护，只放基础词库里缺的词）
+src/user_dict.txt     用户词库（import_sogou.py 生成，可反复重跑；未导入时为空文件）
+build.rs              生成 base.bin（预编码三套码）+ 编译图标资源
+src/candidate.rs      候选窗（自绘 WS_POPUP + GDI，不抢焦点）
+src/statusbar.rs      状态浮窗（中/英、全/半、符号、皮肤、设置；可拖动 + 前台判定）
+src/softkbd.rs        特殊符号软键盘（9×5 自绘网格）
+src/settings.rs       设置窗（原生控件：方案 / 皮肤 / 全角 / 词库管理）
+src/theme.rs          皮肤调色板（浅色 / 深色 / 护眼）
+src/font.rs           自绘窗口共用字体 + 填充/描边/文字居中
+src/insert.rs         任意窗口往文档写文本、读写中英开关（同步 edit session）
+src/config.rs         配置读写（%APPDATA%\Feihe\config.ini）
+src/assist.rs         辅助码查表（自然码 / 小鹤音形）
+src/assist.txt        辅助码表（3739 字，gen_assist.py 生成，勿手改）
+tools/gen_dict.py     基础词库生成器（拉雾凇拼音 rime-ice，按词频取前 N 条）
+tools/import_sogou.py 搜狗词库导入器（解析本机搜狗用户词库 → user_dict.txt）
+tools/gen_assist.py   辅助码表生成器（Unihan 部首 + cjkvi-ids 部件分解）
+tools/smoke_com.py    COM 骨架冒烟测试（ctypes 直调 DllGetClassObject）
+shim/loadtest.c       位数无关的 DLL 冒烟测试（LoadLibrary + DllGetClassObject + CreateInstance）
+installer/install_tip.ps1    注册：COM + HKLM TIP + 用户键盘列表（UTF-8 BOM，含中文名）
+installer/uninstall_tip.ps1  卸载：ILOT_UNINSTALL + 注册表清理（纯 ASCII）
+installer/register.cmd       安装入口（管理员，部署 64 + 32 位 DLL）
+installer/unregister.cmd     卸载入口（管理员）
+build.ps1             一键构建（llvm-mingw，默认 64 + 32 位；-Arch / -Debug / -SkipTest）
 rust-toolchain.toml   固定 gnu toolchain + gnullvm target
-.cargo/config.toml    固定构建 target 与 linker
+.cargo/config.toml    固定构建 target 与 linker（含 i686 的 linker）
 ```
 
-## M1 验证清单
+## 词库
 
-1. `powershell -ExecutionPolicy Bypass -File build.ps1` 成功，生成 `feihe.dll`（gnullvm 路线）
-2. register.cmd 后语言栏出现"飞鹤拼音"
-3. 切到飞鹤 → 任意输入框敲字母 → 上屏 `飞a` 等冒烟字符（链路证明）
-4. unregister.cmd 卸载干净
+数据源是[雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)（带真实整数词频）：
+
+- `cn_dicts/8105.dict.yaml` 单字，取词频前 3500
+- `cn_dicts/base.dict.yaml` 词组，取词频前 30000
+
+```bash
+python tools/gen_dict.py               # 下载（缓存 _ice*.yaml）并生成
+python tools/gen_dict.py --no-download # 只用缓存
+```
+
+输出格式是 `词<TAB>全拼`（音节空格分隔），按词频降序。**不存双拼码**——存码等于把方案
+焊死在数据里，切小鹤/微软就得重新生成整个词库，导入导出也只能同方案流通。
+
+真正的双拼码在**构建期**由 `build.rs` 算好：8.17 万条 × 三套码（小鹤/微软/全拼去空格），
+各生成一张按码升序的下标表，连同偏移表和字节池写成一个扁平文件 `base.bin`，用
+`include_bytes!` 嵌进 DLL。运行时只是「读两个 u32 数组 + 二分」，**零解析**。
+
+这么做有两个直接好处：`Activate` 里原本 81ms 的编码开销归零；数据落在 DLL 的 `.rdata`
+段，由 PE 加载器 mmap，**多个进程共享同一份物理页**，不再是每个进程各背 9.2MB 私有堆。
+
+> 注意：不要换成 `luna_pinyin.dict.yaml`。它第三列是「多音字概率」不是词频
+> （`丁 ding 99.93%`），按它排序会把生僻字排到最前面。
+
+## 数据源与下载缓存
+
+生成词库和辅助码表要拉外部数据，都缓存在仓库根目录，统一用 `_` 前缀，已被 `.gitignore`
+忽略（`_*.yaml` / `_*.txt` / `_*.zip`）。**它们不是产品的一部分**——`build.rs` 只读
+`src/dict.txt` 和 `src/assist.txt`，删掉缓存不影响编译。
+
+| 文件 | 大小 | 谁读 | 删了会怎样 |
+|---|---|---|---|
+| `_icebase.yaml` | 15.8 MB | `tools/gen_dict.py` | 下次跑会自动重下（镜像可达 ✅） |
+| `_ice8105.yaml` | 0.1 MB | `gen_dict.py`、`import_sogou.py` | 同上 |
+| `_ids.txt` | 2.1 MB | `tools/gen_assist.py` | 可重下 ✅（见下） |
+| `_unihan.zip` | 8.0 MB | `tools/gen_assist.py` | ⚠️ **别删**：unicode.org 目前连不上，删了就没法重生成自然码辅助码 |
+| `_luna.yaml` | 0.8 MB | **无人引用** | 死文件，可删 |
+| `_kmandarin.txt` | 0.9 MB | **无人引用** | 死文件，可删 |
+
+两个辅助码数据源**没有下载代码**，得手工放到仓库根目录：
+
+```text
+https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip          -> _unihan.zip
+https://raw.githubusercontent.com/cjkvi/cjkvi-ids/master/ids.txt  -> _ids.txt
+```
+
+## 导入本机搜狗拼音的词库
+
+飞鹤支持把你的搜狗个人词库搬过来——**打过什么词，飞鹤里就有什么词**。
+
+```bash
+python tools/import_sogou.py              # 自动发现并全量重建 src/user_dict.txt
+python tools/import_sogou.py --list       # 只列出发现了哪些词库文件，不写
+python tools/import_sogou.py --dry-run    # 只统计不写文件
+python tools/import_sogou.py --max-len 8  # 放宽到 8 字短语（默认 6）
+python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.users\00000001"
+```
+
+**可反复执行**：每次都从搜狗原始文件全量重建，不累积、不残留。搜狗用久了想刷新，
+直接再跑一次，然后 `build.ps1` + 替换 DLL 即可。
+
+### 它读哪些文件
+
+自动从注册表 `HKLM\SOFTWARE\WOW6432Node\SogouInput` 找安装目录，然后扫：
+
+| 文件 | 内容 | 提取方式 |
+|---|---|---|
+| `用户数据/SogouPY.users/<id>/sgim_gd_usrbg.bin` | 背景词库（打字历史，主力） | 严格校验 |
+| `用户数据/SogouPY.users/<id>/sgim_gd_usr.bin` | 用户词库 | 宽松提取 + 注音过滤 |
+| `Scd/*.scel` | 细胞词库（要自己下载放进去） | 头部自适应解析 |
+| `用户数据/SogouPY.users/<id>/*dict*.txt` | 手动导出的文本词库 | 按行取首列 |
+
+### 格式怎么破的
+
+搜狗没有公开文档，但实测词条是**明文 UTF-16LE**，只是外面套了私有二进制头：
+
+- `sgim_gd_usrbg.bin` 的记录是 `[u16 字节长][UTF-16LE 文本][u16 字节长+6]`。
+  最后那个字段等于「字节长 + 6」，正好当校验和用——能把字节错位产生的假词
+  （`吐嚕`、`吀崀` 这类）全部滤掉，实测 5.3 万条命中、几乎无噪声。
+- `sgim_gd_usr.bin` 尾部字段不是 `len+6`，退回「长度前缀 + 全 CJK」的宽松规则，
+  噪声靠后面的「必须能注音」过滤。
+
+### 注音策略（多音字为什么是准的）
+
+1. 先在基础词库 `src/dict.txt` 里查——那里已经是「词 → 小鹤双拼码」，
+   多音字天然正确（`重复`→`csfu`、`重要`→`zsyc`、`角色`→`jtse`）
+2. 查不到才逐字注音：单字取 8105 字典里词频最高的读音，再用小鹤表编码
+
+实测 5.2 万条里 3772 条命中基础词库、4.8 万条走逐字注音。逐字注音对多音字短语
+（`重要`/`重复`）可能选错读音，这类词打不出候选是正常现象——按 `--max-len` 收窄
+或手动改 `user_dict.txt` 都行。
+
+### 两个词库怎么合并
+
+`dict.rs` 先加载 `user_dict.txt` 再加载 `dict.txt`，按词面去重，然后按双拼码做一次
+**稳定排序**。稳定排序保证同码时用户词的相对顺序不变，也就是**用户词永远排在基础词前面**。
+
+实测合并后 81503 条（去重掉 3891 条重复），首次查询含全量解析 11.5ms，
+后续查询 584ns。DLL 从 812KB 涨到 1.99MB。
+
+## 验证清单
+
+**M1（骨架）**
+
+1. `build.ps1` 成功，生成 `feihe.dll`，且 `objdump -p` 的导入表里**没有** `libunwind.dll`
+2. `register.cmd` 后 `HKCU\Control Panel\International\User Profile\zh-Hans-CN` 出现 `0804:{70CB823D...}{DA6B9170...}`
+3. 键盘列表出现「飞鹤拼音」（列表由 shell 缓存，必要时注销重登）
+4. 切到飞鹤后，`Ctrl+C` / `Alt+Tab` / `Win+Space` 等快捷键仍然正常（不被吞）
+5. `unregister.cmd` 卸载干净，无残留
+
+**M2（输入）**
+
+6. 任意输入框敲 `nihc` → 组合串显示 `nihc`，光标下方弹出候选窗，第一个是「你好」
+7. 空格上屏「你好」；敲 `vsgo` + 空格 → 「中国」；敲 `ui` → 候选里第一项「是」
+8. 敲 `de` → 候选窗第一页是 的/地/得/德…，按 `3` 上屏「得」
+9. 敲 `nih` 后连按 `↓` 能翻页，`←/→` 能改选中项
+10. 敲 `nihc` 后 `Esc` → 组合串消失，文档无残留
+11. 敲 `ni` 后退格两次 → 组合态结束，文档无残留
+12. 敲到一半按 `Ctrl+C` → 组合串先提交，再执行复制
+
+**用户词库（搜狗导入）**
+
+13. `python tools/import_sogou.py` 输出「最终写入：约 5 万条」，`src/user_dict.txt` 约 1.1MB
+14. 敲你平时常用、但基础词库里没有的短语（比如常打的短句），候选窗里能出
+15. 用户词排在基础词前面：敲 `de`，如果搜狗词库里有以 `de` 开头的常用词，它应排在「的」之前
+16. 反复执行 `import_sogou.py` 两次，`user_dict.txt` 内容一致（幂等）
+17. 把 `src/user_dict.txt` 清空后重新构建，DLL 回到 812KB，说明没导入时不影响基础功能
+
+**M3（32 位支持 / 长句分隔）**
+
+18. `build.ps1` 默认产出两份 DLL，PE 头分别是 `Machine=0x8664` 和 `0x014c`，
+    且两次 `[test] xx : PASS`（LoadLibrary + DllGetClassObject + CreateInstance）
+19. `objdump -p` 里两份 DLL 的导入表都**没有** `libunwind.dll`
+20. `register.cmd` 后 `HKLM\SOFTWARE\Classes\Wow6432Node\CLSID\{70CB823D...}\InprocServer32`
+    指向 `%ProgramData%\Feihe\feihe32.dll`，且 `HKLM\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\{70CB823D...}`
+    有完整的 Category / LanguageProfile
+21. 在 32 位宿主里（例如 32 位 Office、`C:\Windows\SysWOW64\notepad.exe`）能用飞鹤打字
+22. 打 `vhsjlisi` 时若词库无「张三李四」→ 进分词模式，`←/→` 能移段、数字能换词
+23. 全拼模式下打 `nihaoshijie` → 切成 `[你好]世界` 两段（不再是整串挂字母）
+24. `xi'an` 能强制切成 `xi`+`an`；`ni'hao` 的分隔符不会出现在上屏文本里
+25. 微软双拼下 `;` 仍然出 `ing`，分隔用 `'`

@@ -10,21 +10,34 @@ name = "feihe"
 crate-type = ["cdylib"]
 
 [dependencies]
+# 只保留实际用到的 feature。windows-core 由 windows 再导出，无需单独声明。
 windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    # COM：DllGetClassObject / IClassFactory
     "Win32_System_Com",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Ole",
-    "Win32_System_Registry",
+    # DLL_PROCESS_ATTACH
     "Win32_System_SystemServices",
     # TSF 核心
     "Win32_UI_TextServices",
-    "Win32_UI_Input_Ime",
+    # GetKeyState：判断 Ctrl/Alt/Win 修饰键
+    "Win32_UI_Input_KeyboardAndMouse",
+    # 候选窗：自绘 popup 窗口
     "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
-    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    # ITfCompartment::GetValue/SetValue 要 VARIANT（中英文开关状态）
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    # 状态浮窗判断「自己是不是前台线程」
+    "Win32_System_Threading",
+    # 快捷输入取本地时间（GetLocalTime）
+    "Win32_System_SystemInformation",
+    # 设置窗里的词库导入/导出文件选择框
+    "Win32_UI_Controls_Dialogs",
 ] }
+
+# 必须保留：#[implement] 是 windows-core 导出的过程宏，代码里 `use windows_core::...`
+# 需要它作为直接依赖（windows 只是再导出模块，不能替代 crate 名）。
 windows-core = "0.62"
 
 [profile.release]

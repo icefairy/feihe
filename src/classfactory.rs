@@ -1,6 +1,6 @@
 // COM 类工厂：CTF 用它创建 TextService 实例
 use crate::dllcount;
-use crate::textservice::{self, FeiheTextService};
+use crate::textservice::FeiheTextService;
 use windows::core::*;
 use windows_core::implement;
 use windows::Win32::Foundation::*;
@@ -39,6 +39,7 @@ impl IClassFactory_Impl for FeiheClassFactory_Impl {
             ));
         }
         let svc: ITfTextInputProcessorEx = FeiheTextService::new().into();
+        crate::trace!("CreateInstance: text service created");
         unsafe { svc.query(riid, ppvobject).ok()?; }
         Ok(())
     }
@@ -47,9 +48,4 @@ impl IClassFactory_Impl for FeiheClassFactory_Impl {
         dllcount::lock_server(flock.as_bool());
         Ok(())
     }
-}
-
-#[allow(dead_code)]
-fn _type_check() {
-    let _ = textservice::FeiheTextService::new();
 }
