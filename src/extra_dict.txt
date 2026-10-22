@@ -84,3 +84,4 @@
 赋能	fu neng
 李四	li si
 张三李四	zhang san li si
+二维码	er wei ma

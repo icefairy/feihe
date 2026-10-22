@@ -1,4 +1,8 @@
+# ── 构建产物 ────────────────────────────────────────────────────
 /target
+# 安装包输出目录（Feihe-Setup-*.exe，每次 build_setup.ps1 都会重新生成）
+/dist
+__pycache__/
 
 # 构建/部署产生的备份 DLL（register.cmd 在 DLL 被占用时会生成）
 *.old

@@ -10,6 +10,17 @@
 #>
 $ErrorActionPreference = 'Continue'
 
+# 同 install_tip.ps1：32 位 PowerShell 会把 HKLM\SOFTWARE\Classes 重定向到
+# Wow6432Node，导致「清理 32 位视图」那一段实际去删了错误的位置。自动切 64 位。
+if ([IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432) {
+    $ps64 = Join-Path $env:WINDIR 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path $ps64) {
+        Write-Host "[com] 检测到 32 位 PowerShell，切换到 64 位实例重跑"
+        & $ps64 -NoProfile -ExecutionPolicy Bypass -File "`"$PSCommandPath`""
+        exit $LASTEXITCODE
+    }
+}
+
 $Clsid   = '{70CB823D-D08A-4B57-B8BE-08BCE2539FF3}'
 $Profile = '{DA6B9170-1DB7-495F-8741-D2C6F3B5E28F}'
 $KbdGuid = '{34745C63-B2F0-4784-8B67-5E12C8701A31}'

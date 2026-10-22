@@ -176,8 +176,11 @@ in-proc COM 的位数**必须**和宿主进程一致，64 位 DLL 塞不进 32 �
 
 | 宿主 | 加载 | 注册表位置 |
 | --- | --- | --- |
-| 资源管理器 / TextInputHost / 64 位 Office | `%ProgramData%\Feihe\feihe.dll` | `HKLM\SOFTWARE\Classes\CLSID\{...}` |
-| 32 位 Office、IE 插件、老的 32 位应用 | `%ProgramData%\Feihe\feihe32.dll` | `HKLM\SOFTWARE\Classes\Wow6432Node\CLSID\{...}` |
+| 资源管理器 / TextInputHost / 64 位 Office | `feihe.dll` | `HKLM\SOFTWARE\Classes\CLSID\{...}` |
+| 32 位 Office、IE 插件、老的 32 位应用 | `feihe32.dll` | `HKLM\SOFTWARE\Classes\Wow6432Node\CLSID\{...}` |
+
+目录本身取决于安装方式：`register.cmd` 用 `%ProgramData%\Feihe\`，
+NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的 ProgramData 副本）。
 
 `installer\register.cmd` 两份都会部署并分别注册；`unregister.cmd` 两处都清。
 如果只编了 64 位，安装脚本会给出警告并只注册 64 位那份。
@@ -244,6 +247,75 @@ unregister.cmd    :: 全部移除
   `InstallLayoutOrTipUserReg` 虽然存在但实测返回 FALSE，不要用。
 - 历史遗留的 `HKCU\SOFTWARE\Microsoft\CTF\TIP\{CLSID}\LanguageProfile\...\Enable = 0` 会让条目
   即使注册成功也不可见，安装前要先清掉。
+
+## 打安装包（NSIS）
+
+开发期用 `register.cmd` 就够；要发给别人则用安装包，一键装到 `C:\Program Files\Feihe`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
+# 产物：dist\Feihe-Setup-0.1.0.exe
+```
+
+`build_setup.ps1` 做四件事：
+
+1. `build.ps1 -NoUserDict -Arch both` —— **发布模式**重编两份 DLL
+2. 校验 `target\build_mode.txt`，确认不是拿带个人词库的构建去打包
+3. 编译 `installer\feihe.nsi`（`makensis` 默认找 `D:\soft\nsis`，可用 `-NsisDir` 改）
+4. 报告产物路径与体积
+
+只改打包不想重编时加 `-SkipBuild`。
+
+### 为什么发布模式要单独一个开关
+
+`src/user_dict.txt` 是从本机搜狗导出的**个人打字记录（约 5 万条）**，普通构建会并进
+`base.bin`。这份东西跟着 DLL 发出去就抠不回来了。所以 `build.rs` 认环境变量
+`FEIHE_NO_USER_DICT=1` 时跳过它：
+
+| 构建方式 | base.bin | 64 位 DLL |
+| --- | --- | --- |
+| 普通 | 82179 条 / 5.6 MB | 6.8 MB |
+| `-NoUserDict`（发布） | 33454 条 / 2.1 MB | 2.6 MB |
+
+`build_setup.ps1` 还会读 `src\user_dict.txt` 的条数做二次兜底 —— 万一有人用普通构建的
+产物打包，它直接报错退出；确实想带个人词库得显式加 `-AllowPersonalDict`。
+
+### 安装包里为什么没有 Python
+
+`tools\*.py`（`import_sogou.py`、`gen_ids.py`、`smoke_com.py`）全是**开发期**工具：
+导词库、生成辅助码、跑冒烟测试。运行时一个都不需要，所以不随安装包分发，
+也就没有内置 Python 的必要。安装包实际只装 4 个文件：
+
+```
+feihe.dll          64 位
+feihe32.dll        32 位
+install_tip.ps1    注册脚本（卸载要用，出问题也能手工重跑）
+uninstall_tip.ps1  注销脚本
+```
+
+`register.cmd` / `unregister.cmd` 是开发期的等价物，不进安装包。
+
+### 打包踩过的坑
+
+- **`.nsi` 必须带 UTF-8 BOM**。NSIS 只在文件开头有 BOM 时才按 UTF-8 解析，否则按系统
+  ACP（简中 = GBK）读。脚本里有中文注释，丢了 BOM 就报
+  `Bad text encoding: feihe.nsi:1` / `Error in script "feihe.nsi" on line 1` ——
+  这个报错完全指不到真因，极难查。`build_setup.ps1` 现在每次编译前自动补 BOM。
+- **DLL 必须用 `File` 内嵌**，不能用 `CopyFiles`。`CopyFiles` 是**运行时**拷贝，
+  源路径写的是构建机上的 `target\...`，用户机器上根本没有，打出来的包只有 192 KB 空壳。
+  现在的做法是先 `File` 解到 `$PLUGINSDIR\ime`，再从那儿 `CopyFiles` 到 `$INSTDIR`。
+- **覆盖被占用的 DLL 只能「改名再拷」**。ctfmon / explorer 常常已经把旧 DLL 映射进进程，
+  直接 `CopyFiles` 覆盖会失败；Windows 允许**重命名**已映射的文件，所以改名成 `.old`
+  再拷新的，`.old` 排到重启删（`Delete /REBOOTOK`）。
+- **NSIS 是 32 位程序**，它启动的 PowerShell 也是 32 位。32 位进程里写
+  `Wow6432Node\...` 会二次重定向成 `Wow6432Node\Wow6432Node\...`，所以
+  `install_tip.ps1` 开头会检测到 32 位实例就切 `Sysnative` 重跑。
+- NSIS 3.13 **没有内置 `$PROGRAMDATA` 常量**，要 `ReadEnvStr $R0 "ProgramData"`。
+- `makensis` 的 `/D` 选项：`/` 和 `D` 之间不能有空格，值不要带尾反斜杠。
+  在 bash 里传 `-DOUTDIR=D:\...` 会被 shell 吃成 `D://...`，要么走 PowerShell，
+  要么用正斜杠。
+
+安装包**未签名**，首次运行会撞 SmartScreen「已保护你的电脑」提示，点「更多信息 → 仍要运行」。
 
 ## 目录
 

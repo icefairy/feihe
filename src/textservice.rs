@@ -1735,6 +1735,148 @@ mod tests {
         config::set_pinyin_mode(false);
     }
 
+    /// 零声母词的可达性回归：`an` 在小鹤里是 `a` + 韵母键 `j` = `aj`，
+    /// 所以「按钮」= `ajnq`，不是按全拼直觉敲的 `annq`。
+    /// 这类词最容易「以为词库缺词」，其实是编码记错了，用测试把正确码钉住。
+    #[test]
+    fn zero_initial_words_are_reachable() {
+        let _g = lock();
+        dict::set_scheme(Scheme::Xiaohe);
+        config::set_pinyin_mode(false);
+
+        assert_eq!(FeiheTextService::syllables_ds("ajnq"), vec!["aj", "nq"]);
+
+        // 硬编码一个，把「零声母 an → aj」这条用户可见规则钉死
+        let list = dict::lookup("ajnq", 30);
+        assert!(
+            list.iter().any(|w| w.as_ref() == "按钮"),
+            "ajnq 应出「按钮」，实际候选 {:?}",
+            list.iter().take(6).collect::<Vec<_>>()
+        );
+
+        // 其余走编码器，顺便校验「编码器 ↔ 词库索引」是一致的
+        for (py, word) in [
+            ("an quan", "安全"),
+            ("an shi", "按时"),
+            ("ai qing", "爱情"),
+            ("ou zhou", "欧洲"),
+            ("e xin", "恶心"),
+        ] {
+            let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect(py);
+            let list = dict::lookup(&code, 30);
+            assert!(
+                list.iter().any(|w| w.as_ref() == word),
+                "{py} -> {code} 应出「{word}」，实际候选 {:?}",
+                list.iter().take(6).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// 用户核心诉求：**词库里没有这个词，也得让我自己一个字一个字组出来**。
+    ///
+    /// 机制是 `maybe_split` 的分词模式：整串零候选时把编码切成音节段，
+    /// 每段单独给候选，用户 `→` 移段、数字换字。
+    /// 这里用「词库确实没有整词」的组合验证切段路径成立。
+    ///
+    /// 码一律由 `encode_pinyin` 生成，不手写——手写双拼码太容易错
+    /// （踩过：`宾` 是 `bb` 不是 `bv`，`bv` 其实是 `bui`，非法）。
+    #[test]
+    fn can_compose_char_by_char_without_the_whole_word() {
+        let _g = lock();
+        dict::set_scheme(Scheme::Xiaohe);
+        config::set_pinyin_mode(false);
+
+        let has = |p: &str| !dict::lookup(p, 1).is_empty();
+        let mut checked = 0;
+        for py in [
+            "an bin", "an ping", "an di", "niu an", "niu de", "niu ge", "e xin", "ou zhou",
+        ] {
+            let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect(py);
+            if !dict::lookup(&code, 1).is_empty() {
+                continue; // 词库里恰好有整词，跳过（本用例只关心「没有整词」的场景）
+            }
+            let units = FeiheTextService::syllables_ds(&code);
+            assert_eq!(units.len(), 2, "{py} -> {code} 应切成 2 个音节");
+            // 每个音节自己都得能出单字，否则「组词」无从谈起
+            for u in &units {
+                assert!(has(u), "{py} -> {code} 的音节 {u} 查不到单字");
+            }
+            let segs = FeiheTextService::split_segments_units(&units, has);
+            assert_eq!(segs, units, "{py} -> {code} 应能逐字组词，实际切段 {segs:?}");
+            checked += 1;
+        }
+        assert!(checked >= 3, "有效样本太少（{checked}），用例失去意义");
+    }
+
+    /// 常用词可达性抽查：编码器算出来的码，词库必须查得到。
+    ///
+    /// 这类问题最难自查——用户只会觉得「打不出来」，不会想到是词库缺词。
+    /// 之前 `iuliqi` 出「处理器吧」就是词库缺「处理器」。词缺了就往
+    /// `src/extra_dict.txt` 里补，这个用例负责把缺口暴露出来。
+    #[test]
+    fn common_words_are_reachable() {
+        let _g = lock();
+        dict::set_scheme(Scheme::Xiaohe);
+        config::set_pinyin_mode(false);
+
+        const WORDS: &[(&str, &str)] = &[
+            ("按钮", "an niu"),
+            ("安全", "an quan"),
+            ("按时", "an shi"),
+            ("处理器", "chu li qi"),
+            ("显示器", "xian shi qi"),
+            ("笔记本", "bi ji ben"),
+            ("输入法", "shu ru fa"),
+            ("快捷键", "kuai jie jian"),
+            ("文件夹", "wen jian jia"),
+            ("浏览器", "liu lan qi"),
+            ("内存条", "nei cun tiao"),
+            ("摄像头", "she xiang tou"),
+            ("二维码", "er wei ma"),
+            ("验证码", "yan zheng ma"),
+            ("数据库", "shu ju ku"),
+            ("服务器", "fu wu qi"),
+            ("客户端", "ke hu duan"),
+            ("登录", "deng lu"),
+            ("注销", "zhu xiao"),
+            ("刷新", "shua xin"),
+            ("重启", "chong qi"),
+            ("截图", "jie tu"),
+            ("复制", "fu zhi"),
+            ("粘贴", "zhan tie"),
+            ("搜索", "sou suo"),
+            ("下载", "xia zai"),
+            ("上传", "shang chuan"),
+            ("安装", "an zhuang"),
+            ("卸载", "xie zai"),
+            ("更新", "geng xin"),
+            ("配置", "pei zhi"),
+            ("参数", "can shu"),
+            ("编译", "bian yi"),
+            ("调试", "tiao shi"),
+            ("部署", "bu shu"),
+            ("依赖", "yi lai"),
+            ("兼容", "jian rong"),
+            ("性能", "xing neng"),
+            ("延迟", "yan chi"),
+            ("体积", "ti ji"),
+        ];
+
+        let mut missing = Vec::new();
+        for (word, py) in WORDS {
+            let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect(py);
+            let list = dict::lookup(&code, 30);
+            if !list.iter().any(|w| w.as_ref() == *word) {
+                missing.push(format!("{word}({py}) -> {code}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "以下常用词查不到，请补进 src/extra_dict.txt：\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
     #[test]
     fn is_shift_recognizes_all_variants() {
         assert!(FeiheTextService::is_shift(0x10));

@@ -6,6 +6,7 @@
 #   powershell -ExecutionPolicy Bypass -File build.ps1 -Arch x86       # 只编 32 位
 #   powershell -ExecutionPolicy Bypass -File build.ps1 -Debug          # debug 版
 #   powershell -ExecutionPolicy Bypass -File build.ps1 -SkipTest       # 跳过加载冒烟测试
+#   powershell -ExecutionPolicy Bypass -File build.ps1 -NoUserDict     # 发布构建（不含个人词库）
 #
 # 做了什么：
 #   1. 定位并校验 llvm-mingw（默认 C:\llvm-mingw\llvm-mingw-*-ucrt-x86_64\）
@@ -29,11 +30,21 @@ param(
     [switch]$Debug,
     [ValidateSet('x64', 'x86', 'both')]
     [string]$Arch = 'both',
-    [switch]$SkipTest
+    [switch]$SkipTest,
+    # 发布构建：排除 src/user_dict.txt（本机搜狗导出的个人词库）。
+    # 打安装包必须开这个，否则个人打字记录会被并进 base.bin 随 DLL 分发出去。
+    [switch]$NoUserDict
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
+
+if ($NoUserDict) {
+    $env:FEIHE_NO_USER_DICT = '1'
+    Write-Host "[build] 发布模式：已排除 src/user_dict.txt" -ForegroundColor Yellow
+} else {
+    Remove-Item Env:FEIHE_NO_USER_DICT -ErrorAction SilentlyContinue
+}
 
 # --- 1. 定位 llvm-mingw ---
 $roots = @(
@@ -234,3 +245,10 @@ foreach ($r in $results) {
 if (-not $SkipTest) {
     foreach ($r in $results) { Test-Dll -DllPath $r.Path -Triple $r.Triple -Tag $r.Tag }
 }
+
+# 记下本次构建模式，给 installer\build_setup.ps1 做「个人词库有没有混进去」的校验。
+# 这是个纯标记文件，不参与编译。
+$marker = Join-Path $repo 'target\build_mode.txt'
+$mode = if ($NoUserDict) { 'release' } else { 'dev' }
+Set-Content -LiteralPath $marker -Value $mode -Encoding ASCII -NoNewline
+Write-Host "[build] 构建模式: $mode（标记写入 target\build_mode.txt）"

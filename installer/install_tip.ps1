@@ -34,6 +34,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# ── 必须是 64 位 PowerShell ──────────────────────────────────────
+# 本脚本要同时写两个注册表视图：HKLM\SOFTWARE\Classes\CLSID（64 位视图）
+# 和 HKLM\SOFTWARE\Classes\Wow6432Node\CLSID（32 位视图）。
+# 如果自己就跑在 32 位 PowerShell 里，WOW64 会把 HKLM\SOFTWARE\Classes 重定向到
+# Wow6432Node，于是我们写的 "Wow6432Node\..." 会变成 Wow6432Node\Wow6432Node\...，
+# 32 位宿主反而查不到。而 NSIS / 32 位 cmd 启动 powershell 时拿到的正是 32 位实例，
+# 所以这里自动切到 64 位实例重跑。
+if ([IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432) {
+    $ps64 = Join-Path $env:WINDIR 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path $ps64) {
+        Write-Host "[com] 检测到 32 位 PowerShell，切换到 64 位实例重跑"
+        $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
+               '-DllPath', "`"$DllPath`"")
+        if ($DllPath32) { $a += @('-DllPath32', "`"$DllPath32`"") }
+        & $ps64 @a
+        exit $LASTEXITCODE
+    }
+}
+
 $Clsid   = '{70CB823D-D08A-4B57-B8BE-08BCE2539FF3}'
 $Profile = '{DA6B9170-1DB7-495F-8741-D2C6F3B5E28F}'
 $KbdGuid = '{34745C63-B2F0-4784-8B67-5E12C8701A31}'

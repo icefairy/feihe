@@ -283,6 +283,47 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 `LoadLibrary` 那一刻才暴露。
 
 
+## 安装包（NSIS）
+
+`installer\feihe.nsi` + `installer\build_setup.ps1`。
+
+```
+powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
+# → dist\Feihe-Setup-0.1.0.exe（约 1.16 MB，内嵌 5.4 MB 的 DLL）
+```
+
+设计取舍：
+
+1. **注册逻辑不重写**。COM / CTF TIP / 用户键盘列表全部交给 `install_tip.ps1` /
+   `uninstall_tip.ps1` —— 它们是唯一真相，`register.cmd` 用的也是同一份。安装包只负责
+   「提权 + 拷文件 + 调脚本 + 卸载时反向调」。Pascal 里再写一套必然漂移。
+2. **装到 `%ProgramFiles%\Feihe`**，不是老的 `%ProgramData%\Feihe`。安装时尽力清理老副本
+   （`Delete /REBOOTOK` 处理被占用的）。
+3. **发布模式构建**（`FEIHE_NO_USER_DICT=1`）。`src/user_dict.txt` 是 5 万条个人打字记录，
+   普通构建会并进 `base.bin`（82179 条 → 33454 条，DLL 6.8 MB → 2.6 MB）。
+
+五个坑（按踩到的顺序）：
+
+- **`.nsi` 必须带 UTF-8 BOM**。NSIS 只在文件开头有 BOM 时才按 UTF-8 解析，否则按系统 ACP
+  读。中文注释直接报 `Bad text encoding: feihe.nsi:1` + `Error in script "feihe.nsi" on
+  line 1`，报错完全指不到真因。`build_setup.ps1` 现在编译前自动补 BOM。
+- **DLL 必须 `File` 内嵌**。第一版用了 `CopyFiles`，那是**运行时**拷贝，源路径是构建机的
+  `target\...`，用户机上不存在 —— 打出来只有 192 KB 空壳（`Install data: 73260 bytes`）。
+  正确做法：`File` 解到 `$PLUGINSDIR\ime`，再 `CopyFiles` 到 `$INSTDIR`。
+  验证手法：`Install data` 应等于 `DLL64 + DLL32 + 两个 ps1`（约 5,444,758 字节），
+  多出的 ~55 KB 是 MUI2 自带的向导位图。
+- **覆盖被占用的 DLL 只能「改名再拷」**。Windows 允许重命名已映射的文件，不允许覆盖。
+  `CopyOrReplace` 先 `CopyFiles`，失败则 `Rename` 成 `.old` 再拷，仍失败则 `Delete /REBOOTOK`。
+- **NSIS 是 32 位程序**，启动的 PowerShell 也是 32 位 → 写 `Wow6432Node\...` 会二次重定向。
+  `install_tip.ps1` 开头检测 `[IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432`，
+  切 `Sysnative\WindowsPowerShell\v1.0\powershell.exe` 重跑。
+- NSIS 3.13 **无 `$PROGRAMDATA` 常量** → `ReadEnvStr $R0 "ProgramData"`。
+  `makensis` 的 `/D` 值与 `D` 之间不能有空格；bash 里传 `-DOUTDIR=D:\...` 会被吃成
+  `D://...`，要么走 PowerShell 要么用正斜杠。
+
+安装包未签名，首次运行撞 SmartScreen。要消掉得买代码签名证书（EV 证书可即时过）。
+
+
 ## 关键事实（实测确认，别再猜）
 
 | 事项 | 结论 |
@@ -347,6 +388,7 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 - [x] 全拼智能分隔（`split_pinyin` 的 DP + `is_syllable`）
 - [x] `;` 手动分隔（微软双拼改用 `'`）
 - [x] 32 位 DLL（`i686-pc-windows-gnullvm` + Wow6432Node 双份注册）
+- [x] NSIS 安装包（`installer\feihe.nsi` + `build_setup.ps1`，发布模式构建）
 
 ## 已知问题
 

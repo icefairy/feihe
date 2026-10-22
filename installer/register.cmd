@@ -11,7 +11,7 @@ setlocal
 
 set "SRC64=%~dp0..\target\x86_64-pc-windows-gnullvm\release\feihe.dll"
 set "SRC32=%~dp0..\target\i686-pc-windows-gnullvm\release\feihe.dll"
-set "DESTDIR=%ProgramData%\Feihe"
+set "DESTDIR=%ProgramFiles%\Feihe"
 set "DEST64=%DESTDIR%\feihe.dll"
 set "DEST32=%DESTDIR%\feihe32.dll"
 

@@ -2,7 +2,7 @@
 REM Feihe IME - unregister (run as Administrator)
 setlocal
 
-set "DESTDIR=%ProgramData%\Feihe"
+set "DESTDIR=%ProgramFiles%\Feihe"
 
 REM --- Administrator check ---
 fltmc >nul 2>&1

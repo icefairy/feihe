@@ -105,13 +105,25 @@ fn main() {
 fn gen_dict_bin(manifest: &std::path::Path, out: &std::path::Path) {
     // 优先级：用户词在前（同码时排在前面，实现「用户词优先」），
     // 然后是基础词库，最后是人工补充的常用词（只含前两份里缺的词）。
+    //
+    // `FEIHE_NO_USER_DICT=1` 时跳过 user_dict.txt。
+    // 打包分发必须用它：那份文件是从本机搜狗导出的个人打字记录，
+    // 一旦并进 base.bin 就随 DLL 一起发出去了，而且是从二进制里抠不出来的。
+    let skip_user = std::env::var("FEIHE_NO_USER_DICT").ok().as_deref() == Some("1");
+    println!("cargo:rerun-if-env-changed=FEIHE_NO_USER_DICT");
+
+    let mut sources: Vec<&str> = Vec::new();
+    if skip_user {
+        println!("cargo:warning=FEIHE_NO_USER_DICT=1：已排除 src/user_dict.txt（发布构建）");
+    } else {
+        sources.push("src/user_dict.txt");
+    }
+    sources.push("src/dict.txt");
+    sources.push("src/extra_dict.txt");
+
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for f in [
-        "src/user_dict.txt",
-        "src/dict.txt",
-        "src/extra_dict.txt",
-    ] {
+    for f in sources {
         println!("cargo:rerun-if-changed={f}");
         let Ok(text) = std::fs::read_to_string(manifest.join(f)) else {
             continue;
