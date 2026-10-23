@@ -44,6 +44,9 @@ Unicode true
 !define DLL64 "${SRCDIR}\x86_64-pc-windows-gnullvm\release\feihe.dll"
 !define DLL32 "${SRCDIR}\i686-pc-windows-gnullvm\release\feihe.dll"
 
+; 用户手册（Markdown）。装到安装目录，用户不用去 GitHub 找。
+!define HELPDOC "..\docs\使用帮助.md"
+
 ; ── 编译器属性 ──────────────────────────────────────────────────
 ;
 ; `SELFTEST` 由 build_setup.ps1 -SelfTest 传入：把提权降到 user、装到临时目录，
@@ -178,6 +181,10 @@ Section "主程序" SecMain
   File "install_tip.ps1"
   File "uninstall_tip.ps1"
 
+  ; 用户手册。文件名带中文，方便用户直接双击打开；内容随版本更新，不写注册表。
+  DetailPrint "部署用户手册…"
+  File "/oname=使用帮助.md" "${HELPDOC}"
+
   ; 卸载程序
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -242,6 +249,7 @@ Section "Uninstall"
   Delete "$INSTDIR\feihe32.dll"
   Delete "$INSTDIR\install_tip.ps1"
   Delete "$INSTDIR\uninstall_tip.ps1"
+  Delete "$INSTDIR\使用帮助.md"
   Delete "$INSTDIR\*.old"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"

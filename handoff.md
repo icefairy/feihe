@@ -23,7 +23,7 @@
 | 全角标点 | ✅ 不带 Shift 的那一排键做全角映射，新装默认开 |
 | 简繁切换 | ✅ `zhconv`：LCMapStringEx + LCMAP_TRADITIONAL_CHINESE，逐字映射 |
 | 全拼模式 | ✅ 设置窗「输入模式」单选，独立全拼索引，**落盘** |
-| 快捷输入 | ✅ `` ` `` 引导：`` `rq `` 日期 / `` `sj `` 时间 / `` `xq `` 星期 / `` `dt `` 日期时间 / `` `ts `` 时间戳 |
+| 快捷输入 | ✅ `` ` `` 引导：`` `rq `` 日期 / `` `sj `` 时间 / `` `xq `` 星期 / `` `dt `` 日期时间 / `` `ts `` 时间戳 / `` `nl `` 农历 / `` `gz `` 干支四柱 / `` `jq `` 下一个节气 |
 | 鼠标点选候选 | ✅ `layout()` 统一几何，按下/抬起同一项才算点击，`MA_NOACTIVATE` 不抢焦点 |
 | 候选数衰减 | ✅ 1 键 18 / 2 键 45 / 3 键以上 90（`candidate_limit`） |
 | 组合串下划线 | ❌ 未做（`ITfDisplayAttributeProvider`） |
@@ -160,6 +160,39 @@
 
 第 3 条放在 `run_edit_session` 而不是各个 `commit_*` 里，是因为那里是所有上屏路径的
 唯一出口（`commit_current` / `commit_raw` / `commit_segments` / `insert_direct` 都汇到它）。
+
+## 农历 / 干支 / 节气（`quick.rs` + `tyme4rs`）
+
+快捷输入的 `` `nl `` / `` `gz `` / `` `jq `` 三件事统一交给
+[Tyme](https://6tail.cn/tyme.html) 的 Rust 版 `tyme4rs`（MIT）。**没有自己写一行历法**。
+
+为什么不自研：这三样都是「看着简单、边界全错」的典型——
+
+- 农历要处理闰月（2023 年闰二月）和大小月，得有一张 1900–2100 的数据表或者天文算法
+- 干支四柱的**年柱按立春换**、**月柱按节气换**、**日柱按子时（23:00）换日**，
+  三条规则各错一次就是三种不同的 bug，而且只有生日当天才看得出来
+- 节气是太阳黄经每 15° 一个，要算真太阳位置，不是固定日期
+
+自己写等于重造万年历。Tyme 的节气算法引自寿星天文历，农历/干支/节气共用同一套
+儒略日，三者天然一致。
+
+**代价：+127 KB（64 位 DLL 2880 → 3007 KB）**。tyme4rs 依赖 `regex`（作者用它解析
+中文名称），而 regex 本身就占大头。安装包 1.24 → 1.33 MB。为了历法正确性，这个体积
+值得付；如果哪天要抠，唯一办法是 fork 掉 regex 那三处 `from_name` 解析。
+
+### 三个实现细节
+
+1. **`get_term_day()` 给的是「今天所在的节气 + 已过天数」**，不是下一个。
+   `day_index == 0` 说明今天就是节气日，那就是最近的一个；否则 `next(1)` 再取日期。
+2. **`` `nl `` 和 `` `gz `` 的年不一样，是对的**：前者用 `LunarDay` 的农历年干支
+   （春节换年），后者用 `EightChar` 的年柱（立春换年）。别为了「统一」把它们改成一样。
+3. **按分钟缓存**。实测 `lunar` 176µs、`ganzhi`（EightChar）**754µs**、`term` 11µs，
+   而 `candidates()` 每敲一个键都会重算，只打一个 `` ` `` 时更是要把 8 个命令全列出来。
+   所以 `CACHE` 按「年月日时分」把三份结果一起缓存，命中后 17µs。
+   分钟变了才重算——农历只到日、时柱两小时才换，秒级差异不影响输出。
+
+> 注意 `LunarDay::get_year_sixty_cycle` 已废弃，走 `get_sixty_cycle_day().get_year()`。
+> 另外 Tyme 用「十二月」不用「腊月」，跟着库的措辞走，别自己改一套。
 
 ## 动态词频（`freq.rs`）
 
@@ -610,7 +643,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 2. **装到 `%ProgramFiles%\Feihe`**，不是老的 `%ProgramData%\Feihe`。安装时尽力清理老副本
    （`Delete /REBOOTOK` 处理被占用的）。
 3. **发布模式构建**（`FEIHE_NO_USER_DICT=1`）。`src/user_dict.txt` 是 5 万条个人打字记录，
-   普通构建会并进 `base.bin`（86749 条 → 38024 条，DLL 7.0 MB → 2.8 MB）。
+   普通构建会并进 `base.bin`（86749 条 → 38024 条，DLL 7.2 MB → 2.9 MB）。
 
 六个坑（按踩到的顺序）：
 
@@ -700,7 +733,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 **功能**
 
-- [ ] 快捷输入扩展：农历、`` ` `` 后的自定义短语（`quick.rs` 现在只有日期/时间/星期/时间戳）
+- [ ] `` ` `` 后的自定义短语（农历 / 干支 / 节气已完成，见「农历 / 干支 / 节气」一节）
 - [ ] **阶段二**：用户词库换 SQLite（`winsqlite3.dll` + 手写 FFI），支持删词/置顶
       （词频学习已经用 `freq.rs` + `freq.txt` 做了，见「动态词频」一节；SQLite 的
       价值现在只剩「删词 / 置顶 / 事务」，别再拿「支持词频学习」当迁移理由）
@@ -717,6 +750,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 已完成（别再当待办）：
 
+- [x] 快捷输入农历 / 干支四柱 / 下一个节气（`tyme4rs`，见「农历 / 干支 / 节气」一节）
 - [x] 候选窗鼠标点击选词（`layout()` 统一几何 + `SetCapture` 按下/抬起判定，见专节）
 - [x] 单键候选数衰减（`candidate_limit`：1 键 18 / 2 键 45 / 3 键以上 90）
 - [x] 删除诊断日志（`src/log.rs` + 55 处 `crate::trace!` 全清，运行期不写 `%TEMP%`）

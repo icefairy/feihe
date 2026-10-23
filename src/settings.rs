@@ -35,7 +35,7 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 536;
+const CLIENT_H: i32 = 556;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -409,19 +409,26 @@ unsafe fn build(h: HWND) {
     label(h, "导入格式：每行「词<TAB>全拼」，例如：你好<TAB>ni hao", 16, y, 428, ID_NOTE);
 
     // 快捷输入说明。码表从 quick 模块取，避免文档和实现对不上。
-    let quick = crate::quick::commands()
+    // 八个命令一行放不下（428px 会截断），按四个一行折开。
+    let quick: Vec<String> = crate::quick::commands()
         .iter()
         .map(|(k, name)| format!("{}{k} {name}", crate::quick::PREFIX))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    label(h, &format!("快捷输入：{quick}"), 16, y + 26, 428, 0);
+        .collect();
+    for (i, chunk) in quick.chunks(4).enumerate() {
+        let text = if i == 0 {
+            format!("快捷输入：{}", chunk.join(" · "))
+        } else {
+            format!("　　　　　{}", chunk.join(" · "))
+        };
+        label(h, &text, 16, y + 26 + i as i32 * 20, 428, 0);
+    }
 
     // `、` `|` 和翻页键是最容易被问到的几个键，直接写在设置里省得去翻文档
     label(
         h,
         "标点：全角时 \\ 出「、」，Shift+\\ 出「|」 · 翻页：- = ↑ ↓",
         16,
-        y + 48,
+        y + 68,
         428,
         0,
     );

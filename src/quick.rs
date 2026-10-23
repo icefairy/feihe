@@ -1,4 +1,4 @@
-//! 快捷输入：日期 / 时间 / 星期 / 时间戳
+//! 快捷输入：日期 / 时间 / 星期 / 时间戳 / 农历 / 干支 / 节气
 //!
 //! ## 为什么要有引导符
 //!
@@ -15,18 +15,34 @@
 //! 引导符占着它，`、` 就打不出来了。`\` 让给顿号（见 `textservice::fullwidth_punct`），
 //! 引导符搬到反引号键：中文输入里几乎不用，`·`（原来在这个键上）挪进符号软键盘。
 //!
+//! 同理 `/` 也不行——中文模式下 `/` 出 `、`（微软拼音习惯）。所以是 `` ` `` 不是 `/`。
+//!
 //! ## 前缀匹配
 //!
-//! 五个命令的首字母互不相同（r / s / x / d / t），所以 `` `r `` 就能唯一确定「日期」。
-//! 打 `` `rq `` 和 `` `r `` 效果一样，不要求用户记全。
+//! 八个命令的首字母互不相同（r / s / x / d / t / n / g / j），所以 `` `r `` 就能唯一
+//! 确定「日期」。打 `` `rq `` 和 `` `r `` 效果一样，不要求用户记全。
 //!
 //! 只打一个引导符时列出全部命令的**当前值预览**——按空格得到最常用的日期，按数字选别的。
 //! 这样不用记码也能用。
+//!
+//! ## 农历 / 干支 / 节气来自 Tyme
+//!
+//! 这三样都要「历法级」正确：农历要处理闰月、干支要按节气换月、四柱要按子时换日。
+//! 自己写等于重造一遍万年历，且几乎必然在边界上错。所以统一用
+//! [Tyme](https://6tail.cn/tyme.html)（`tyme4rs`，MIT）：它的节气算法引自寿星天文历，
+//! 农历和干支用的是同一套儒略日，三者不会互相打架。
+//!
+//! 时间基准是**本机本地时间**（`GetLocalTime`），不做时区换算——用户问「今天农历几号」
+//! 问的是他眼前这台电脑的今天。
 
+use std::sync::Mutex;
+
+use tyme4rs::tyme::solar::{SolarDay, SolarTime};
+use tyme4rs::tyme::{Culture, Tyme};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
 /// 引导符。见模块文档：双拼两字母会和音节撞车，必须有引导符；
-/// 而 `\` 让给了顿号，所以用反引号。
+/// 而 `\` / `/` 都让给了顿号，所以用反引号。
 pub const PREFIX: char = '`';
 
 /// 一次取到的时间快照。同一批候选必须用同一个时刻，否则「17:36」和「17:36:50」
@@ -115,6 +131,115 @@ impl Now {
     }
 }
 
+/// 农历 / 干支 / 节气的缓存。
+///
+/// 这三样走 Tyme 的天文算法，比读一次系统时间贵；而 `candidates()` 每敲一个键
+/// 都会重算（只打引导符时更是要把 8 个命令全列出来）。同一分钟内的输出完全一样
+/// ——农历只到日、四柱的时柱两小时才换——所以按「年月日时分」缓存，三样一起算。
+static CACHE: Mutex<Option<CacheEntry>> = Mutex::new(None);
+
+struct CacheEntry {
+    stamp: String,
+    lunar: Vec<String>,
+    ganzhi: Vec<String>,
+    term: Vec<String>,
+}
+
+/// 取缓存；分钟变了就三样一起重算。`pick` 决定要哪一份。
+fn cached(n: &Now, pick: fn(&CacheEntry) -> &Vec<String>) -> Vec<String> {
+    let stamp = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        n.year, n.month, n.day, n.hour, n.minute
+    );
+    let mut g = match CACHE.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    if !g.as_ref().is_some_and(|e| e.stamp == stamp) {
+        *g = Some(CacheEntry {
+            lunar: lunar_candidates(n),
+            ganzhi: ganzhi_candidates(n),
+            term: term_candidates(n),
+            stamp,
+        });
+    }
+    pick(g.as_ref().expect("刚填过")).clone()
+}
+
+/// Tyme 的 `SolarDay`：本地时间的年月日直接当公历，不做时区换算。
+fn solar_day(n: &Now) -> SolarDay {
+    SolarDay::from_ymd(n.year as isize, n.month as usize, n.day as usize)
+}
+
+/// 农历：农历丙午年八月廿三 / 丙午年八月廿三 / 八月廿三
+///
+/// 干支年用**农历年**的干支（按春节换年），不是四柱的年柱（按立春换年）——
+/// 「今年什么年」问的是农历。
+fn lunar_candidates(n: &Now) -> Vec<String> {
+    let day = solar_day(n).get_lunar_day();
+    // 干支年用**农历年**的干支（按春节换年），不是四柱的年柱（按立春换年）——
+    // 「今年什么年」问的是农历。`get_year_sixty_cycle` 已废弃，走 SixtyCycleDay。
+    let gz = day.get_sixty_cycle_day().get_year().to_string();
+    let month = day.get_lunar_month().get_name(); // 八月 / 闰六月
+    let d = day.get_name(); // 廿三
+    vec![
+        format!("农历{gz}年{month}{d}"),
+        format!("{gz}年{month}{d}"),
+        format!("{month}{d}"),
+    ]
+}
+
+/// 干支四柱：丙午年 乙酉月 壬寅日 丁未时
+///
+/// 交给 Tyme 的 `EightChar`：月柱按节气分界、日柱按子时（23:00）换日，
+/// 这两条自己写几乎必错。
+fn ganzhi_candidates(n: &Now) -> Vec<String> {
+    let time = SolarTime::from_ymd_hms(
+        n.year as isize,
+        n.month as usize,
+        n.day as usize,
+        n.hour as usize,
+        n.minute as usize,
+        n.second as usize,
+    );
+    let ec = time.get_lunar_hour().get_eight_char();
+    let (y, m) = (ec.get_year().to_string(), ec.get_month().to_string());
+    let (d, h) = (ec.get_day().to_string(), ec.get_hour().to_string());
+    vec![
+        format!("{y}年 {m}月 {d}日 {h}时"),
+        format!("{y} {m} {d} {h}"),
+        format!("{y}年 {m}月 {d}日"),
+    ]
+}
+
+/// 下一个节气（精确到日）：2026年11月7日 立冬
+///
+/// `get_term_day()` 给的是「今天所在的节气 + 已经过了几天」，所以 `day_index == 0`
+/// 说明今天就是节气日——那就是最近的一个，不用往后跳。
+fn next_term_day(n: &Now) -> (SolarDay, String) {
+    let td = solar_day(n).get_term_day();
+    let term = if td.get_day_index() == 0 {
+        td.get_solar_term()
+    } else {
+        td.get_solar_term().next(1)
+    };
+    (term.get_solar_day(), term.get_name())
+}
+
+fn term_candidates(n: &Now) -> Vec<String> {
+    let (day, name) = next_term_day(n);
+    vec![
+        format!(
+            "{}年{}月{}日 {name}",
+            day.get_year(),
+            day.get_month(),
+            day.get_day()
+        ),
+        format!("{}月{}日 {name}", day.get_month(), day.get_day()),
+        name,
+    ]
+}
+
 struct Cmd {
     /// 引导符后面的码
     key: &'static str,
@@ -172,6 +297,21 @@ const CMDS: &[Cmd] = &[
         label: "时间戳",
         build: |n| vec![n.epoch.to_string(), n.epoch_ms.to_string()],
     },
+    Cmd {
+        key: "nl",
+        label: "农历",
+        build: |n| cached(n, |c| &c.lunar),
+    },
+    Cmd {
+        key: "gz",
+        label: "干支",
+        build: |n| cached(n, |c| &c.ganzhi),
+    },
+    Cmd {
+        key: "jq",
+        label: "节气",
+        build: |n| cached(n, |c| &c.term),
+    },
 ];
 
 /// 可用命令清单（设置窗/文档里展示用）
@@ -227,6 +367,94 @@ mod tests {
         assert_eq!(candidates("x"), candidates("xq"));
         assert_eq!(candidates("d"), candidates("dt"));
         assert_eq!(candidates("t"), candidates("ts"));
+        assert_eq!(candidates("n"), candidates("nl"));
+        assert_eq!(candidates("g"), candidates("gz"));
+        assert_eq!(candidates("j"), candidates("jq"));
+    }
+
+    /// 固定时刻。农历 / 干支 / 节气都要能拿确定的输入去测，不能依赖「今天」。
+    fn at(y: u16, m: u16, d: u16, h: u16, mi: u16, s: u16) -> Now {
+        Now {
+            year: y,
+            month: m,
+            day: d,
+            weekday: 0,
+            hour: h,
+            minute: mi,
+            second: s,
+            epoch: 0,
+            epoch_ms: 0,
+        }
+    }
+
+    #[test]
+    fn lunar_matches_spring_festival() {
+        // 2024-02-10 是甲辰年正月初一（春节），公开可查
+        let r = lunar_candidates(&at(2024, 2, 10, 12, 0, 0));
+        assert_eq!(r[0], "农历甲辰年正月初一");
+        assert_eq!(r[1], "甲辰年正月初一");
+        assert_eq!(r[2], "正月初一");
+        // 前一天是癸卯年十二月三十（除夕）。Tyme 用「十二月」不用「腊月」，
+        // 这里跟着库的措辞走，别自己改一套。
+        let r = lunar_candidates(&at(2024, 2, 9, 12, 0, 0));
+        assert_eq!(r[2], "十二月三十");
+    }
+
+    #[test]
+    fn lunar_handles_leap_month() {
+        // 2023 年闰二月，闰月初一落在 3 月 22 日
+        let r = lunar_candidates(&at(2023, 3, 22, 12, 0, 0));
+        assert!(r[2].starts_with("闰二月"), "got {r:?}");
+    }
+
+    #[test]
+    fn ganzhi_year_switches_at_lichun_not_new_year() {
+        // 年柱按立春（2024-02-04）换，不按春节（2024-02-10）换
+        let before = ganzhi_candidates(&at(2024, 1, 15, 12, 0, 0));
+        let after = ganzhi_candidates(&at(2024, 2, 10, 12, 0, 0));
+        assert!(before[2].starts_with("癸卯年"), "{before:?}");
+        assert!(after[2].starts_with("甲辰年"), "{after:?}");
+        // 四柱各柱都是两字，空格分隔的四柱版正好 4 段
+        assert_eq!(after[1].split_whitespace().count(), 4, "{after:?}");
+        assert!(after[0].ends_with('时'), "{after:?}");
+    }
+
+    #[test]
+    fn term_is_the_next_one_and_lands_on_a_term_day() {
+        let n = at(2026, 10, 23, 12, 0, 0);
+        let today = solar_day(&n);
+        let (day, name) = next_term_day(&n);
+        // 给出的那天本身就是节气日
+        assert_eq!(day.get_term_day().get_day_index(), 0, "{name} {day}");
+        // 不超过今天 +16 天（一个节气间隔最长约 15.7 天）
+        assert!(!today.is_after(day), "must not be in the past: {day}");
+        assert!(today.subtract(day) <= 16, "{name} {day}");
+        // 三个候选：完整日期 / 月日 / 只有节气名
+        let r = term_candidates(&n);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[2], name);
+        assert!(r[0].ends_with(&name) && r[1].ends_with(&name), "{r:?}");
+    }
+
+    #[test]
+    fn term_on_a_term_day_returns_today() {
+        // 2024-02-04 是立春，当天问「下一个节气」就给今天这个
+        let (day, name) = next_term_day(&at(2024, 2, 4, 12, 0, 0));
+        assert_eq!(name, "立春");
+        assert_eq!((day.get_year(), day.get_month(), day.get_day()), (2024, 2, 4));
+    }
+
+    #[test]
+    fn tyme_cache_returns_same_result_within_a_minute() {
+        let n = at(2026, 10, 23, 12, 30, 0);
+        let a = lunar_candidates(&n);
+        let b = cached(&n, |c| &c.lunar);
+        let c = cached(&at(2026, 10, 23, 12, 30, 59), |c| &c.lunar);
+        assert_eq!(a, b);
+        assert_eq!(b, c, "同一分钟内（秒变了）应该命中缓存");
+        // 换一天必须重算
+        let d = cached(&at(2026, 10, 24, 0, 0, 0), |c| &c.lunar);
+        assert_ne!(b, d);
     }
 
     #[test]

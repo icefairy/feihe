@@ -47,6 +47,12 @@ windows = { version = "0.62", features = [
 # 需要它作为直接依赖（windows 只是再导出模块，不能替代 crate 名）。
 windows-core = "0.62"
 
+# 农历 / 干支 / 节气（快捷输入 `nl `gz `jq）统一走 Tyme，MIT。
+# 这是整个项目唯一的第三方库：节气要算太阳黄经、四柱要按立春/子时换柱、
+# 农历要处理闰月，自己写等于重造万年历，边界几乎必错。
+# 代价：+127 KB（它依赖 regex 解析中文名），安装包 1.24 → 1.33 MB。
+tyme4rs = "1.5.0"
+
 [profile.release]
 opt-level = "s"
 lto = true

@@ -186,6 +186,18 @@ if ($SelfTest) {
         Write-Host ("  {0} feihe{1}.dll  {2}  OK" -f $pr.Name, $(if ($pr.Name -eq '64 位') { '' } else { '32' }), $h1.Substring(0, 16)) -ForegroundColor Green
     }
 
+    # 用户手册也要落地。中文文件名 + NSIS 的 File 指令是最容易静默失败的一环：
+    # 打漏了、名字乱码了，装完都没人会发现。
+    $helpName = '使用帮助.md'
+    $helpDst = Join-Path $installDir $helpName
+    if (-not (Test-Path -LiteralPath $helpDst)) { throw "用户手册没落地：$helpDst" }
+    $h1 = (Get-FileHash -LiteralPath $helpDst -Algorithm SHA256).Hash
+    $h2 = (Get-FileHash -LiteralPath (Join-Path $repo "docs\$helpName") -Algorithm SHA256).Hash
+    if ($h1 -ne $h2) {
+        throw "用户手册校验不一致`n  装机: $h1`n  构建: $h2"
+    }
+    Write-Host ("  用户手册      {0}  OK" -f $h1.Substring(0, 16)) -ForegroundColor Green
+
     Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $tmpDist -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host '[setup] 自检通过：安装包内容与构建产物逐字节一致' -ForegroundColor Green

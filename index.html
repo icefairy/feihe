@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.24 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.33 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -243,7 +243,7 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n">1.24<small>MB</small></div><div class="k">安装包</div></div>
+      <div class="stat"><div class="n">1.33<small>MB</small></div><div class="k">安装包</div></div>
       <div class="stat"><div class="n">8006</div><div class="k">收录单字</div></div>
       <div class="stat"><div class="n">38024</div><div class="k">词条</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
@@ -258,7 +258,7 @@
       <h2>不打算取代搜狗，只服务一种人</h2>
       <p class="sub">
         体积数据是本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件，用户数据另占 7.8 MB）。
-        飞鹤装完是两份 DLL，约 5.7 MB。
+        飞鹤装完是两份 DLL，约 5.9 MB。
       </p>
     </div>
 
@@ -268,8 +268,8 @@
           <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
         </thead>
         <tbody>
-          <tr><td>安装包</td><td class="me">1.24 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
-          <tr><td>装完占用</td><td class="me">约 5.7 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
+          <tr><td>安装包</td><td class="me">1.33 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>装完占用</td><td class="me">约 5.9 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
           <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
           <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
           <tr><td>开源</td><td class="yes">是，Rust 全文可改</td><td class="no">否</td><td class="no">否</td></tr>
@@ -465,7 +465,8 @@ rustup target add i686-pc-windows-gnullvm
       <div class="card">
         <h3>安装后要手动加一下</h3>
         <p>到「设置 → 时间和语言 → 语言和区域 → 中文 → 语言选项 → 键盘」里应出现「飞鹤拼音」。
-          列表由 shell 缓存，没刷新就注销重登一次。</p>
+          列表由 shell 缓存，没刷新就注销重登一次。安装目录里有 <code>使用帮助.md</code>，
+          所有键位和快捷输入都写在里面。</p>
       </div>
       <div class="card">
         <h3>未签名，会撞 SmartScreen</h3>
@@ -485,7 +486,7 @@ rustup target add i686-pc-windows-gnullvm
     </div>
     <div class="todo">
       <div>组合串下划线（ITfDisplayAttributeProvider 未实现）</div>
-      <div>快捷输入的农历与自定义短语</div>
+      <div>快捷输入的自定义短语（农历 / 干支 / 节气已支持）</div>
       <div>模糊音</div>
       <div>语音输入（M5 才规划）</div>
       <div>删词 / 置顶（需要 SQLite，阶段二）</div>
@@ -494,7 +495,7 @@ rustup target add i686-pc-windows-gnullvm
     </div>
     <p class="sub" style="margin-top:26px">
       已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词（退格可拆词）、
-      候选窗鼠标点选、
+      候选窗鼠标点选、快捷输入（日期 / 时间 / 农历 / 干支四柱 / 下一个节气）、
       全角标点、简繁切换、动态词频、状态浮窗、设置窗、符号软键盘、搜狗个人词库导入、
       用户词库编译成二进制走 mmap。
     </p>
