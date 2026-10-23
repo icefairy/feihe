@@ -1,0 +1,4861 @@
+# 自动生成的补充词表（common）
+# 由 tools/gen_extra.py 从 tools/wordlists/common*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+体重秤	ti zhong cheng
+体型	ti xing
+劲头	jin tou
+气色	qi se
+牙床	ya chuang
+牙龈	ya yin
+无名指	wu ming zhi
+小指	xiao zhi
+手背	shou bei
+手肘	shou zhou
+腿脚	tui jiao
+脚踝	jiao huai
+脚趾	jiao zhi
+脚跟	jiao gen
+腰背	yao bei
+胸口疼	xiong kou teng
+排汗	pai han
+体质差	ti zhi cha
+淤青	yu qing
+肿痛	zhong tong
+胀痛	zhang tong
+刺痛	ci tong
+绞痛	jiao tong
+隐痛	yin tong
+眼花	yan hua
+耳鸣	er ming
+鼻塞	bi se
+流涕	liu ti
+咳痰	ke tan
+打喷嚏	da pen ti
+低烧	di shao
+高烧	gao shao
+退烧	tui shao
+鼻炎	bi yan
+咽炎	yan yan
+扁桃体	bian tao ti
+气管炎	qi guan yan
+胃病	wei bing
+胃炎	wei yan
+胃痛	wei tong
+胃胀	wei zhang
+反酸	fan suan
+烧心	shao xin
+腹胀	fu zhang
+脾脏	pi zang
+胆囊	dan nang
+胰腺	yi xian
+心血管	xin xue guan
+脑血管	nao xue guan
+毛细血管	mao xi xue guan
+神经元	shen jing yuan
+骨骼	gu ge
+软骨	ruan gu
+赘肉	zhui rou
+汗腺	han xian
+掉发	diao fa
+发际线	fa ji xian
+眼袋	yan dai
+色斑	se ban
+雀斑	que ban
+痘印	dou yin
+痤疮	cuo chuang
+荨麻疹	xun ma zhen
+脚气	jiao qi
+冻疮	dong chuang
+烫伤	tang shang
+擦伤	ca shang
+扭伤	niu shang
+拉伤	la shang
+脱臼	tuo jiu
+抽筋	chou jin
+癫痫	dian xian
+痴呆	chi dai
+帕金森	pa jin sen
+焦虑症	jiao lv zheng
+强迫症	qiang po zheng
+嗜睡	shi shui
+梦游	meng you
+耐性	nai xing
+纠结	jiu jie
+羞愧	xiu kui
+恶心感	e xin gan
+幸福感	xing fu gan
+满足感	man zu gan
+归属感	gui shu gan
+信任感	xin ren gan
+心结	xin jie
+打击感	da ji gan
+好转	hao zhuan
+停药	ting yao
+复诊	fu zhen
+转院	zhuan yuan
+拆线	chai xian
+打针	da zhen
+验血	yan xue
+筛查	shai cha
+拍片	pai pian
+彩超	cai chao
+核磁	he ci
+心电图	xin dian tu
+误诊	wu zhen
+医嘱	yi zhu
+医保卡	yi bao ka
+号源	hao yuan
+陪护	pei hu
+护工	hu gong
+病床	bing chuang
+病历本	bing li ben
+有氧	you yang
+无氧	wu yang
+热身	re shen
+慢跑	man pao
+快走	kuai zou
+普拉提	pu la ti
+跳绳	tiao sheng
+俯卧撑	fu wo cheng
+仰卧起坐	yang wo qi zuo
+深蹲	shen dun
+举重	ju zhong
+哑铃	ya ling
+杠铃	gang ling
+拉力器	la li qi
+跑步机	pao bu ji
+椭圆机	tuo yuan ji
+动感单车	dong gan dan che
+卡路里	ka lu li
+增肌	zeng ji
+塑形	su xing
+节食	jie shi
+暴食	bao shi
+偏食	pian shi
+挑食	tiao shi
+膳食纤维	shan shi xian wei
+补钙	bu gai
+补铁	bu tie
+补锌	bu xin
+补水	bu shui
+作息	zuo xi
+午睡	wu shui
+失眠症	shi mian zheng
+磨牙	mo ya
+生物钟	sheng wu zhong
+时差	shi cha
+疲劳驾驶	pi lao jia shi
+亚健康	ya jian kang
+体质测试	ti zhi ce shi
+血压计	xue ya ji
+体温计	ti wen ji
+血糖仪	xue tang yi
+听诊器	ting zhen qi
+创可贴	chuang ke tie
+绷带	beng dai
+酒精棉	jiu jing mian
+碘伏棉签	dian fu mian qian
+口罩	kou zhao
+护目镜	hu mu jing
+防护服	fang hu fu
+检疫	jian yi
+核酸	he suan
+潜伏期	qian fu qi
+流调	liu diao
+健康码	jian kang ma
+行程码	xing cheng ma
+集中隔离	ji zhong ge li
+居家隔离	ju jia ge li
+问诊	wen zhen
+线上问诊	xian shang wen zhen
+电子处方	dian zi chu fang
+健康档案	jian kang dang an
+家庭医生	jia ting yi sheng
+社区医院	she qu yi yuan
+三甲医院	san jia yi yuan
+专科医院	zhuan ke yi yuan
+中医科	zhong yi ke
+中西医	zhong xi yi
+针灸	zhen jiu
+推拿	tui na
+拔罐	ba guan
+刮痧	gua sha
+艾灸	ai jiu
+理疗	li liao
+正骨	zheng gu
+汤药	tang yao
+偏方	pian fang
+食疗	shi liao
+药膳	yao shan
+家人群	jia ren qun
+晚辈	wan bei
+平辈	ping bei
+后辈	hou bei
+双亲	shuang qin
+孙女	sun nv
+外孙	wai sun
+外孙女	wai sun nv
+曾孙	zeng sun
+次子	ci zi
+独生子	du sheng zi
+独生女	du sheng nv
+表弟	biao di
+表姐	biao jie
+表妹	biao mei
+堂哥	tang ge
+堂弟	tang di
+堂姐	tang jie
+堂妹	tang mei
+伯伯	bo bo
+姨妈	yi ma
+婶婶	shen shen
+姥爷	lao ye
+岳父	yue fu
+岳母	yue mu
+丈母娘	zhang mu niang
+儿媳	er xi
+再婚	zai hun
+复婚	fu hun
+婚戒	hun jie
+彩礼	cai li
+嫁妆	jia zhuang
+领证	ling zheng
+热恋	re lian
+复合	fu he
+订婚	ding hun
+介绍人	jie shao ren
+媒人	mei ren
+红娘	hong niang
+婆家	po jia
+娘家	niang jia
+亲家	qing jia
+独居	du ju
+分家	fen jia
+成家	cheng jia
+养家	yang jia
+顾家	gu jia
+家事	jia shi
+家常	jia chang
+家风	jia feng
+家规	jia gui
+家谱	jia pu
+族谱	zu pu
+宗族	zong zu
+血缘	xue yuan
+亲生	qin sheng
+领养	ling yang
+继父	ji fu
+继母	ji mu
+养父	yang fu
+养母	yang mu
+干爹	gan die
+干妈	gan ma
+义子	yi zi
+义女	yi nv
+月嫂	yue sao
+育儿	yu er
+带娃	dai wa
+看孩子	kan hai zi
+陪读	pei du
+单亲	dan qin
+遗孤	yi gu
+对门	dui men
+业主群	ye zhu qun
+生人	sheng ren
+东道主	dong dao zhu
+串门	chuan men
+做客	zuo ke
+待客	dai ke
+情面	qing mian
+人情世故	ren qing shi gu
+世故	shi gu
+谈吐	tan tu
+言谈	yan tan
+闲谈	xian tan
+推辞	tui ci
+婉拒	wan ju
+邀约	yao yue
+约见	yue jian
+碰面	peng mian
+偶遇	ou yu
+重逢	chong feng
+道别	dao bie
+送别	song bie
+送行	song xing
+欢送	huan song
+寒暄	han xuan
+敬称	jing cheng
+尊称	zun cheng
+外号	wai hao
+绰号	chuo hao
+别称	bie cheng
+引见	yin jian
+熟识	shu shi
+结拜	jie bai
+搭伙	da huo
+共事	gong shi
+老员工	lao yuan gong
+法务	fa wu
+采购	cai gou
+师傅	shi fu
+同窗	tong chuang
+师妹	shi mei
+学姐	xue jie
+学弟	xue di
+学妹	xue mei
+室友	shi you
+舍友	she you
+病友	bing you
+铁粉	tie fen
+黑粉	hei fen
+键盘侠	jian pan xia
+杠精	gang jing
+博主	bo zhu
+群主	qun zhu
+层主	ceng zhu
+取关	qu guan
+拉黑	la hei
+奉承	feng cheng
+恭维	gong wei
+拍马屁	pai ma pi
+挖苦	wa ku
+逗趣	dou qu
+风趣	feng qu
+搞笑	gao xiao
+冷场	leng chang
+破冰	po bing
+搭讪	da shan
+寒暄话	han xuan hua
+客套	ke tao
+客套话	ke tao hua
+场面话	chang mian hua
+真话	zhen hua
+谎话	huang hua
+假话	jia hua
+空话	kong hua
+套话	tao hua
+闲话	xian hua
+坏话	huai hua
+好话	hao hua
+口碑好	kou bei hao
+风评	feng ping
+靠谱	kao pu
+忠厚	zhong hou
+本分	ben fen
+正派	zheng pai
+厚道	hou dao
+谦让	qian rang
+外向	wai xiang
+合群	he qun
+孤僻	gu pi
+随和	sui he
+倔脾气	jue pi qi
+死板	si ban
+圆滑	yuan hua
+直爽	zhi shuang
+爽快	shuang kuai
+拖沓	tuo ta
+磨蹭	mo ceng
+饭局	fan ju
+饭点	fan dian
+加餐	jia can
+汤圆	tang yuan
+炒饭	chao fan
+盖饭	gai fan
+拌饭	ban fan
+煲仔饭	bao zai fan
+粥品	zhou pin
+河粉	he fen
+凉皮	liang pi
+凉面	liang mian
+拉面	la mian
+刀削面	dao xiao mian
+炸酱面	zha jiang mian
+热干面	re gan mian
+担担面	dan dan mian
+阳春面	yang chun mian
+挂面	gua mian
+意面	yi mian
+吐司	tu si
+法棍	fa gun
+贝果	bei guo
+可颂	ke song
+曲奇	qu qi
+蛋挞	dan ta
+泡芙	pao fu
+布丁	bu ding
+慕斯	mu si
+雪糕	xue gao
+冰棍	bing gun
+豆奶	dou nai
+米浆	mi jiang
+汽水	qi shui
+可乐	ke le
+雪碧	xue bi
+苏打水	su da shui
+白开水	bai kai shui
+凉水	liang shui
+冰水	bing shui
+花茶	hua cha
+拿铁	na tie
+卡布奇诺	ka bu qi nuo
+摩卡	mo ka
+手冲	shou chong
+冷萃	leng cui
+米酒	mi jiu
+香槟	xiang bin
+伏特加	fu te jia
+敬酒	jing jiu
+干杯	gan bei
+劝酒	quan jiu
+酒量	jiu liang
+下酒菜	xia jiu cai
+作料	zuo liao
+生抽	sheng chou
+老抽	lao chou
+香醋	xiang cu
+陈醋	chen cu
+白醋	bai cu
+鸡精	ji jing
+红糖	hong tang
+生粉	sheng fen
+糯米粉	nuo mi fen
+酵母	jiao mu
+泡打粉	pao da fen
+菜籽油	cai zi you
+麻油	ma you
+猪油	zhu you
+辣椒油	la jiao you
+花椒油	hua jiao you
+香油碟	xiang you die
+葱姜蒜	cong jiang suan
+大葱	da cong
+小葱	xiao cong
+蒜末	suan mo
+姜末	jiang mo
+香叶	xiang ye
+孜然	zi ran
+五香粉	wu xiang fen
+十三香	shi san xiang
+干辣椒	gan la jiao
+小米椒	xiao mi jiao
+剁椒	duo jiao
+泡椒	pao jiao
+豆瓣酱	dou ban jiang
+甜面酱	tian mian jiang
+黄豆酱	huang dou jiang
+蚝油	hao you
+番茄酱	fan qie jiang
+沙拉酱	sha la jiang
+芝麻酱	zhi ma jiang
+花生酱	hua sheng jiang
+腐乳	fu ru
+豆豉	dou chi
+酸菜	suan cai
+榨菜	zha cai
+腌菜	yan cai
+咸菜	xian cai
+豆干	dou gan
+豆皮	dou pi
+腐竹	fu zhu
+豌豆	wan dou
+鹰嘴豆	ying zui dou
+银耳	yin er
+平菇	ping gu
+杏鲍菇	xing bao gu
+金针菇	jin zhen gu
+口蘑	kou mo
+草菇	cao gu
+竹荪	zhu sun
+裙带菜	qun dai cai
+粉条	fen tiao
+红薯粉	hong shu fen
+土豆粉	tu dou fen
+魔芋	mo yu
+魔芋丝	mo yu si
+五花肉	wu hua rou
+里脊	li ji
+猪蹄	zhu ti
+猪肚	zhu du
+猪血	zhu xue
+牛腩	niu nan
+牛腱	niu jian
+肥牛	fei niu
+牛排	niu pai
+牛肚	niu du
+羊排	yang pai
+羊腿	yang tui
+鸡腿	ji tui
+鸡翅	ji chi
+鸡胸	ji xiong
+鸡爪	ji zhao
+鸭肉	ya rou
+鸭腿	ya tui
+鸭脖	ya bo
+鹅肉	e rou
+兔肉	tu rou
+黄花鱼	huang hua yu
+鲈鱼	lu yu
+草鱼	cao yu
+鳕鱼	xue yu
+三文鱼	san wen yu
+金枪鱼	jin qiang yu
+基围虾	ji wei xia
+小龙虾	xiao long xia
+大闸蟹	da zha xie
+贝类	bei lei
+扇贝	shan bei
+蛤蜊	ge li
+章鱼	zhang yu
+鲍鱼	bao yu
+海蜇	hai zhe
+鱼丸	yu wan
+虾滑	xia hua
+肉丸	rou wan
+肉馅	rou xian
+培根	pei gen
+午餐肉	wu can rou
+肉松	rou song
+小白菜	xiao bai cai
+空心菜	kong xin cai
+茼蒿	tong hao
+西芹	xi qin
+荠菜	ji cai
+苋菜	xian cai
+包菜	bao cai
+紫甘蓝	zi gan lan
+西兰花	xi lan hua
+花菜	hua cai
+白萝卜	bai luo bo
+芋头	yu tou
+莲藕	lian ou
+丝瓜	si gua
+西葫芦	xi hu lu
+豆角	dou jiao
+四季豆	si ji dou
+豇豆	jiang dou
+毛豆	mao dou
+豌豆尖	wan dou jian
+青豆	qing dou
+芦笋	lu sun
+莴笋	wo sun
+竹笋	zhu sun
+冬笋	dong sun
+豆芽菜	dou ya cai
+辣椒圈	la jiao quan
+时蔬	shi shu
+橙子	cheng zi
+柚子	you zi
+提子	ti zi
+哈密瓜	ha mi gua
+甜瓜	tian gua
+蓝莓	lan mei
+树莓	shu mei
+油桃	you tao
+李子	li zi
+梅子	mei zi
+火龙果	huo long guo
+榴莲	liu lian
+山竹	shan zhu
+龙眼	long yan
+杨梅	yang mei
+枇杷	pi pa
+冬枣	dong zao
+腰果	yao guo
+开心果	kai xin guo
+榛子	zhen zi
+松子	song zi
+葵花籽	kui hua zi
+果干	guo gan
+葡萄干	pu tao gan
+蜜饯	mi jian
+做菜	zuo cai
+炒菜	chao cai
+烧菜	shao cai
+煮饭	zhu fan
+蒸饭	zheng fan
+炖汤	dun tang
+煲汤	bao tang
+熬汤	ao tang
+熬粥	ao zhou
+煮面	zhu mian
+炒面	chao mian
+蒸鱼	zheng yu
+红烧	hong shao
+清蒸	qing zheng
+爆炒	bao chao
+干煸	gan bian
+水煮	shui zhu
+白灼	bai zhuo
+凉拌	liang ban
+腌制	yan zhi
+卤制	lu zhi
+烤制	kao zhi
+焯水	chao shui
+勾芡	gou qian
+收汁	shou zhi
+翻炒	fan chao
+翻面	fan mian
+切丝	qie si
+切块	qie kuai
+切丁	qie ding
+剁碎	duo sui
+捣碎	dao sui
+揉面	rou mian
+发面	fa mian
+醒面	xing mian
+擀面	gan mian
+包饺子	bao jiao zi
+下锅	xia guo
+起锅	qi guo
+出锅	chu guo
+装盘	zhuang pan
+摆盘	bai pan
+提前备菜	ti qian bei cai
+剩菜	sheng cai
+隔夜菜	ge ye cai
+微波	wei bo
+解冻	jie dong
+馊了	sou le
+发霉	fa mei
+腥味	xing wei
+膻味	shan wei
+苦味	ku wei
+涩味	se wei
+酸味	suan wei
+甜味	tian wei
+辣味	la wei
+咸味	xian wei
+鲜味	xian wei
+麻味	ma wei
+爽口	shuang kou
+入味	ru wei
+够味	gou wei
+尝味	chang wei
+试吃	shi chi
+细嚼慢咽	xi jiao man yan
+狼吞虎咽	lang tun hu yan
+嘴馋	zui chan
+解馋	jie chan
+忌口	ji kou
+荤素	hun su
+荤菜	hun cai
+素菜	su cai
+私房菜	si fang cai
+招牌菜	zhao pai cai
+特色菜	te se cai
+甜品	tian pin
+堂食	tang shi
+点餐	dian can
+单点	dan dian
+做东	zuo dong
+灶台	zao tai
+炒锅	chao guo
+平底锅	ping di guo
+汤锅	tang guo
+高压锅	gao ya guo
+电饭锅	dian fan guo
+空气炸锅	kong qi zha guo
+蒸笼	zheng long
+砧板	zhen ban
+菜刀	cai dao
+锅铲	guo chan
+漏勺	lou shao
+勺子	shao zi
+叉子	cha zi
+碟子	die zi
+餐盘	can pan
+餐巾	can jin
+毛坯房	mao pi fang
+精装房	jing zhuang fang
+硬装	ying zhuang
+软装	ruan zhuang
+租住	zu zhu
+租约	zu yue
+中介费	zhong jie fei
+签租	qian zu
+续租	xu zu
+退租	tui zu
+搬入	ban ru
+搬出	ban chu
+收房	shou fang
+验房	yan fang
+套内面积	tao nei mian ji
+主卧	zhu wo
+次卧	ci wo
+客卧	ke wo
+玄关	xuan guan
+储物间	chu wu jian
+楼道	lou dao
+门厅	men ting
+纱窗	sha chuang
+门框	men kuang
+门把手	men ba shou
+猫眼	mao yan
+门牌	men pai
+信箱	xin xiang
+水表	shui biao
+电表	dian biao
+燃气表	ran qi biao
+装修队	zhuang xiu dui
+下水道	xia shui dao
+地漏	di lou
+硅藻泥	gui zao ni
+踢脚线	ti jiao xian
+窗台	chuang tai
+飘窗	piao chuang
+一居室	yi ju shi
+两居室	liang ju shi
+三居室	san ju shi
+开间	kai jian
+储藏室	chu cang shi
+茶几	cha ji
+电视柜	dian shi gui
+书柜	shu gui
+鞋柜	xie gui
+橱柜	chu gui
+餐椅	can yi
+凳子	deng zi
+躺椅	tang yi
+扶手椅	fu shou yi
+被套	bei tao
+枕套	zhen tao
+毛毯	mao tan
+毯子	tan zi
+凉席	liang xi
+蚊帐	wen zhang
+遮光帘	zhe guang lian
+纱帘	sha lian
+百叶窗	bai ye chuang
+挂画	gua hua
+装饰画	zhuang shi hua
+相框	xiang kuang
+摆件	bai jian
+绿植	lv zhi
+盆栽	pen zai
+吊灯	diao deng
+落地灯	luo di deng
+壁灯	bi deng
+灯带	deng dai
+射灯	she deng
+吸顶灯	xi ding deng
+插排	cha pai
+烘干机	hong gan ji
+电风扇	dian feng shan
+吊扇	diao shan
+取暖器	qu nuan qi
+浴霸	yu ba
+油烟机	you yan ji
+灶具	zao ju
+洗碗机	xi wan ji
+消毒柜	xiao du gui
+净水器	jing shui qi
+加湿器	jia shi qi
+除湿机	chu shi ji
+扫地机	sao di ji
+吸尘器	xi chen qi
+挂烫机	gua tang ji
+熨斗	yun dou
+吹风机	chui feng ji
+电动牙刷	dian dong ya shua
+剃须刀	ti xu dao
+按摩椅	an mo yi
+跳闸	tiao zha
+限电	xian dian
+水费	shui fei
+燃气费	ran qi fei
+物业费	wu ye fei
+地暖	di nuan
+空调费	kong tiao fei
+报修	bao xiu
+师傅上门	shi fu shang men
+擦地	ca di
+拖地	tuo di
+扫地	sao di
+除螨	chu man
+除味	chu wei
+晾晒	liang shai
+熨平	yun ping
+收纳	shou na
+断舍离	duan she li
+干垃圾	gan la ji
+湿垃圾	shi la ji
+可回收	ke hui shou
+厨余	chu yu
+有害垃圾	you hai la ji
+垃圾桶	la ji tong
+垃圾袋	la ji dai
+拖把	tuo ba
+抹布	ma bu
+刷子	shua zi
+钢丝球	gang si qiu
+洗洁精	xi jie jing
+洗衣粉	xi yi fen
+柔顺剂	rou shun ji
+漂白剂	piao bai ji
+消毒液	xiao du ye
+洁厕灵	jie ce ling
+去污剂	qu wu ji
+玻璃水	bo li shui
+除垢剂	chu gou ji
+蚊香	wen xiang
+花露水	hua lu shui
+樟脑丸	zhang nao wan
+干燥剂	gan zao ji
+保鲜膜	bao xian mo
+保鲜袋	bao xian dai
+锡纸	xi zhi
+垃圾篓	la ji lou
+纸篓	zhi lou
+拖把桶	tuo ba tong
+晾衣架	liang yi jia
+衣架	yi jia
+夹子	jia zi
+粘钩	zhan gou
+收纳盒	shou na he
+收纳箱	shou na xiang
+置物架	zhi wu jia
+柜门	gui men
+拉手	la shou
+铰链	jiao lian
+锤子	chui zi
+螺丝刀	luo si dao
+扳手	ban shou
+钳子	qian zi
+卷尺	juan chi
+密封条	mi feng tiao
+玻璃胶	bo li jiao
+国道	guo dao
+县道	xian dao
+红绿灯	hong lv deng
+信号灯	xin hao deng
+斑马线	ban ma xian
+人行道	ren xing dao
+地下通道	di xia tong dao
+环路	huan lu
+辅路	fu lu
+单行道	dan xing dao
+应急车道	ying ji che dao
+快车道	kuai che dao
+慢车道	man che dao
+地下车库	di xia che ku
+过路费	guo lu fei
+罚单	fa dan
+车检	che jian
+中巴	zhong ba
+网约车	wang yue che
+顺风车	shun feng che
+拼车	pin che
+自驾	zi jia
+共享汽车	gong xiang qi che
+共享单车	gong xiang dan che
+轮椅	lun yi
+婴儿车	ying er che
+轻轨	qing gui
+城铁	cheng tie
+动车	dong che
+普通列车	pu tong lie che
+绿皮车	lv pi che
+候车厅	hou che ting
+售票处	shou piao chu
+检票	jian piao
+站票	zhan piao
+坐票	zuo piao
+卧铺	wo pu
+硬座	ying zuo
+软卧	ruan wo
+商务座	shang wu zuo
+一等座	yi deng zuo
+二等座	er deng zuo
+改签	gai qian
+晚点	wan dian
+正点	zheng dian
+终到	zhong dao
+经停	jing ting
+登机牌	deng ji pai
+托运行李	tuo yun xing li
+随身行李	sui shen xing li
+安检口	an jian kou
+候机厅	hou ji ting
+登机口	deng ji kou
+廊桥	lang qiao
+摆渡车	bai du che
+备降	bei jiang
+迫降	po jiang
+免税店	mian shui dian
+出站	chu zhan
+入站	ru zhan
+上车点	shang che dian
+下车点	xia che dian
+方位	fang wei
+南边	nan bian
+北边	bei bian
+正前方	zheng qian fang
+正后方	zheng hou fang
+前边	qian bian
+拐角	guai jiao
+左转	zuo zhuan
+右转	you zhuan
+掉头	diao tou
+直行	zhi xing
+红绿灯口	hong lv deng kou
+路线图	lu xian tu
+出发地	chu fa di
+必经之路	bi jing zhi lu
+送站	song zhan
+赶车	gan che
+赶飞机	gan fei ji
+晚高峰	wan gao feng
+早高峰	zao gao feng
+堵车	du che
+塞车	sai che
+拥堵	yong du
+车流	che liu
+插队	cha dui
+让行	rang xing
+礼让	li rang
+抢道	qiang dao
+鸣笛	ming di
+打灯	da deng
+变道	bian dao
+超车	chao che
+并线	bing xian
+打火	da huo
+加气	jia qi
+油价	you jia
+电桩	dian zhuang
+充电桩	chong dian zhuang
+休息区	xiu xi qu
+追尾	zhui wei
+剐蹭	gua ceng
+翻车	fan che
+抛锚	pao mao
+爆胎	bao tai
+故障车	gu zhang che
+定损	ding sun
+全责	quan ze
+主责	zhu ze
+次责	ci ze
+无责	wu ze
+违章停车	wei zhang ting che
+贴条	tie tiao
+通勤	tong qin
+上下班	shang xia ban
+市郊	shi jiao
+老城区	lao cheng qu
+树荫	shu yin
+地铁站	di tie zhan
+公交站	gong jiao zhan
+站牌	zhan pai
+首末班	shou mo ban
+大厦	da sha
+夜市	ye shi
+收银台	shou yin tai
+楼梯间	lou ti jian
+大厅	da ting
+电梯口	dian ti kou
+低处	di chu
+近处	jin chu
+早退	zao tui
+病假	bing jia
+年假	nian jia
+倒班	dao ban
+排班	pai ban
+轮班	lun ban
+加班费	jia ban fei
+晋升	jin sheng
+降薪	jiang xin
+解雇	jie gu
+合同期	he tong qi
+续签	xu qian
+工牌	gong pai
+工位	gong wei
+工装	gong zhuang
+打卡机	da ka ji
+述职	shu zhi
+季报	ji bao
+晨会	chen hui
+碰头会	peng tou hui
+总助	zong zhu
+产品经理	chan pin jing li
+运营经理	yun ying jing li
+客户经理	ke hu jing li
+技术经理	ji shu jing li
+运维	yun wei
+渠道商	qu dao shang
+品牌方	pin pai fang
+合作方	he zuo fang
+对接人	dui jie ren
+比价	bi jia
+中标	zhong biao
+流标	liu biao
+意向书	yi xiang shu
+验货	yan huo
+备货	bei huo
+补货	bu huo
+试用装	shi yong zhuang
+小票	xiao piao
+对账	dui zhang
+净利	jing li
+账期	zhang qi
+尾款	wei kuan
+定金	ding jin
+开票	kai piao
+核算	he suan
+资产负债	zi chan fu zhai
+股东会	gu dong hui
+路演	lu yan
+尽调	jin diao
+退市	tui shi
+重组	chong zu
+条文	tiao wen
+判例	pan li
+庭审	ting shen
+裁定书	cai ding shu
+律所	lv suo
+侵权责任	qin quan ze ren
+肖像权	xiao xiang quan
+名誉权	ming yu quan
+五险一金	wu xian yi jin
+劳动仲裁	lao dong zhong cai
+竞业协议	jing ye xie yi
+保密协议	bao mi xie yi
+承诺书	cheng nuo shu
+授权书	shou quan shu
+公证书	gong zheng shu
+私章	si zhang
+续期	xu qi
+条款约定	tiao kuan yue ding
+责任划分	ze ren hua fen
+减税	jian shui
+课表	ke biao
+练习册	lian xi ce
+月考	yue kao
+模拟考	mo ni kao
+转学	zhuan xue
+休学	xiu xue
+复学	fu xue
+肄业	yi ye
+校历	xiao li
+寒暑假	han shu jia
+校服	xiao fu
+校规	xiao gui
+校车	xiao che
+教务	jiao wu
+任课	ren ke
+预习	yu xi
+默写	mo xie
+语法	yu fa
+奥数	ao shu
+月考卷	yue kao juan
+不及格	bu ji ge
+书费	shu fei
+分数段	fen shu duan
+调剂线	tiao ji xian
+导师	dao shi
+开题	kai ti
+答辩	da bian
+查重	cha zhong
+期刊号	qi kan hao
+影响因子	ying xiang yin zi
+课程表	ke cheng biao
+网课	wang ke
+直播课	zhi bo ke
+录播课	lu bo ke
+在线教育	zai xian jiao yu
+考公	kao gong
+考编	kao bian
+等级考试	deng ji kao shi
+笔顺	bi shun
+偏旁	pian pang
+部首	bu shou
+笔画	bi hua
+楷书	kai shu
+行书	xing shu
+草书	cao shu
+篆书	zhuan shu
+毛笔	mao bi
+硬笔	ying bi
+练字	lian zi
+绘画	hui hua
+水彩	shui cai
+建筑学	jian zhu xue
+陶艺	tao yi
+混音	hun yin
+独唱	du chang
+笛子	di zi
+古筝	gu zheng
+架子鼓	jia zi gu
+和声	he sheng
+曲谱	qu pu
+乐谱	yue pu
+杂技	za ji
+芭蕾	ba lei
+京剧脸谱	jing ju lian pu
+非遗	fei yi
+元宵	yuan xiao
+端午	duan wu
+七夕	qi xi
+重阳	chong yang
+腊八	la ba
+除夕	chu xi
+劳动节	lao dong jie
+儿童节	er tong jie
+教师节	jiao shi jie
+母亲节	mu qin jie
+父亲节	fu qin jie
+万圣节	wan sheng jie
+感恩节	gan en jie
+复活节	fu huo jie
+寿辰	shou chen
+庙会	miao hui
+灯会	deng hui
+爆竹	bao zhu
+压岁钱	ya sui qian
+拜年	bai nian
+年夜饭	nian ye fan
+赏月	shang yue
+登高	deng gao
+扫墓	sao mu
+沙土	sha tu
+沙子	sha zi
+石子	shi zi
+矿藏	kuang cang
+山脚	shan jiao
+峭壁	qiao bi
+戈壁	ge bi
+草甸	cao dian
+草丛	cao cong
+泉眼	quan yan
+余震	yu zhen
+震中	zhen zhong
+震级	zhen ji
+水灾	shui zai
+旱灾	han zai
+泥石流	ni shi liu
+滑坡	hua po
+塌方	ta fang
+龙卷风	long juan feng
+微风	wei feng
+和风	he feng
+阵风	zhen feng
+风沙	feng sha
+沙尘	sha chen
+沙尘暴	sha chen bao
+雾霾	wu mai
+大雾	da wu
+浓雾	nong wu
+雾凇	wu song
+晴朗	qing lang
+晴空	qing kong
+阴天	yin tian
+雷雨	lei yu
+阵雨	zhen yu
+中雨	zhong yu
+毛毛雨	mao mao yu
+雷阵雨	lei zhen yu
+冻雨	dong yu
+雨夹雪	yu jia xue
+雨滴	yu di
+雪片	xue pian
+暴雪	bao xue
+鹅毛雪	e mao xue
+雪灾	xue zai
+冰雹	bing bao
+冰凌	bing ling
+冰锥	bing zhui
+霜冻	shuang dong
+白霜	bai shuang
+露珠	lu zhu
+霞光	xia guang
+朝霞	zhao xia
+晚霞	wan xia
+拂晓	fu xiao
+白昼	bai zhou
+初春	chu chun
+盛夏	sheng xia
+深秋	shen qiu
+节气	jie qi
+立春	li chun
+惊蛰	jing zhe
+春分	chun fen
+谷雨	gu yu
+立夏	li xia
+小满	xiao man
+芒种	mang zhong
+夏至	xia zhi
+小暑	xiao shu
+大暑	da shu
+立秋	li qiu
+处暑	chu shu
+白露	bai lu
+秋分	qiu fen
+寒露	han lu
+霜降	shuang jiang
+立冬	li dong
+小寒	xiao han
+大寒	da han
+风力	feng li
+降雨量	jiang yu liang
+天气图	tian qi tu
+回暖	hui nuan
+寒潮	han chao
+冷空气	leng kong qi
+暖流	nuan liu
+洋流	yang liu
+潮汐	chao xi
+涨潮	zhang chao
+退潮	tui chao
+河水	he shui
+蒸馏水	zheng liu shui
+尾气	wei qi
+退耕	tui geng
+还林	hai lin
+生态链	sheng tai lian
+食物链	shi wu lian
+细菌群	xi jun qun
+插秧	cha yang
+除草	chu cao
+杀虫	sha chong
+收割	shou ge
+晒干	shai gan
+稻谷	dao gu
+高粱	gao liang
+薯类	shu lei
+甘薯	gan shu
+蔬菜地	shu cai di
+菜园	cai yuan
+农膜	nong mo
+秧苗	yang miao
+花苗	hua miao
+树苗	shu miao
+树根	shu gen
+树皮	shu pi
+年轮	nian lun
+枯叶	ku ye
+嫩芽	nen ya
+花苞	hua bao
+花蕊	hua rui
+花蜜	hua mi
+果皮	guo pi
+果核	guo he
+根茎	gen jing
+球茎	qiu jing
+藤蔓	teng wan
+枝干	zhi gan
+木料	mu liao
+牧草	mu cao
+家畜	jia chu
+牲口	sheng kou
+水牛	shui niu
+黄牛	huang niu
+牦牛	mao niu
+羔羊	gao yang
+骡子	luo zi
+麋鹿	mi lu
+黑熊	hei xiong
+野兔	ye tu
+猩猩	xing xing
+大猩猩	da xing xing
+豹子	bao zi
+河马	he ma
+长颈鹿	chang jing lu
+斑马	ban ma
+袋鼠	dai shu
+树懒	shu lan
+刺猬	ci wei
+松鼠	song shu
+仓鼠	cang shu
+田鼠	tian shu
+猎犬	lie quan
+牧羊犬	mu yang quan
+导盲犬	dao mang quan
+喜鹊	xi que
+猫头鹰	mao tou ying
+大雁	da yan
+野鸭	ye ya
+公鸡	gong ji
+母鸡	mu ji
+火鸡	huo ji
+鸵鸟	tuo niao
+海鸥	hai ou
+鲢鱼	lian yu
+鲸鱼	jing yu
+海豹	hai bao
+海狮	hai shi
+海星	hai xing
+乌贼	wu zei
+海龟	hai gui
+蟒蛇	mang she
+蜥蜴	xi yi
+壁虎	bi hu
+蟾蜍	chan chu
+蝌蚪	ke dou
+蛾子	e zi
+蜻蜓	qing ting
+蟋蟀	xi shuai
+蚯蚓	qiu yin
+蝎子	xie zi
+益虫	yi chong
+鸟巢	niao chao
+蜂巢	feng chao
+蚁穴	yi xue
+兽窝	shou wo
+重做	zhong zuo
+拆分	chai fen
+录屏	lu ping
+暂停播放	zan ting bo fang
+快进	kuai jin
+取消选中	qu xiao xuan zhong
+重置	zhong zhi
+登出	deng chu
+解绑	jie bang
+挂断	gua duan
+拨打中	bo da zhong
+回电	hui dian
+听讲	ting jiang
+盯住	ding zhu
+瞥见	pie jian
+尝到	chang dao
+站起	zhan qi
+躺下	tang xia
+蹲下	dun xia
+拍肩	pai jian
+扔下	reng xia
+捡起	jian qi
+打开盖	da kai gai
+拧开	ning kai
+拧紧	ning jin
+撕开	si kai
+剪开	jian kai
+缝上	feng shang
+系上	xi shang
+扣上	kou shang
+洗头	xi tou
+梳头	shu tou
+照镜子	zhao jing zi
+卸妆	xie zhuang
+擦汗	ca han
+哈欠	ha qian
+伸懒腰	shen lan yao
+早上好	zao shang hao
+晚安	wan an
+道谢	dao xie
+闹翻	nao fan
+获得	huo de
+盼望已久	pan wang yi jiu
+借出	jie chu
+借入	jie ru
+欠下	qian xia
+存钱	cun qian
+取钱	qu qian
+收钱	shou qian
+找零	zhao ling
+讨价	tao jia
+还价	huan jia
+试用	shi yong
+锋利	feng li
+易碎	yi sui
+干净利落	gan jing li luo
+昏暗	hun an
+吵闹	chao nao
+空荡	kong dang
+清闲	qing xian
+费劲	fei jin
+省事	sheng shi
+划算	hua suan
+离谱	li pu
+渐渐	jian jian
+猛地	meng di
+亲眼	qin yan
+断网	duan wang
+满格	man ge
+弱信号	ruo xin hao
+掉线	diao xian
+重连	zhong lian
+登陆	deng lu
+粉丝团	fen si tuan
+群聊	qun liao
+建群	jian qun
+退群	tui qun
+群公告	qun gong gao
+拉群	la qun
+点踩	dian cai
+刷单	shua dan
+水贴	shui tie
+顶帖	ding tie
+超话	chao hua
+榜单	bang dan
+排行榜	pai hang bang
+网红	wang hong
+刷礼物	shua li wu
+连麦	lian mai
+开播	kai bo
+关播	guan bo
+下播	xia bo
+涨粉	zhang fen
+掉粉	diao fen
+爆款	bao kuan
+出圈	chu quan
+流量池	liu liang chi
+算法推荐	suan fa tui jian
+通知栏	tong zhi lan
+消息中心	xiao xi zhong xin
+未读	wei du
+已读	yi du
+免打扰	mian da rao
+红点	hong dian
+表情包	biao qing bao
+贴纸	tie zhi
+动图	dong tu
+长视频	zhang shi pin
+标题党	biao ti dang
+二创	er chuang
+付费版	fu fei ban
+高级版	gao ji ban
+内测版	nei ce ban
+公测版	gong ce ban
+应用商店	ying yong shang dian
+下载量	xia zai liang
+差评	cha ping
+中评	zhong ping
+追评	zhui ping
+晒单	shai dan
+种草	zhong cao
+拔草	ba cao
+开箱	kai xiang
+小技巧	xiao ji qiao
+干货	gan huo
+避坑	bi keng
+踩坑	cai keng
+分享会	fen xiang hui
+置顶帖	zhi ding tie
+投放量	tou fang liang
+心愿单	xin yuan dan
+快递员	kuai di yuan
+取件	qu jian
+保价	bao jia
+包邮	bao you
+首重	shou zhong
+续重	xu zhong
+下单量	xia dan liang
+零钱	ling qian
+储蓄卡	chu xu ka
+手机银行	shou ji yin hang
+快捷支付	kuai jie zhi fu
+免密支付	mian mi zhi fu
+刷脸	shua lian
+支付密码	zhi fu mi ma
+去电	qu dian
+免提	mian ti
+小组件	xiao zu jian
+快充	kuai chong
+无线充	wu xian chong
+移动电源	yi dong dian yuan
+投屏	tou ping
+截屏	jie ping
+截长图	jie zhang tu
+分屏	fen ping
+横屏	heng ping
+竖屏	shu ping
+飞行模式	fei xing mo shi
+省电模式	sheng dian mo shi
+勿扰模式	wu rao mo shi
+恢复出厂	hui fu chu chang
+刷机	shua ji
+云端	yun duan
+视频号	shi pin hao
+好友圈	hao you quan
+转发语	zhuan fa yu
+打赏码	da shang ma
+电子发票	dian zi fa piao
+电子合同	dian zi he tong
+电子签名	dian zi qian ming
+娱乐	yu le
+手游	shou you
+页游	ye you
+电竞	dian jing
+直播平台	zhi bo ping tai
+更新补丁	geng xin bu ding
+代练	dai lian
+陪玩	pei wan
+抽卡	chou ka
+闯关	chuang guan
+读档	du dang
+存档点	cun dang dian
+大神	da shen
+开黑	kai hei
+上分	shang fen
+掉分	diao fen
+段位	duan wei
+排位	pai wei
+对局	dui ju
+观战	guan zhan
+热歌	re ge
+歌单	ge dan
+播放列表	bo fang lie biao
+随机播放	sui ji bo fang
+单曲循环	dan qu xun huan
+无损	wu sun
+排片	pai pian
+首映	shou ying
+预告片	yu gao pian
+剧集	ju ji
+追剧	zhui ju
+季播	ji bo
+大结局	da jie ju
+影评	ying ping
+剧评	ju ping
+季军	ji jun
+银牌	yin pai
+半决赛	ban jue sai
+预赛	yu sai
+小组赛	xiao zu sai
+淘汰赛	tao tai sai
+棒球	bang qiu
+保龄球	bao ling qiu
+马拉松	ma la song
+跳高	tiao gao
+跳远	tiao yuan
+摔跤	shuai jiao
+柔道	rou dao
+击剑	ji jian
+射箭	she jian
+赛艇	sai ting
+滑冰	hua bing
+跳伞	tiao san
+私教	si jiao
+瑜伽垫	yu jia dian
+今日	jin ri
+开始时间	kai shi shi jian
+整点	zheng dian
+分秒	fen miao
+月末	yue mo
+件数	jian shu
+户数	hu shu
+代码段	dai ma duan
+占比	zhan bi
+千分比	qian fen bi
+净重	jing zhong
+毛重	mao zhong
+周长	zhou chang
+压强	ya qiang
+中位数	zhong wei shu
+最小值	zui xiao zhi
+完整度	wan zheng du
+覆盖度	fu gai du
+饱和度	bao he du
+样本量	yang ben liang
+比例尺	bi li chi
+刻度	ke du
+计量	ji liang
+公里数	gong li shu
+华氏度	hua shi du
+尺码	chi ma
+大号	da hao
+中号	zhong hao
+容量装	rong liang zhuang
+经济装	jing ji zhuang
+家庭装	jia ting zhuang
+含义	han yi
+标准线	biao zhun xian
+流程化	liu cheng hua
+计划性	ji hua xing
+规划图	gui hua tu
+反馈机制	fan kui ji zhi
+心力	xin li
+专注力	zhuan zhu li
+记忆力	ji yi li
+理解力	li jie li
+判断力	pan duan li
+沟通力	gou tong li
+向心力	xiang xin li
+才干	cai gan
+格局大	ge ju da
+思路清晰	si lu qing xi
+研究法	yan jiu fa
+社会	she hui
+居住证	ju zhu zheng
+暂住证	zan zhu zheng
+出生证	chu sheng zheng
+离婚证	li hun zheng
+死亡证	si wang zheng
+证照	zheng zhao
+社保卡	she bao ka
+退休金	tui xiu jin
+内退	nei tui
+返聘	fan pin
+待业	dai ye
+推荐信	tui jian xin
+入职通知	ru zhi tong zhi
+国企	guo qi
+央企	yang qi
+自由职业	zi you zhi ye
+打零工	da ling gong
+临时工	lin shi gong
+钟点工	zhong dian gong
+义工	yi gong
+捐物	juan wu
+五保	wu bao
+留守儿童	liu shou er tong
+空巢老人	kong chao lao ren
+外来人口	wai lai ren kou
+新市民	xin shi min
+社区活动	she qu huo dong
+特警	te jing
+协警	xie jing
+消防员	xiao fang yuan
+报警电话	bao jing dian hua
+办事大厅	ban shi da ting
+政务中心	zheng wu zhong xin
+审批局	shen pi ju
+社保局	she bao ju
+卫健委	wei jian wei
+住建局	zhu jian ju
+国防部	guo fang bu
+红头文件	hong tou wen jian
+函件	han jian
+头条	tou tiao
+社论	she lun
+评论员	ping lun yuan
+任命	ren ming
+免职	mian zhi
+调任	diao ren
+挂职	gua zhi
+考核制	kao he zhi
+问责	wen ze
+追责	zhui ze
+纪检	ji jian
+审计署	shen ji shu
+预算公开	yu suan gong kai
+财政拨款	cai zheng bo kuan
+补贴款	bu tie kuan
+救济金	jiu ji jin
+避难	bi nan
+救援队	jiu yuan dui
+物资	wu zi
+救援物资	jiu yuan wu zi
+灾后重建	zai hou chong jian
+火箭军	huo jian jun
+预备役	yu bei yi
+军装	jun zhuang
+枪械	qiang xie
+装甲车	zhuang jia che
+轰炸机	hong zha ji
+无人机	wu ren ji
+阵地	zhen di
+突袭	tu xi
+伏击	fu ji
+停战	ting zhan
+谈判桌	tan pan zhuo
+维和	wei he
+安理会	an li hui
+领事	ling shi
+领事馆	ling shi guan
+签证官	qian zheng guan
+护照本	hu zhao ben
+海关检查	hai guan jian cha
+难民	nan min
+道观	dao guan
+清真寺	qing zhen si
+僧侣	seng lv
+道士	dao shi
+阿訇	a hong
+烧香	shao xiang
+拜佛	bai fo
+斋戒	zhai jie
+诵经	song jing
+法事	fa shi
+祭祖	ji zu
+葬礼	zang li
+追悼会	zhui dao hui
+装配线	zhuang pei xian
+产线	chan xian
+量产	liang chan
+小批量	xiao pi liang
+大批量	da pi liang
+良率	liang lv
+次品	ci pin
+废品	fei pin
+全检	quan jian
+返工	fan gong
+库存量	ku cun liang
+出入库	chu ru ku
+封箱	feng xiang
+打码	da ma
+贴标	tie biao
+物流园	wu liu yuan
+中转站	zhong zhuan zhan
+仓库管理	cang ku guan li
+车床	che chuang
+铣床	xi chuang
+钻床	zuan chuang
+磨床	mo chuang
+冲床	chong chuang
+注塑机	zhu su ji
+夹具	jia ju
+钻头	zuan tou
+砂轮	sha lun
+气动	qi dong
+涡轮	wo lun
+法兰	fa lan
+密封圈	mi feng quan
+垫片	dian pian
+螺母	luo mu
+垫圈	dian juan
+铆钉	mao ding
+焊条	han tiao
+焊缝	han feng
+电焊	dian han
+气焊	qi han
+打磨	da mo
+淬火	cui huo
+退火	tui huo
+回火	hui huo
+冲压	chong ya
+折弯	zhe wan
+攻丝	gong si
+故障率	gu zhang lv
+空转	kong zhuan
+功率因数	gong lv yin shu
+耗电	hao dian
+毛坯	mao pi
+备件	bei jian
+钢材	gang cai
+黄铜	huang tong
+橡胶	xiang jiao
+亚克力	ya ke li
+胶合板	jiao he ban
+密度板	mi du ban
+人造革	ren zao ge
+化纤	hua xian
+火电	huo dian
+风电	feng dian
+光伏	guang fu
+生物质	sheng wu zhi
+原油	yuan you
+煤油	mei you
+清洁能源	qing jie neng yuan
+再生能源	zai sheng neng yuan
+储能	chu neng
+电池组	dian chi zu
+铅酸电池	qian suan dian chi
+燃料电池	ran liao dian chi
+输电	shu dian
+高压线	gao ya xian
+电线杆	dian xian gan
+电表箱	dian biao xiang
+接触器	jie chu qi
+开关柜	kai guan gui
+配电箱	pei dian xiang
+自动化线	zi dong hua xian
+机械臂	ji xie bi
+流水作业	liu shui zuo ye
+人机协作	ren ji xie zuo
+智能制造	zhi neng zhi zao
+物联网	wu lian wang
+工控	gong kong
+组态	zu tai
+防护罩	fang hu zhao
+安全帽	an quan mao
+劳保	lao bao
+防护手套	fang hu shou tao
+标识	biao shi
+警示牌	jing shi pai
+工伤事故	gong shang shi gu
+复产	fu chan
+产线升级	chan xian sheng ji
+风衣	feng yi
+棉衣	mian yi
+羽绒	yu rong
+夹克	jia ke
+卫衣	wei yi
+针织衫	zhen zhi shan
+卫裤	wei ku
+长裤	chang ku
+休闲裤	xiu xian ku
+西裤	xi ku
+运动裤	yun dong ku
+打底裤	da di ku
+长裙	zhang qun
+短裙	duan qun
+连衣裙	lian yi qun
+半身裙	ban shen qun
+家居服	jia ju fu
+泳衣	yong yi
+泳裤	yong ku
+雨衣	yu yi
+披风	pi feng
+斗篷	dou peng
+丝巾	si jin
+领结	ling jie
+礼帽	li mao
+棒球帽	bang qiu mao
+鸭舌帽	ya she mao
+毛线帽	mao xian mao
+草帽	cao mao
+短袜	duan wa
+长袜	chang wa
+跑鞋	pao xie
+板鞋	ban xie
+帆布鞋	fan bu xie
+凉鞋	liang xie
+高跟鞋	gao gen xie
+鞋带	xie dai
+鞋垫	xie dian
+鞋油	xie you
+耳钉	er ding
+吊坠	diao zhui
+胸针	xiong zhen
+发卡	fa qia
+发绳	fa sheng
+头绳	tou sheng
+墨镜	mo jing
+隐形眼镜	yin xing yan jing
+镜框	jing kuang
+手提包	shou ti bao
+双肩包	shuang jian bao
+单肩包	dan jian bao
+钱包夹	qian bao jia
+拉杆箱	la gan xiang
+旅行包	lv xing bao
+布袋	bu dai
+购物袋	gou wu dai
+棉布	mian bu
+麻布	ma bu
+丝绸	si chou
+雪纺	xue fang
+梭织	suo zhi
+里料	li liao
+刺绣	ci xiu
+纽扣	niu kou
+袖口	xiu kou
+领口	ling kou
+下摆	xia bai
+衣领	yi ling
+肩线	jian xian
+腰线	yao xian
+版型	ban xing
+试穿	shi chuan
+量身	liang shen
+裁缝	cai feng
+改衣	gai yi
+缝补	feng bu
+熨烫	yun tang
+干洗	gan xi
+手洗	shou xi
+机洗	ji xi
+漂洗	piao xi
+晾干	liang gan
+阴干	yin gan
+掉色	diao se
+起球	qi qiu
+褶皱	zhe zhou
+污渍	wu zi
+洁面	jie mian
+爽肤水	shuang fu shui
+面霜	mian shuang
+遮瑕	zhe xia
+散粉	san fen
+腮红	sai hong
+高光	gao guang
+阴影粉	yin ying fen
+眼线	yan xian
+睫毛膏	jie mao gao
+眉笔	mei bi
+唇釉	chun you
+唇膏	chun gao
+指甲油	zhi jia you
+卸甲水	xie jia shui
+眼膜	yan mo
+精华液	jing hua ye
+身体乳	shen ti ru
+护手霜	hu shou shuang
+润唇膏	run chun gao
+香氛	xiang fen
+沐浴露	mu yu lu
+护发素	hu fa su
+发膜	fa mo
+发胶	fa jiao
+染发	ran fa
+烫发	tang fa
+剪发	jian fa
+理发	li fa
+洗剪吹	xi jian chui
+美发店	mei fa dian
+推拿店	tui na dian
+美甲	mei jia
+纹眉	wen mei
+美瞳	mei tong
+医美	yi mei
+护肤步骤	hu fu bu zhou
+清洁面膜	qing jie mian mo
+洗漱用品	xi shu yong pin
+牙刷牙膏	ya shua ya gao
+毛巾浴巾	mao jin yu jin
+卫生纸	wei sheng zhi
+抽纸	chou zhi
+湿巾	shi jin
+卫生巾	wei sheng jin
+纸尿裤	zhi niao ku
+洗衣凝珠	xi yi ning zhu
+衣物柔顺	yi wu rou shun
+水杯	shui bei
+保温杯	bao wen bei
+折叠伞	zhe die san
+雨鞋	yu xie
+手电筒	shou dian tong
+针线	zhen xian
+尺子	chi zi
+圆珠笔	yuan zhu bi
+签字笔	qian zi bi
+马克笔	ma ke bi
+荧光笔	ying guang bi
+修正带	xiu zheng dai
+本子	ben zi
+便签纸	bian qian zhi
+文件袋	wen jian dai
+订书机	ding shu ji
+回形针	hui xing zhen
+图钉	tu ding
+胶棒	jiao bang
+美工刀	mei gong dao
+日记本	ri ji ben
+台历	tai li
+挂历	gua li
+婚嫁	hun jia
+相亲会	xiang qin hui
+订婚宴	ding hun yan
+彩礼钱	cai li qian
+嫁妆箱	jia zhuang xiang
+迎亲	ying qin
+接亲	jie qin
+闹洞房	nao dong fang
+伴郎	ban lang
+伴娘	ban niang
+主婚人	zhu hun ren
+证婚人	zheng hun ren
+喜糖	xi tang
+喜酒	xi jiu
+喜帖	xi tie
+喜宴	xi yan
+司仪	si yi
+婚纱照	hun sha zhao
+蜜月	mi yue
+丧事	sang shi
+殡仪馆	bin yi guan
+火化	huo hua
+骨灰	gu hui
+骨灰盒	gu hui he
+陵园	ling yuan
+花圈	hua quan
+挽联	wan lian
+黑纱	hei sha
+孝服	xiao fu
+守灵	shou ling
+出殡	chu bin
+头七	tou qi
+百天	bai tian
+柜员	gui yuan
+柜台业务	gui tai ye wu
+取号	qu hao
+排队机	pai dui ji
+销户	xiao hu
+活期	huo qi
+整存整取	zheng cun zheng qu
+零存整取	ling cun zheng qu
+取款	qu kuan
+转账汇款	zhuan zhang hui kuan
+跨行	kua xing
+密码器	mi ma qi
+短信提醒	duan xin ti xing
+余额宝	yu e bao
+跌停	die ting
+熊市	xiong shi
+震荡	zhen dang
+涨跌幅	zhang die fu
+成交额	cheng jiao e
+加仓	jia cang
+减仓	jian cang
+建仓	jian cang
+平仓	ping cang
+止盈	zhi ying
+套牢	tao lao
+割肉	ge rou
+分红	fen hong
+派息	pai xi
+除权	chu quan
+除息	chu xi
+打新	da xin
+配股	pei gu
+市净率	shi jing lv
+爆仓	bao cang
+做多	zuo duo
+做空	zuo kong
+套利	tao li
+创业板	chuang ye ban
+科创板	ke chuang ban
+港股	gang gu
+美股	mei gu
+外汇牌价	wai hui pai jia
+贵金属	gui jin shu
+原油期货	yuan you qi huo
+保额	bao e
+保费	bao fei
+续保	xu bao
+免赔	mian pei
+报销比例	bao xiao bi li
+医疗险	yi liao xian
+重疾险	zhong ji xian
+意外险	yi wai xian
+寿险	shou xian
+养老险	yang lao xian
+商业险	shang ye xian
+财产险	cai chan xian
+保险经纪	bao xian jing ji
+生育保险	sheng yu bao xian
+车贷	che dai
+信用贷	xin yong dai
+经营贷	jing ying dai
+征信	zheng xin
+信用分	xin yong fen
+还款日	hai kuan ri
+分期付款	fen qi fu kuan
+等额本息	deng e ben xi
+等额本金	deng e ben jin
+年化	nian hua
+首付	shou fu
+月供	yue gong
+提前还款	ti qian hai kuan
+卖房	mai fang
+看房团	kan fang tuan
+网签	wang qian
+契税	qi shui
+个税	ge shui
+满五唯一	man wu wei yi
+首套	shou tao
+二套	er tao
+限购	xian gou
+限贷	xian dai
+限售	xian shou
+摇号	yao hao
+商贷	shang dai
+组合贷	zu he dai
+产权证	chan quan zheng
+不动产权	bu dong chan quan
+楼花	lou hua
+预售证	yu shou zheng
+总包	zong bao
+监理	jian li
+业委会	ye wei hui
+维修基金	wei xiu ji jin
+租金收益	zu jin shou yi
+资产配置	zi chan pei zhi
+财富管理	cai fu guan li
+家族信托	jia zu xin tuo
+赠与	zeng yu
+种地	zhong di
+耕地	geng di
+犁地	li di
+耙地	ba di
+翻土	fan tu
+松土	song tu
+起垄	qi long
+移栽	yi zai
+定植	ding zhi
+间苗	jian miao
+打杈	da cha
+整枝	zheng zhi
+授粉	shou fen
+疏果	shu guo
+套袋	tao dai
+滴灌	di guan
+喷灌	pen guan
+漫灌	man guan
+排水沟	pai shui gou
+追肥	zhui fei
+底肥	di fei
+农家肥	nong jia fei
+有机肥	you ji fei
+复合肥	fu he fei
+叶面肥	ye mian fei
+除草剂	chu cao ji
+杀菌剂	sha jun ji
+地膜	di mo
+拱棚	gong peng
+遮阳网	zhe yang wang
+防虫网	fang chong wang
+农具	nong ju
+锄头	chu tou
+铁锹	tie qiao
+铁锨	tie xian
+镰刀	lian dao
+斧头	fu tou
+锯子	ju zi
+刨子	bao zi
+凿子	zao zi
+锥子	zhui zi
+钳工	qian gong
+瓦工	wa gong
+水暖工	shui nuan gong
+油漆工	you qi gong
+焊工	han gong
+钢筋工	gang jin gong
+架子工	jia zi gong
+推土机	tui tu ji
+装载机	zhuang zai ji
+吊车	diao che
+压路机	ya lu ji
+收割机	shou ge ji
+播种机	bo zhong ji
+插秧机	cha yang ji
+喷雾器	pen wu qi
+生料带	sheng liao dai
+活动扳手	huo dong ban shou
+内六角	nei liu jiao
+套筒	tao tong
+千斤顶	qian jin ding
+梯子	ti zi
+脚手架	jiao shou jia
+手推车	shou tui che
+斗车	dou che
+扁担	bian dan
+铁丝	tie si
+钢缆	gang lan
+滑轮	hua lun
+砂纸	sha zhi
+砂布	sha bu
+锯条	ju tiao
+螺丝批	luo si pi
+铁钉	tie ding
+自攻钉	zi gong ding
+膨胀螺栓	peng zhang luo shuan
+电钻	dian zuan
+角磨机	jiao mo ji
+切割机	qie ge ji
+电焊机	dian han ji
+水平尺	shui ping chi
+墨斗	mo dou
+线坠	xian zhui
+水平仪	shui ping yi
+放线	fang xian
+找平	zhao ping
+砌墙	qi qiang
+抹灰	mo hui
+刮腻子	gua ni zi
+刷漆	shua qi
+铺砖	pu zhuan
+铺地板	pu di ban
+贴壁纸	tie bi zhi
+打胶	da jiao
+封边	feng bian
+打孔	da kong
+拧松	ning song
+锤打	chui da
+钉入	ding ru
+锯开	ju kai
+补漏	bu lou
+堵漏	du lou
+通下水	tong xia shui
+换灯泡	huan deng pao
+换水龙头	huan shui long tou
+修锁	xiu suo
+配钥匙	pei yao shi
+开锁	kai suo
+换胎	huan tai
+补胎	bu tai
+打气筒	da qi tong
+维修店	wei xiu dian
+修理铺	xiu li pu
+五金店	wu jin dian
+装饰城	zhuang shi cheng
+旧货市场	jiu huo shi chang
+废品回收	fei pin hui shou
+收废品	shou fei pin
+二手交易	er shou jiao yi
+跳蚤市场	tiao zao shi chang
+手作	shou zuo
+毛线	mao xian
+钩针	gou zhen
+缝纫	feng ren
+缝制	feng zhi
+缝纫机	feng ren ji
+量体	liang ti
+打版	da ban
+组装家具	zu zhuang jia ju
+拼装	pin zhuang
+搭积木	da ji mu
+折纸	zhe zhi
+漆器	qi qi
+扎染	za ran
+蜡染	la ran
+妇科	fu ke
+产科	chan ke
+口腔科	kou qiang ke
+耳鼻喉科	er bi hou ke
+皮肤科	pi fu ke
+神经科	shen jing ke
+精神科	jing shen ke
+心理科	xin li ke
+肿瘤科	zhong liu ke
+急诊科	ji zhen ke
+重症监护	zhong zheng jian hu
+麻醉科	ma zui ke
+影像科	ying xiang ke
+检验科	jian yan ke
+病理科	bing li ke
+康复科	kang fu ke
+针灸科	zhen jiu ke
+推拿科	tui na ke
+理疗科	li liao ke
+营养科	ying yang ke
+疼痛科	teng tong ke
+感染科	gan ran ke
+呼吸科	hu xi ke
+消化科	xiao hua ke
+心内科	xin nei ke
+肾内科	shen nei ke
+内分泌科	nei fen mi ke
+血液科	xue ye ke
+风湿免疫	feng shi mian yi
+泌尿外科	mi niao wai ke
+神经外科	shen jing wai ke
+心胸外科	xin xiong wai ke
+肝胆外科	gan dan wai ke
+胃肠外科	wei chang wai ke
+乳腺外科	ru xian wai ke
+整形外科	zheng xing wai ke
+烧伤科	shao shang ke
+肛肠科	gang chang ke
+男科	nan ke
+体检中心	ti jian zhong xin
+采血	cai xie
+抽血	chou xue
+尿检	niao jian
+便检	bian jian
+痰检	tan jian
+血常规	xue chang gui
+尿常规	niao chang gui
+血脂四项	xue zhi si xiang
+血糖测定	xue tang ce ding
+凝血功能	ning xue gong neng
+心肌酶	xin ji mei
+甲功	jia gong
+激素六项	ji su liu xiang
+乙肝五项	yi gan wu xiang
+胸片	xiong pian
+核磁共振	he ci gong zhen
+胃镜	wei jing
+肠镜	chang jing
+喉镜	hou jing
+支气管镜	zhi qi guan jing
+活检	huo jian
+手术室	shou shu shi
+消毒供应	xiao du gong ying
+麻醉师	ma zui shi
+主刀	zhu dao
+缝合线	feng he xian
+引流	yin liu
+换药	huan yao
+拆纱布	chai sha bu
+留置针	liu zhi zhen
+输液管	shu ye guan
+皮试	pi shi
+过敏测试	guo min ce shi
+皮内注射	pi nei zhu she
+肌肉注射	ji rou zhu she
+静脉注射	jing mai zhu she
+含服	han fu
+雾化	wu hua
+灌肠	guan chang
+导尿	dao niao
+吸氧	xi yang
+呼吸机	hu xi ji
+心电监护	xin dian jian hu
+除颤	chu chan
+心肺复苏	xin fei fu su
+急救包	ji jiu bao
+担架	dan jia
+转诊	zhuan zhen
+出院小结	chu yuan xiao jie
+诊断证明	zhen duan zheng ming
+病假条	bing jia tiao
+医学证明	yi xue zheng ming
+黄疸	huang dan
+发热待查	fa re dai cha
+呕吐物	ou tu wu
+黑便	hei bian
+便血	bian xie
+尿频	niao pin
+尿急	niao ji
+尿痛	niao tong
+尿血	niao xie
+腰痛	yao tong
+背痛	bei tong
+关节痛	guan jie tong
+肌肉痛	ji rou tong
+神经痛	shen jing tong
+气短	qi duan
+喘憋	chuan bie
+咳血	ke xie
+咯血	ka xie
+鼻血	bi xue
+牙龈出血	ya yin chu xie
+皮下出血	pi xia chu xie
+皮疹	pi zhen
+脱皮	tuo pi
+溃烂	kui lan
+化脓	hua nong
+发热感	fa re gan
+畏寒	wei han
+怕冷	pa leng
+盗汗	dao han
+自汗	zi han
+口干	kou gan
+口苦	kou ku
+口臭	kou chou
+味觉	wei jue
+远视	yuan shi
+散光	san guang
+老花	lao hua
+青光眼	qing guang yan
+飞蚊症	fei wen zheng
+干眼症	gan yan zheng
+结膜炎	jie mo yan
+角膜炎	jiao mo yan
+中耳炎	zhong er yan
+外耳道炎	wai er dao yan
+牙周炎	ya zhou yan
+龋齿	qu chi
+牙髓炎	ya sui yan
+口腔溃疡	kou qiang kui yang
+咽喉肿痛	yan hou zhong tong
+声带	sheng dai
+乳腺结节	ru xian jie jie
+肺结节	fei jie jie
+囊肿	nang zhong
+息肉	xi rou
+肌瘤	ji liu
+疝气	shan qi
+静脉曲张	jing mai qu zhang
+血栓	xue shuan
+动脉硬化	dong mai ying hua
+心梗	xin geng
+脑梗	nao geng
+脑出血	nao chu xie
+高血压	gao xue ya
+低血压	di xue ya
+高尿酸	gao niao suan
+痛风	tong feng
+脂肪肝	zhi fang gan
+胃溃疡	wei kui yang
+十二指肠	shi er zhi chang
+结肠炎	jie chang yan
+肠梗阻	chang geng zu
+阑尾炎	lan wei yan
+胆囊炎	dan nang yan
+胰腺炎	yi xian yan
+肾炎	shen yan
+尿毒症	niao du zheng
+透析	tou xi
+骨质疏松	gu zhi shu song
+颈椎病	jing chui bing
+腰椎间盘	yao zhui jian pan
+肩周炎	jian zhou yan
+腱鞘炎	jian qiao yan
+坐骨神经	zuo gu shen jing
+类风湿	lei feng shi
+红斑狼疮	hong ban lang chuang
+银屑病	yin xie bing
+白癜风	bai dian feng
+给力	gei li
+新鲜感	xin xian gan
+激动人心	ji dong ren xin
+努力上进	nu li shang jin
+守时	shou shi
+讲理	jiang li
+通情达理	tong qing da li
+善解人意	shan jie ren yi
+大度	da du
+节俭	jie jian
+抠门	kou men
+小气	xiao qi
+自利	zi li
+势利	shi li
+做作	zuo zuo
+油滑	you hua
+狡辩	jiao bian
+敷衍	fu yan
+草率	cao shuai
+马虎	ma hu
+粗心	cu xin
+健忘	jian wang
+冒失	mao shi
+鲁莽	lu mang
+冲动型	chong dong xing
+急躁	ji zao
+急脾气	ji pi qi
+慢性子	man xing zi
+淡定	dan ding
+慌张	huang zhang
+紧张兮兮	jin zhang xi xi
+胆怯	dan qie
+犹豫不决	you yu bu jue
+拖泥带水	tuo ni dai shui
+利落	li luo
+干练	gan lian
+机灵	ji ling
+机敏	ji min
+明智	ming zhi
+英明	ying ming
+愚笨	yu ben
+迟钝	chi dun
+呆板	dai ban
+木讷	mu ne
+内向型	nei xiang xing
+话痨	hua lao
+健谈	jian tan
+寡言	gua yan
+懒散	lan san
+勤快	qin kuai
+麻利	ma li
+笨手笨脚	ben shou ben jiao
+生疏	sheng shu
+外行	wai hang
+靠谱度	kao pu du
+可信赖	ke xin lai
+尽责	jin ze
+敷衍了事	fu yan liao shi
+固执己见	gu zhi ji jian
+乖巧	guai qiao
+捣蛋	dao dan
+安分	an fen
+守规矩	shou gui ju
+出格	chu ge
+稀有	xi you
+老气	lao qi
+土气	tu qi
+利索	li suo
+一举两得	yi ju liang de
+一石二鸟	yi shi er niao
+一箭双雕	yi jian shuang diao
+一劳永逸	yi lao yong yi
+一蹴而就	yi cu er jiu
+一针见血	yi zhen jian xie
+一目十行	yi mu shi hang
+一见如故	yi jian ru gu
+一言难尽	yi yan nan jin
+一意孤行	yi yi gu xing
+一厢情愿	yi xiang qing yuan
+一事无成	yi shi wu cheng
+一败涂地	yi bai tu di
+一鸣惊人	yi ming jing ren
+一举成名	yi ju cheng ming
+一落千丈	yi luo qian zhang
+一网打尽	yi wang da jin
+一往无前	yi wang wu qian
+一鼓作气	yi gu zuo qi
+事倍功半	shi bei gong ban
+事与愿违	shi yu yuan wei
+事在人为	shi zai ren wei
+亡羊补牢	wang yang bu lao
+未雨绸缪	wei yu chou mou
+防患未然	fang huan wei ran
+有备无患	you bei wu huan
+居安思危	ju an si wei
+水到渠成	shui dao qu cheng
+天经地义	tian jing di yi
+兢兢业业	jing jing ye ye
+任劳任怨	ren lao ren yuan
+呕心沥血	ou xin li xue
+废寝忘食	fei qin wang shi
+夜以继日	ye yi ji ri
+争分夺秒	zheng fen duo miao
+分秒必争	fen miao bi zheng
+按部就班	an bu jiu ban
+有条不紊	you tiao bu wen
+井井有条	jing jing you tiao
+井然有序	jing ran you xu
+杂乱无章	za luan wu zhang
+马马虎虎	ma ma hu hu
+粗心大意	cu xin da yi
+锦上添花	jin shang tian hua
+雪中送炭	xue zhong song tan
+画蛇添足	hua she tian zu
+多此一举	duo ci yi ju
+弄巧成拙	nong qiao cheng zhuo
+适得其反	shi de qi fan
+南辕北辙	nan yuan bei zhe
+缘木求鱼	yuan mu qiu yu
+杯水车薪	bei shui che xin
+无济于事	wu ji yu shi
+于事无补	yu shi wu bu
+心有余悸	xin you yu ji
+望而生畏	wang er sheng wei
+望尘莫及	wang chen mo ji
+望洋兴叹	wang yang xing tan
+鞭长莫及	bian chang mo ji
+爱莫能助	ai mo neng zhu
+束手无策	shu shou wu ce
+无计可施	wu ji ke shi
+一筹莫展	yi chou mo zhan
+迫不得已	po bu de yi
+身不由己	shen bu you ji
+情非得已	qing fei de yi
+不言而喻	bu yan er yu
+不负众望	bu fu zhong wang
+众望所归	zhong wang suo gui
+名不虚传	ming bu xu chuan
+货真价实	huo zhen jia shi
+货不对板	huo bu dui ban
+言过其实	yan guo qi shi
+夸大其词	kua da qi ci
+言简意赅	yan jian yi gai
+简明扼要	jian ming e yao
+冗长拖沓	rong chang tuo ta
+开门见山	kai men jian shan
+直截了当	zhi jie liao dang
+拐弯抹角	guai wan mo jiao
+含糊其辞	han hu qi ci
+闪烁其词	shan shuo qi ci
+避重就轻	bi zhong jiu qing
+轻描淡写	qing miao dan xie
+小题大做	xiao ti da zuo
+大惊小怪	da jing xiao guai
+见怪不怪	jian guai bu guai
+司空见惯	si kong jian guan
+习以为常	xi yi wei chang
+屡见不鲜	lv jian bu xian
+屡教不改	lv jiao bu gai
+一成不变	yi cheng bu bian
+千篇一律	qian pian yi lv
+别出心裁	bie chu xin cai
+别具一格	bie ju yi ge
+独具匠心	du ju jiang xin
+巧夺天工	qiao duo tian gong
+鬼斧神工	gui fu shen gong
+精雕细琢	jing diao xi zuo
+粗制滥造	cu zhi lan zao
+偷工减料	tou gong jian liao
+以次充好	yi ci chong hao
+物美价廉	wu mei jia lian
+价廉物美	jia lian wu mei
+物有所值	wu you suo zhi
+名不副实	ming bu fu shi
+虚有其表	xu you qi biao
+华而不实	hua er bu shi
+名存实亡	ming cun shi wang
+形同虚设	xing tong xu she
+有名无实	you ming wu shi
+表里如一	biao li ru yi
+言行一致	yan xing yi zhi
+言行不一	yan xing bu yi
+口是心非	kou shi xin fei
+阳奉阴违	yang feng yin wei
+两面三刀	liang mian san dao
+口蜜腹剑	kou mi fu jian
+笑里藏刀	xiao li cang dao
+居心叵测	ju xin po ce
+别有用心	bie you yong xin
+别有洞天	bie you dong tian
+处心积虑	chu xin ji lv
+蓄谋已久	xu mou yi jiu
+早有预谋	zao you yu mou
+防不胜防	fang bu sheng fang
+猝不及防	cu bu ji fang
+意料之中	yi liao zhi zhong
+始料未及	shi liao wei ji
+晴天霹雳	qing tian pi li
+雪上加霜	xue shang jia shuang
+火上浇油	huo shang jiao you
+推波助澜	tui bo zhu lan
+落井下石	luo jing xia shi
+趁火打劫	chen huo da jie
+浑水摸鱼	hun shui mo yu
+滥竽充数	lan yu chong shu
+鱼龙混杂	yu long hun za
+鱼目混珠	yu mu hun zhu
+良莠不齐	liang you bu qi
+参差不齐	cen ci bu qi
+目不暇接	mu bu xia jie
+络绎不绝	luo yi bu jue
+川流不息	chuan liu bu xi
+人山人海	ren shan ren hai
+人声鼎沸	ren sheng ding fei
+熙熙攘攘	xi xi rang rang
+门可罗雀	men ke luo que
+冷冷清清	leng leng qing qing
+鸦雀无声	ya que wu sheng
+万籁俱寂	wan lai ju ji
+躺平	tang ping
+内卷	nei juan
+卷王	juan wang
+摆烂	bai lan
+鸡娃	ji wa
+鸡血	ji xue
+打鸡血	da ji xue
+破防	po fang
+上头	shang tou
+下头	xia tou
+社恐	she kong
+社牛	she niu
+社死	she si
+尴尬癌	gan ga ai
+真香	zhen xiang
+真香定律	zhen xiang ding lv
+六边形	liu bian xing
+薅羊毛	hao yang mao
+绝绝子	jue jue zi
+摸鱼	mo yu
+划水	hua shui
+躺赢	tang ying
+吊打	diao da
+碾压	nian ya
+降维打击	jiang wei da ji
+组合拳	zu he quan
+护城河	hu cheng he
+势能	shi neng
+品效合一	pin xiao he yi
+痛点	tong dian
+痒点	yang dian
+爽点	shuang dian
+槽点	cao dian
+泪点	lei dian
+燃点	ran dian
+爆点	bao dian
+人设	ren she
+塌房	ta fang
+破圈	po quan
+蹭热度	ceng re du
+恰饭	qia fan
+种草文	zhong cao wen
+软文	ruan wen
+硬广	ying guang
+种草笔记	zhong cao bi ji
+测评博主	ce ping bo zhu
+开箱视频	kai xiang shi pin
+种草经济	zhong cao jing ji
+颜值	yan zhi
+氛围感	fen wei gan
+松弛感	song chi gan
+高级感	gao ji gan
+少年感	shao nian gan
+设计感	she ji gan
+科技感	ke ji gan
+仪式感	yi shi gan
+沉浸式	chen jin shi
+体验式	ti yan shi
+全链路	quan lian lu
+闭环思维	bi huan si wei
+复盘会	fu pan hui
+周会	zhou hui
+对齐会	dui qi hui
+目标拆解	mu biao chai jie
+任务拆解	ren wu chai jie
+排优先级	pai you xian ji
+排期表	pai qi biao
+甘特图	gan te tu
+时间线	shi jian xian
+交付物	jiao fu wu
+验收标准	yan shou biao zhun
+验收测试	yan shou ce shi
+上线单	shang xian dan
+变更单	bian geng dan
+工单	gong dan
+需求池	xu qiu chi
+需求评审	xu qiu ping shen
+技术方案	ji shu fang an
+测试用例	ce shi yong li
+灰度验证	hui du yan zheng
+线上问题	xian shang wen ti
+线上事故	xian shang shi gu
+故障复盘	gu zhang fu pan
+值班表	zhi ban biao
+轮值	lun zhi
+容量规划	rong liang gui hua
+技术选型	ji shu xuan xing
+架构设计	jia gou she ji
+概要设计	gai yao she ji
+详细设计	xiang xi she ji
+接口定义	jie kou ding yi
+数据模型	shu ju mo xing
+索引优化	suo yin you hua
+性能调优	xing neng diao you
+代码规范	dai ma gui fan
+代码审查	dai ma shen cha
+分支管理	fen zhi guan li
+版本发布	ban ben fa bu
+发布计划	fa bu ji hua
+发布窗口	fa bu chuang kou
+回滚方案	hui gun fang an
+值班响应	zhi ban xiang ying
+告警群	gao jing qun
+监控大盘	jian kong da pan
+日志检索	ri zhi jian suo
+链路分析	lian lu fen xi
+问题定位	wen ti ding wei
+复现步骤	fu xian bu zhou
+根因分析	gen yin fen xi
+临时方案	lin shi fang an
+长期方案	chang qi fang an
+重构计划	zhong gou ji hua
+手工测试	shou gong ce shi
+冒烟验证	mao yan yan zheng
+验收通过	yan shou tong guo
+需求变更	xu qiu bian geng
+范围蔓延	fan wei man yan
+资源投入	zi yuan tou ru
+人力成本	ren li cheng ben
+排期压缩	pai qi ya suo
+加班赶工	jia ban gan gong
+交付压力	jiao fu ya li
+项目延期	xiang mu yan qi
+复盘总结	fu pan zong jie
+经验沉淀	jing yan chen dian
+文档沉淀	wen dang chen dian
+操作手册	cao zuo shou ce
+培训材料	pei xun cai liao
+新人指南	xin ren zhi nan
+交接文档	jiao jie wen dang
+点外卖	dian wai mai
+送餐	song can
+骑手	qi shou
+配送员	pei song yuan
+外卖箱	wai mai xiang
+跑腿	pao tui
+代买	dai mai
+代取	dai qu
+代驾	dai jia
+搬家公司	ban jia gong si
+保洁员	bao jie yuan
+育儿嫂	yu er sao
+疏通管道	shu tong guan dao
+修空调	xiu kong tiao
+加氟	jia fu
+清洗空调	qing xi kong tiao
+地板打蜡	di ban da la
+地毯清洗	di tan qing xi
+沙发清洗	sha fa qing xi
+玻璃清洗	bo li qing xi
+除甲醛	chu jia quan
+灭蟑	mie zhang
+灭鼠	mie shu
+除四害	chu si hai
+衣物修补	yi wu xiu bu
+修鞋	xiu xie
+修包	xiu bao
+修表	xiu biao
+配镜	pei jing
+打蜡	da la
+贴膜	tie mo
+镀晶	du jing
+保养车	bao yang che
+换机油	huan ji you
+换轮胎	huan lun tai
+四轮定位	si lun ding wei
+年检代办	nian jian dai ban
+违章处理	wei zhang chu li
+保险代办	bao xian dai ban
+过户代办	guo hu dai ban
+快递代收	kuai di dai shou
+驿站代收	yi zhan dai shou
+社区团购	she qu tuan gou
+预售团	yu shou tuan
+自提	zi ti
+生鲜配送	sheng xian pei song
+买菜	mai cai
+买菜软件	mai cai ruan jian
+到家服务	dao jia fu wu
+预约上门	yu yue shang men
+工时费	gong shi fei
+上门费	shang men fei
+材料费	cai liao fei
+人工费	ren gong fei
+报价单	bao jia dan
+改约	gai yue
+取消订单	qu xiao ding dan
+排队等位	pai dui deng wei
+叫号	jiao hao
+等位	deng wei
+翻台	fan tai
+打包盒	da bao he
+餐盒	can he
+餐具包	can ju bao
+环保袋	huan bao dai
+直营店	zhi ying dian
+旗舰店	qi jian dian
+体验店	ti yan dian
+快闪店	kuai shan dian
+理货	li huo
+下架	xia jia
+促销员	cu xiao yuan
+保修期	bao xiu qi
+维修点	wei xiu dian
+人工客服	ren gong ke fu
+智能客服	zhi neng ke fu
+工单号	gong dan hao
+五星好评	wu xing hao ping
+评价管理	ping jia guan li
+储值	chu zhi
+代金券	dai jin quan
+折扣券	zhe kou quan
+满减券	man jian quan
+积分兑换	ji fen dui huan
+生日礼	sheng ri li
+中样	zhong yang
+正装	zheng zhuang
+套装价	tao zhuang jia
+买赠	mai zeng
+限时抢购	xian shi qiang gou
+库存告急	ku cun gao ji
+到货通知	dao huo tong zhi
+补货中	bu huo zhong
+断货	duan huo
+发错货	fa cuo huo
+漏发	lou fa
+错发	cuo fa
+跟团	gen tuan
+自由行	zi you xing
+半自助	ban zi zhu
+周边游	zhou bian you
+国内游	guo nei you
+出境游	chu jing you
+入境游	ru jing you
+短途	duan tu
+行程单	xing cheng dan
+游记攻略	you ji gong lve
+打卡地	da ka di
+网红点	wang hong dian
+联票	lian piao
+套票	tao piao
+学生票	xue sheng piao
+免票	mian piao
+半票	ban piao
+预约入园	yu yue ru yuan
+排队入场	pai dui ru chang
+地陪	di pei
+司机导游	si ji dao you
+路线规划	lu xian gui hua
+出行计划	chu xing ji hua
+旅游团	lv you tuan
+拼车游	pin che you
+民宿	min su
+青旅	qing lv
+温泉酒店	wen quan jiu dian
+亲子房	qin zi fang
+大床房	da chuang fang
+标间	biao jian
+双床房	shuang chuang fang
+家庭房	jia ting fang
+预订	yu ding
+入住登记	ru zhu deng ji
+押金单	ya jin dan
+房卡	fang ka
+前台登记	qian tai deng ji
+早餐券	zao can quan
+自助餐	zi zhu can
+客房服务	ke fang fu wu
+打扫房间	da sao fang jian
+叫醒服务	jiao xing fu wu
+行李寄存	xing li ji cun
+接送机	jie song ji
+接站	jie zhan
+机场大巴	ji chang da ba
+租车自驾	zu che zi jia
+驾照翻译	jia zhao fan yi
+国际驾照	guo ji jia zhao
+导航软件	dao hang ruan jian
+离线地图	li xian di tu
+当地货币	dang di huo bi
+换汇	huan hui
+移动支付	yi dong zhi fu
+免税额	mian shui e
+退税单	tui shui dan
+购物退税	gou wu tui shui
+海关申报	hai guan shen bao
+入境卡	ru jing ka
+出境卡	chu jing ka
+旅行保险	lv xing bao xian
+领事保护	ling shi bao hu
+失物招领	shi wu zhao ling
+报警回执	bao jing hui zhi
+旅行箱	lv xing xiang
+背包客	bei bao ke
+徒步鞋	tu bu xie
+冲锋衣	chong feng yi
+防晒霜	fang shai shuang
+驱蚊液	qu wen ye
+晕车药	yun che yao
+常用药	chang yong yao
+转换插头	zhuan huan cha tou
+行程变更	xing cheng bian geng
+改签机票	gai qian ji piao
+取消预订	qu xiao yu ding
+不可退款	bu ke tui kuan
+延误险	yan wu xian
+圈定	quan ding
+甄别	zhen bie
+预判	yu pan
+研判	yan pan
+纠偏	jiu pian
+润色	run se
+摊开	tan kai
+铺开	pu kai
+握紧	wo jin
+撒手	sa shou
+递送	di song
+知会	zhi hui
+通知到	tong zhi dao
+反馈给	fan kui gei
+拍板	pai ban
+定夺	ding duo
+做主	zuo zhu
+经手	jing shou
+操办	cao ban
+张罗	zhang luo
+召集	zhao ji
+垫资	dian zi
+调拨	diao bo
+囤货	dun huo
+清仓	qing cang
+甩卖	shuai mai
+压价	ya jia
+抬价	tai jia
+借调	jie diao
+轮岗	lun gang
+顶班	ding ban
+替班	ti ban
+代班	dai ban
+值守	zhi shou
+盯守	ding shou
+打捞	da lao
+安顿	an dun
+收容	shou rong
+抚慰	fu wei
+探视	tan shi
+照看	zhao kan
+赡养	shan yang
+训导	xun dao
+训斥	xun chi
+数落	shu luo
+嘀咕	di gu
+嘟囔	du nang
+念叨	nian dao
+絮叨	xu dao
+交待	jiao dai
+推敲	tui qiao
+斟酌	zhen zhuo
+掂量	dian liang
+择定	ze ding
+敲定	qiao ding
+定稿	ding gao
+定案	ding an
+订制	ding zhi
+试产	shi chan
+试销	shi xiao
+试运营	shi yun ying
+造势	zao shi
+宣发	xuan fa
+引荐	yin jian
+背书	bei shu
+联名	lian ming
+跨界	kua jie
+加持	jia chi
+分流疏导	fen liu shu dao
+补齐	bu qi
+承兑	cheng dui
+承兑汇票	cheng dui hui piao
+背书担保	bei shu dan bao
+佐证	zuo zheng
+对质	dui zhi
+抗辩	kang bian
+驳斥	bo chi
+斥责	chi ze
+质询	zhi xun
+盘问	pan wen
+讯问	xun wen
+审讯	shen xun
+探听	tan ting
+窥探	kui tan
+丈量	zhang liang
+挂锁	gua suo
+密码锁	mi ma suo
+指纹锁	zhi wen suo
+锁芯	suo xin
+合页	he ye
+门吸	men xi
+门帘	men lian
+窗帘杆	chuang lian gan
+晾衣绳	liang yi sheng
+衣钩	yi gou
+鞋架	xie jia
+雨棚	yu peng
+遮阳棚	zhe yang peng
+沙发套	sha fa tao
+坐垫	zuo dian
+靠垫	kao dian
+抱枕	bao zhen
+枕巾	zhen jin
+床笠	chuang li
+床裙	chuang qun
+被芯	bei xin
+蚕丝被	can si bei
+羽绒被	yu rong bei
+毛巾被	mao jin bei
+夏凉被	xia liang bei
+电热毯	dian re tan
+暖水袋	nuan shui dai
+热水袋	re shui dai
+冰袋	bing dai
+暖宝宝	nuan bao bao
+蚊香液	wen xiang ye
+驱蚊器	qu wen qi
+电蚊拍	dian wen pai
+灭蚊灯	mie wen deng
+粘鼠板	zhan shu ban
+老鼠夹	lao shu jia
+捕鼠笼	bu shu long
+果盘	guo pan
+茶壶	cha hu
+咖啡杯	ka fei bei
+保温壶	bao wen hu
+饭盒	fan he
+保温饭盒	bao wen fan he
+筷子筒	kuai zi tong
+刀架	dao jia
+菜板	cai ban
+案板	an ban
+围裙	wei qun
+隔热垫	ge re dian
+烤箱手套	kao xiang shou tao
+保鲜盒	bao xian he
+密封罐	mi feng guan
+调料盒	tiao liao he
+油壶	you hu
+米桶	mi tong
+面粉筛	mian fen shai
+打蛋器	da dan qi
+刮刀	gua dao
+量杯	liang bei
+厨房秤	chu fang cheng
+温度计	wen du ji
+计时器	ji shi qi
+垃圾铲	la ji chan
+地拖桶	di tuo tong
+喷壶	pen hu
+水桶	shui tong
+脸盆	lian pen
+浴桶	yu tong
+浴帘	yu lian
+防滑垫	fang hua dian
+地垫	di dian
+门垫	men dian
+浴巾	yu jin
+洗澡刷	xi zao shua
+搓澡巾	cuo zao jin
+浴球	yu qiu
+马桶刷	ma tong shua
+马桶盖	ma tong gai
+马桶垫	ma tong dian
+纸巾盒	zhi jin he
+牙刷杯	ya shua bei
+漱口杯	shu kou bei
+化妆镜	hua zhuang jing
+梳子	shu zi
+指甲刀	zhi jia dao
+指甲钳	zhi jia qian
+挖耳勺	wa er shao
+粉扑	fen pu
+棉签	mian qian
+牙线	ya xian
+牙签	ya qian
+剃须刀片	ti xu dao pian
+剃须膏	ti xu gao
+吹风机架	chui feng ji jia
+衣帽架	yi mao jia
+挂衣杆	gua yi gan
+裤架	ku jia
+衣架夹	yi jia jia
+收纳筐	shou na kuang
+收纳凳	shou na deng
+储物柜	chu wu gui
+床下抽屉	chuang xia chou ti
+文件柜	wen jian gui
+保险柜	bao xian gui
+密码箱	mi ma xiang
+抽屉锁	chou ti suo
+挂钟	gua zhong
+沙漏	sha lou
+日历架	ri li jia
+笔筒	bi tong
+书立	shu li
+书挡	shu dang
+台历座	tai li zuo
+相框墙	xiang kuang qiang
+照片墙	zhao pian qiang
+影集	ying ji
+信纸	xin zhi
+红包袋	hong bao dai
+礼盒	li he
+礼品袋	li pin dai
+包装纸	bao zhuang zhi
+丝带	si dai
+彩带	cai dai
+蛋糕盒	dan gao he
+一次性碗	yi ci xing wan
+纸盘	zhi pan
+吸管	xi guan
+牙签盒	ya qian he
+湿纸巾	shi zhi jin
+洗手液	xi shou ye
+香皂	xiang zao
+肥皂盒	fei zao he
+沐浴球	mu yu qiu
+洗手液瓶	xi shou ye ping
+喷雾瓶	pen wu ping
+分装瓶	fen zhuang ping
+旅行装	lv xing zhuang
+首饰盒	shou shi he
+首饰架	shou shi jia
+太阳镜盒	tai yang jing he
+眼镜布	yan jing bu
+眼镜盒	yan jing he
+手表带	shou biao dai
+表带	biao dai
+钱包卡包	qian bao ka bao
+名片夹	ming pian jia
+钥匙扣	yao shi kou
+钥匙包	yao shi bao
+证件套	zheng jian tao
+行李箱牌	xing li xiang pai
+行李秤	xing li cheng
+电蚊香片	dian wen xiang pian
+便携秤	bian xie cheng
+小推车	xiao tui che
+菜篮子	cai lan zi
+手提袋	shou ti dai
+垃圾夹	la ji jia
+拖把头	tuo ba tou
+拖把杆	tuo ba gan
+簸箕	bo ji
+扫帚	sao zhou
+毛刷	mao shua
+掸子	dan zi
+玻璃刮	bo li gua
+擦窗器	ca chuang qi
+刮水器	gua shui qi
+马桶吸盘	ma tong xi pan
+除霉剂	chu mei ji
+除胶剂	chu jiao ji
+去污膏	qu wu gao
+洗银水	xi yin shui
+鞋刷	xie shua
+鞋撑	xie cheng
+鞋盒	xie he
+衣罩	yi zhao
+防尘罩	fang chen zhao
+真空袋	zhen kong dai
+压缩袋	ya suo dai
+抽气泵	chou qi beng
+樟脑球	zhang nao qiu
+防潮箱	fang chao xiang
+防潮垫	fang chao dian
+除湿盒	chu shi he
+香薰	xiang xun
+香薰机	xiang xun ji
+蜡烛台	la zhu tai
+灯串	deng chuan
+小夜灯	xiao ye deng
+手电	shou dian
+头灯	tou deng
+应急灯	ying ji deng
+说话算数	shuo hua suan shu
+说到做到	shuo dao zuo dao
+言而有信	yan er you xin
+言出必行	yan chu bi xing
+开玩笑的	kai wan xiao de
+别当真	bie dang zhen
+老实说	lao shi shuo
+讲真	jiang zhen
+说白了	shuo bai le
+简单说	jian dan shuo
+总而言之	zong er yan zhi
+归纳一下	gui na yi xia
+总结一下	zong jie yi xia
+补充一点	bu chong yi dian
+澄清一下	cheng qing yi xia
+强调一下	qiang diao yi xia
+提醒一下	ti xing yi xia
+顺便说	shun bian shuo
+另外一提	ling wai yi ti
+话说回来	hua shuo hui lai
+反过来讲	fan guo lai jiang
+换个角度	huan ge jiao du
+退一步说	tui yi bu shuo
+照理说	zhao li shuo
+按理说	an li shuo
+严格来说	yan ge lai shuo
+大体上	da ti shang
+大概齐	da gai qi
+十有八九	shi you ba jiu
+十拿九稳	shi na jiu wen
+板上钉钉	ban shang ding ding
+没跑了	mei pao le
+稳了	wen le
+妥了	tuo le
+办妥	ban tuo
+落实到位	luo shi dao wei
+落实下去	luo shi xia qu
+盯紧	ding jin
+抓紧办	zhua jin ban
+缓一缓	huan yi huan
+放一放	fang yi fang
+搁置	ge zhi
+压着	ya zhe
+压后	ya hou
+延后	yan hou
+推后	tui hou
+马上办	ma shang ban
+回头再说	hui tou zai shuo
+改天	gai tian
+抽空	chou kong
+腾出时间	teng chu shi jian
+挤时间	ji shi jian
+忙着呢	mang zhe ne
+没空	mei kong
+有空的	you kong de
+闲下来	xian xia lai
+歇会儿	xie hui er
+歇一歇	xie yi xie
+休息下	xiu xi xia
+缓口气	huan kou qi
+喘口气	chuan kou qi
+松口气	song kou qi
+沉住气	chen zhu qi
+别急	bie ji
+慢慢来	man man lai
+赶不上	gan bu shang
+赶得上	gan de shang
+来不及了	lai bu ji le
+撑到	cheng dao
+熬到	ao dao
+等到时候	deng dao shi hou
+到时	dao shi
+当口	dang kou
+节骨眼	jie gu yan
+关键点	guan jian dian
+转折点	zhuan zhe dian
+分水岭	fen shui ling
+瓶颈期	ping jing qi
+过渡期	guo du qi
+适应期	shi ying qi
+磨合期	mo he qi
+阵痛期	zhen tong qi
+蜜月期	mi yue qi
+冷淡期	leng dan qi
+僵局	jiang ju
+僵持	jiang chi
+胶着	jiao zhuo
+收场	shou chang
+善后	shan hou
+了结	liao jie
+了断	liao duan
+事儿	shi er
+杂事	za shi
+琐事	suo shi
+难事	nan shi
+喜事	xi shi
+糗事	qiu shi
+私事	si shi
+公事	gong shi
+家常事	jia chang shi
+麻烦事	ma fan shi
+乱子	luan zi
+娄子	lou zi
+篓子	lou zi
+摊子	tan zi
+烂摊子	lan tan zi
+份上	fen shang
+情分	qing fen
+交情	jiao qing
+人情债	ren qing zhai
+面子工程	mian zi gong cheng
+里子	li zi
+恩情	en qing
+恩人	en ren
+伯乐	bo le
+密友	mi you
+损友	sun you
+酒肉朋友	jiu rou peng you
+泛泛之交	fan fan zhi jiao
+点头之交	dian tou zhi jiao
+一面之缘	yi mian zhi yuan
+老相识	lao xiang shi
+老交情	lao jiao qing
+旧友	jiu you
+故人	gu ren
+熟人社会	shu ren she hui
+关系网	guan xi wang
+人情往来	ren qing wang lai
+礼尚往来	li shang wang lai
+请托	qing tuo
+托人	tuo ren
+说情	shuo qing
+递话	di hua
+传话	chuan hua
+捎话	shao hua
+带话	dai hua
+代为转达	dai wei zhuan da
+代为问候	dai wei wen hou
+回礼	hui li
+还人情	hai ren qing
+欠人情	qian ren qing
+领情	ling qing
+承情	cheng qing
+不领情	bu ling qing
+致谢	zhi xie
+致意	zhi yi
+问候语	wen hou yu
+庆贺	qing he
+道喜	dao xi
+随喜	sui xi
+撑场面	cheng chang mian
+凑热闹	cou re nao
+捧人场	peng ren chang
+办公椅	ban gong yi
+工位牌	gong wei pai
+工位区	gong wei qu
+开放办公	kai fang ban gong
+独立办公	du li ban gong
+会议桌	hui yi zhuo
+白板	bai ban
+白板笔	bai ban bi
+投屏码	tou ping ma
+会议号	hui yi hao
+会议邀请	hui yi yao qing
+参会人	can hui ren
+记录员	ji lu yuan
+会议纪要	hui yi ji yao
+纪要稿	ji yao gao
+议案	yi an
+意见分歧	yi jian fen qi
+表决结果	biao jue jie guo
+会后跟进	hui hou gen jin
+待办事项	dai ban shi xiang
+行动项	xing dong xiang
+优先级高	you xian ji gao
+优先级低	you xian ji di
+排期会	pai qi hui
+日会	ri hui
+双周会	shuang zhou hui
+月度会	yue du hui
+季度会	ji du hui
+年度会	nian du hui
+评审会	ping shen hui
+启动会	qi dong hui
+结项会	jie xiang hui
+庆功会	qing gong hui
+团建	tuan jian
+团建活动	tuan jian huo dong
+聚餐	ju can
+年会节目	nian hui jie mu
+入职培训	ru zhi pei xun
+岗前培训	gang qian pei xun
+在岗培训	zai gang pei xun
+内训	nei xun
+外训	wai xun
+讲师	jiang shi
+讲义稿	jiang yi gao
+培训考核	pei xun kao he
+结业证	jie ye zheng
+学习笔记	xue xi bi ji
+会议记录	hui yi ji lu
+工作日志	gong zuo ri zhi
+汇报材料	hui bao cai liao
+汇报稿	hui bao gao
+述职报告	shu zhi bao gao
+项目计划	xiang mu ji hua
+项目进度	xiang mu jin du
+进度表	jin du biao
+里程碑点	li cheng bei dian
+交付节点	jiao fu jie dian
+验收单	yan shou dan
+确认单	que ren dan
+申请单	shen qing dan
+报销单	bao xiao dan
+请假单	qing jia dan
+加班单	jia ban dan
+出差单	chu chai dan
+用印申请	yong yin shen qing
+采购申请	cai gou shen qing
+付款申请	fu kuan shen qing
+公函	gong han
+请示件	qing shi jian
+批复件	pi fu jian
+报告件	bao gao jian
+通知件	tong zhi jian
+模板库	mu ban ku
+格式要求	ge shi yao qiu
+页边距	ye bian ju
+行间距	hang jian ju
+字号大小	zi hao da xiao
+标题层级	biao ti ceng ji
+目录页	mu lu ye
+封面页	feng mian ye
+页眉页脚	ye mei ye jiao
+时序图	shi xu tu
+架构图	jia gou tu
+思维导图	si wei dao tu
+数据透视	shu ju tou shi
+筛选器	shai xuan qi
+条件格式	tiao jian ge shi
+打印预览	da yin yu lan
+导出文件	dao chu wen jian
+解压码	jie ya ma
+文件传输	wen jian chuan shu
+共享盘	gong xiang pan
+网盘链接	wang pan lian jie
+提取码	ti qu ma
+协同编辑	xie tong bian ji
+在线文档	zai xian wen dang
+云文档	yun wen dang
+版本历史	ban ben li shi
+修订记录	xiu ding ji lu
+任务指派	ren wu zhi pai
+状态更新	zhuang tai geng xin
+进度同步	jin du tong bu
+信息同步	xin xi tong bu
+同步一下	tong bu yi xia
+对齐一下	dui qi yi xia
+拉个群	la ge qun
+建个群	jian ge qun
+群里说	qun li shuo
+私下聊	si xia liao
+单独沟通	dan du gou tong
+抄送人	chao song ren
+密送	mi song
+主题行	zhu ti xing
+回复全部	hui fu quan bu
+转发邮件	zhuan fa you jian
+邮件签名	you jian qian ming
+工作日历	gong zuo ri li
+日程冲突	ri cheng chong tu
+改期	gai qi
+取消会议	qu xiao hui yi
+渔民	yu min
+猎户	lie hu
+木匠	mu jiang
+铁匠	tie jiang
+瓦匠	wa jiang
+泥瓦匠	ni wa jiang
+漆匠	qi jiang
+鞋匠	xie jiang
+锁匠	suo jiang
+厨子	chu zi
+面点师	mian dian shi
+配菜员	pei cai yuan
+传菜员	chuan cai yuan
+洗碗工	xi wan gong
+收银员	shou yin yuan
+保安员	bao an yuan
+门卫	men wei
+更夫	geng fu
+值夜	zhi ye
+外卖员	wai mai yuan
+的哥	di ge
+公交司机	gong jiao si ji
+列车员	lie che yuan
+乘务员	cheng wu yuan
+空乘	kong cheng
+机长	ji zhang
+搬运工	ban yun gong
+装卸工	zhuang xie gong
+建筑工	jian zhu gong
+混凝土工	hun ning tu gong
+管道工	guan dao gong
+装修工	zhuang xiu gong
+玻璃工	bo li gong
+电焊工	dian han gong
+机修工	ji xiu gong
+车工	che gong
+铣工	xi gong
+磨工	mo gong
+铸工	zhu gong
+热处理工	re chu li gong
+质检员	zhi jian yuan
+理货员	li huo yuan
+采购员	cai gou yuan
+导购员	dao gou yuan
+房产中介	fang chan zhong jie
+会计员	kuai ji yuan
+出纳员	chu na yuan
+审计员	shen ji yuan
+统计员	tong ji yuan
+打字员	da zi yuan
+档案员	dang an yuan
+幼师	you shi
+保育员	bao yu yuan
+讲解员	jiang jie yuan
+摄像师	she xiang shi
+剪辑师	jian ji shi
+录音师	lu yin shi
+灯光师	deng guang shi
+舞美师	wu mei shi
+化妆师	hua zhuang shi
+造型师	zao xing shi
+运维员	yun wei yuan
+测试员	ce shi yuan
+运营专员	yun ying zhuan yuan
+同传	tong chuan
+速记员	su ji yuan
+检验师	jian yan shi
+家政员	jia zheng yuan
+理发师	li fa shi
+美容师	mei rong shi
+修脚师	xiu jiao shi
+按摩师	an mo shi
+足疗师	zu liao shi
+营养师	ying yang shi
+社工	she gong
+邮递员	you di yuan
+环卫工	huan wei gong
+园林工	yuan lin gong
+果农	guo nong
+菜农	cai nong
+商贩	shang fan
+摊主	tan zhu
+水利局	shui li ju
+城管局	cheng guan ju
+人社局	ren she ju
+审计局	shen ji ju
+边检	bian jian
+消防队	xiao fang dui
+工会	gong hui
+慈善会	ci shan hui
+商会	shang hui
+评委会	ping wei hui
+仲裁委	zhong cai wei
+职工大会	zhi gong da hui
+仲裁院	zhong cai yuan
+评估公司	ping gu gong si
+公关公司	gong guan gong si
+传媒公司	chuan mei gong si
+影视公司	ying shi gong si
+游戏公司	you xi gong si
+科技公司	ke ji gong si
+托儿所	tuo er suo
+中专	zhong zhuan
+职高	zhi gao
+兴趣班	xing qu ban
+少年宫	shao nian gong
+文化馆	wen hua guan
+科技馆	ke ji guan
+音乐厅	yin yue ting
+游乐园	you le yuan
+水族馆	shui zu guan
+海洋馆	hai yang guan
+色系	se xi
+亮色	liang se
+暗色	an se
+冷色	leng se
+暖色	nuan se
+中性色	zhong xing se
+撞色	zhuang se
+渐变色	jian bian se
+纯色	chun se
+花哨	hua shao
+素雅	su ya
+朱红	zhu hong
+玫红	mei hong
+紫红	zi hong
+酒红	jiu hong
+深红	shen hong
+浅红	qian hong
+橙黄	cheng huang
+米黄	mi huang
+鹅黄	e huang
+柠檬黄	ning meng huang
+土黄	tu huang
+浅黄	qian huang
+墨绿	mo lv
+翠绿	cui lv
+草绿	cao lv
+橄榄绿	gan lan lv
+薄荷绿	bo he lv
+孔雀蓝	kong que lan
+天蓝	tian lan
+宝蓝	bao lan
+藏蓝	zang lan
+湖蓝	hu lan
+浅蓝	qian lan
+雾霾蓝	wu mai lan
+藕荷	ou he
+紫罗兰	zi luo lan
+淡紫	dan zi
+深紫	shen zi
+驼色	tuo se
+米色	mi se
+奶油色	nai you se
+象牙白	xiang ya bai
+米白	mi bai
+雪白	xue bai
+纯白	chun bai
+银白	yin bai
+灰白	hui bai
+墨黑	mo hei
+漆黑	qi hei
+炭黑	tan hei
+咖啡色	ka fei se
+栗色	li se
+卡其	ka qi
+杏色	xing se
+肉色	rou se
+荧光色	ying guang se
+金属色	jin shu se
+珠光	zhu guang
+哑光	ya guang
+磨砂	mo sha
+半透明	ban tou ming
+不透明	bu tou ming
+正方形	zheng fang xing
+多边形	duo bian xing
+梯形	ti xing
+菱形	ling xing
+椭圆形	tuo yuan xing
+扇形	shan xing
+弧形	hu xing
+斜线	xie xian
+虚线	xu xian
+折线	zhe xian
+锥形	zhui xing
+立方体	li fang ti
+球体	qiu ti
+棱角	leng jiao
+棱角分明	leng jiao fen ming
+不对称	bu dui cheng
+居中显示	ju zhong xian shi
+对齐方式	dui qi fang shi
+左对齐	zuo dui qi
+右对齐	you dui qi
+两端对齐	liang duan dui qi
+横排	heng pai
+竖排	shu pai
+斜排	xie pai
+小号字	xiao hao zi
+大号字	da hao zi
+删除线	shan chu xian
+上标	shang biao
+下标	xia biao
+磨砂感	mo sha gan
+颗粒感	ke li gan
+丝滑	si hua
+挺括	ting kuo
+亚光	ya guang
+油润	you run
+干爽	gan shuang
+粗笨	cu ben
+笨重	ben zhong
+重实	zhong shi
+调和油	tiao he you
+玉米油	yu mi you
+葵花籽油	kui hua zi you
+加碘盐	jia dian yan
+酵母粉	jiao mu fen
+小苏打	xiao su da
+食用碱	shi yong jian
+豆奶粉	dou nai fen
+麦片	mai pian
+燕麦片	yan mai pian
+玉米片	yu mi pian
+芝麻糊	zhi ma hu
+核桃粉	he tao fen
+藕粉	ou fen
+米糊	mi hu
+成人奶粉	cheng ren nai fen
+孕妇奶粉	yun fu nai fen
+奶片	nai pian
+炼乳	lian ru
+淡奶油	dan nai you
+果汁饮料	guo zhi yin liao
+碳酸饮料	tan suan yin liao
+功能饮料	gong neng yin liao
+茶饮料	cha yin liao
+咖啡饮料	ka fei yin liao
+瓶装水	ping zhuang shui
+桶装水	tong zhuang shui
+气泡水	qi pao shui
+果酒	guo jiu
+八宝粥	ba bao zhou
+鱼罐头	yu guan tou
+水果罐头	shui guo guan tou
+酱菜	jiang cai
+辣椒酱	la jiao jiang
+果酱	guo jiang
+薄荷糖	bo he tang
+棒棒糖	bang bang tang
+软糖	ruan tang
+苏打饼干	su da bing gan
+夹心饼干	jia xin bing gan
+威化	wei hua
+薯片	shu pian
+锅巴	guo ba
+虾条	xia tiao
+膨化食品	peng hua shi pin
+坚果	jian guo
+混合坚果	hun he jian guo
+肉脯	rou pu
+鱼片	yu pian
+海苔	hai tai
+汉堡胚	han bao pei
+粽子	zong zi
+速冻水饺	su dong shui jiao
+速冻包子	su dong bao zi
+速冻汤圆	su dong tang yuan
+速冻馄饨	su dong hun tun
+手抓饼	shou zhua bing
+春卷	chun juan
+鸡块	ji kuai
+火锅底料	huo guo di liao
+火锅丸子	huo guo wan zi
+蘸料	zhan liao
+芝麻酱料	zhi ma jiang liao
+洗衣皂	xi yi zao
+皂粉	zao fen
+衣领净	yi ling jing
+彩漂	cai piao
+漂白水	piao bai shui
+油烟净	you yan jing
+去油污	qu you wu
+洁厕剂	jie ce ji
+洁厕块	jie ce kuai
+管道疏通	guan dao shu tong
+家具护理	jia ju hu li
+皮革护理	pi ge hu li
+除味剂	chu wei ji
+爽身粉	shuang shen fen
+痱子粉	fei zi fen
+洗面奶	xi mian nai
+护发精油	hu fa jing you
+定型喷雾	ding xing pen wu
+染发剂	ran fa ji
+漱口水	shu kou shui
+剃须泡	ti xu pao
+护垫	hu dian
+卷纸	juan zhi
+手帕纸	shou pa zhi
+厨房纸	chu fang zhi
+烘焙纸	hong bei zhi
+百洁布	bai jie bu
+洗碗布	xi wan bu
+海绵擦	hai mian ca
+积木	ji mu
+拼图	pin tu
+手办	shou ban
+公仔	gong zai
+毛绒玩具	mao rong wan ju
+玩偶	wan ou
+陀螺	tuo luo
+弹珠	dan zhu
+玻璃球	bo li qiu
+毽子	jian zi
+沙包	sha bao
+橡皮筋	xiang pi jin
+跳房子	tiao fang zi
+滑梯	hua ti
+秋千	qiu qian
+跷跷板	qiao qiao ban
+摇摇马	yao yao ma
+蹦床	beng chuang
+海洋球	hai yang qiu
+沙坑	sha keng
+泡泡机	pao pao ji
+水枪	shui qiang
+遥控车	yao kong che
+遥控飞机	yao kong fei ji
+四轴	si zhou
+车模	che mo
+航模	hang mo
+船模	chuan mo
+乐高	le gao
+芭比	ba bi
+变形金刚	bian xing jin gang
+盲盒	mang he
+卡牌	ka pai
+桌游	zhuo you
+狼人杀	lang ren sha
+剧本杀	ju ben sha
+密室逃脱	mi shi tao tuo
+国际象棋	guo ji xiang qi
+跳棋	tiao qi
+五子棋	wu zi qi
+扑克牌	pu ke pai
+骰子	tou zi
+塔罗牌	ta luo pai
+魔方	mo fang
+溜溜球	liu liu qiu
+弹弓	dan gong
+陀螺仪	tuo luo yi
+体育器材	ti yu qi cai
+球拍	qiu pai
+球网	qiu wang
+球门	qiu men
+篮筐	lan kuang
+护腕	hu wan
+护膝	hu xi
+护具	hu ju
+运动服	yun dong fu
+球衣	qiu yi
+球鞋	qiu xie
+运动袜	yun dong wa
+壶铃	hu ling
+瑜伽球	yu jia qiu
+拉力绳	la li sheng
+弹力带	tan li dai
+跳绳绳	tiao sheng sheng
+计步器	ji bu qi
+心率带	xin lv dai
+运动手表	yun dong shou biao
+泳镜	yong jing
+泳帽	yong mao
+耳塞	er sai
+鼻夹	bi jia
+浮板	fu ban
+救生圈	jiu sheng quan
+救生衣	jiu sheng yi
+潜水镜	qian shui jing
+脚蹼	jiao pu
+登山杖	deng shan zhang
+登山鞋	deng shan xie
+野餐垫	ye can dian
+烧烤架	shao kao jia
+炭火	tan huo
+保温箱	bao wen xiang
+露营灯	lu ying deng
+折叠椅	zhe die yi
+折叠桌	zhe die zhuo
+天幕	tian mu
+营地车	ying di che
+指南针	zhi nan zhen
+哨子	shao zi
+野外刀具	ye wai dao ju
+打火石	da huo shi
+驱虫喷雾	qu chong pen wu
+防晒衣	fang shai yi
+速干衣	su gan yi
+抓绒	zhua rong
+软壳	ruan ke
+硬壳	ying ke
+雪套	xue tao
+冰爪	bing zhao
+头盔灯	tou kui deng
+宠物猫	chong wu mao
+幼猫	you mao
+猫粮	mao liang
+狗粮	gou liang
+猫条	mao tiao
+冻干	dong gan
+营养膏	ying yang gao
+猫砂	mao sha
+猫砂盆	mao sha pen
+猫抓板	mao zhua ban
+猫爬架	mao pa jia
+猫窝	mao wo
+狗窝	gou wo
+牵引绳	qian yin sheng
+项圈	xiang quan
+胸背带	xiong bei dai
+嘴套	zui tao
+宠物笼	chong wu long
+航空箱	hang kong xiang
+尿垫	niao dian
+拾便袋	shi bian dai
+梳毛刷	shu mao shua
+指甲剪	zhi jia jian
+驱虫	qu chong
+绝育	jue yu
+剪毛	jian mao
+寄养	ji yang
+宠物医院	chong wu yi yuan
+宠物店	chong wu dian
+宠物美容	chong wu mei rong
+训犬	xun quan
+遛狗	liu gou
+铲屎	chan shi
+流浪猫	liu lang mao
+流浪狗	liu lang gou
+弄好	nong hao
+弄完	nong wan
+归置	gui zhi
+腾地	teng di
+倒腾	dao teng
+鼓捣	gu dao
+捣鼓	dao gu
+摆弄	bai nong
+拨弄	bo nong
+翻找	fan zhao
+翻检	fan jian
+翻箱倒柜	fan xiang dao gui
+扒拉	ba la
+划拉	hua la
+掸灰	dan hui
+掸尘	dan chen
+擦净	ca jing
+刷净	shua jing
+冲净	chong jing
+泡开	pao kai
+泡发	pao fa
+焯一下	chao yi xia
+热一下	re yi xia
+凉一下	liang yi xia
+晾一下	liang yi xia
+放凉	fang liang
+回温	hui wen
+化冻	hua dong
+腌上	yan shang
+卤上	lu shang
+炖上	dun shang
+蒸上	zheng shang
+焖上	men shang
+烤上	kao shang
+煮上	zhu shang
+颠勺	dian shao
+盛饭	cheng fan
+添饭	tian fan
+打包带走	da bao dai zou
+剩一点	sheng yi dian
+吃光	chi guang
+喝口	he kou
+来一口	lai yi kou
+尝一口	chang yi kou
+垫一口	dian yi kou
+凑合吃	cou he chi
+随便吃	sui bian chi
+凑合	cou he
+将就	jiang jiu
+凑活	cou huo
+敷衍过去	fu yan guo qu
+蒙混	meng hun
+糊弄	hu nong
+糊弄人	hu nong ren
+搪塞	tang se
+推脱	tui tuo
+推卸	tui xie
+甩锅	shuai guo
+背锅	bei guo
+顶罪	ding zui
+顶缸	ding gang
+认栽	ren zai
+认怂	ren song
+服软	fu ruan
+硬扛	ying kang
+死撑	si cheng
+撑着	cheng zhe
+挺住	ting zhu
+扛住	kang zhu
+憋着	bie zhe
+憋不住	bie bu zhu
+笑出声	xiao chu sheng
+笑喷	xiao pen
+乐了	le le
+哭出来	ku chu lai
+红了眼	hong le yan
+掉眼泪	diao yan lei
+皱眉头	zhou mei tou
+撇嘴	pie zui
+耸肩	song jian
+摊手	tan shou
+摆手	bai shou
+点头称是	dian tou cheng shi
+摇头叹气	yao tou tan qi
+松口	song kou
+松手	song shou
+撒手不管	sa shou bu guan
+甩手	shuai shou
+插一脚	cha yi jiao
+掺和	chan huo
+凑一脚	cou yi jiao
+瞎掺和	xia chan huo
+帮腔	bang qiang
+帮衬	bang chen
+搭把手	da ba shou
+搭腔	da qiang
+接茬	jie cha
+打岔	da cha
+打圆场	da yuan chang
+圆场	yuan chang
+和稀泥	huo xi ni
+说和	shuo he
+劝和	quan he
+撮合	cuo he
+牵线	qian xian
+拉红线	la hong xian
+做媒	zuo mei
+说媒	shuo mei
+张罗婚事	zhang luo hun shi
+操持	cao chi
+打点	da dian
+安排妥当	an pai tuo dang
+打前站	da qian zhan
+探路	tan lu
+踩点	cai dian
+试水	shi shui
+试错	shi cuo
+撞大运	zhuang da yun
+碰运气	peng yun qi
+蒙对	meng dui
+猜中	cai zhong
+猜错	cai cuo
+估摸	gu mo
+掂对	dian dui
+盘算	pan suan
+算计	suan ji
+图谋	tu mou
+策划好	ce hua hao
+预谋	yu mou
+打主意	da zhu yi
+动心思	dong xin si
+起念头	qi nian tou
+改主意	gai zhu yi
+变卦	bian gua
+反悔	fan hui
+翻脸	fan lian
+翻旧账	fan jiu zhang
+秋后算账	qiu hou suan zhang
+算总账	suan zong zhang
+一笔勾销	yi bi gou xiao
+作罢	zuo ba
+罢休	ba xiu
+不了了之	bu liao liao zhi
+搁着	ge zhe
+晾着	liang zhe
+冷处理	leng chu li
+搁置争议	ge zhi zheng yi
+挂号费	gua hao fei
+专家号	zhuan jia hao
+普通号	pu tong hao
+加号	jia hao
+排队候诊	pai dui hou zhen
+叫号屏	jiao hao ping
+就诊卡	jiu zhen ka
+病历号	bing li hao
+问诊记录	wen zhen ji lu
+主诉	zhu su
+现病史	xian bing shi
+既往史	ji wang shi
+过敏史	guo min shi
+家族史	jia zu shi
+查体	cha ti
+量血压	liang xue ya
+测体温	ce ti wen
+抽血化验	chou xue hua yan
+憋尿	bie niao
+禁食	jin shi
+皮试结果	pi shi jie guo
+取药	qu yao
+取药窗口	qu yao chuang kou
+药盒	yao he
+用法用量	yong fa yong liang
+饭前服用	fan qian fu yong
+饭后服用	fan hou fu yong
+一日三次	yi ri san ci
+一次两片	yi ci liang pian
+温水送服	wen shui song fu
+含化	han hua
+外敷	wai fu
+滴眼液	di yan ye
+滴耳液	di er ye
+滴鼻液	di bi ye
+喷雾剂	pen wu ji
+贴剂	tie ji
+栓剂	shuan ji
+颗粒剂	ke li ji
+糖浆	tang jiang
+粉针剂	fen zhen ji
+缓释片	huan shi pian
+控释片	kong shi pian
+肠溶片	chang rong pian
+咀嚼片	ju jue pian
+泡腾片	pao teng pian
+混悬液	hun xuan ye
+软膏	ruan gao
+乳膏	ru gao
+洗剂	xi ji
+酊剂	ding ji
+批号	pi hao
+储藏条件	chu cang tiao jian
+避光	bi guang
+冷藏保存	leng cang bao cun
+定期复查	ding qi fu cha
+遵医嘱	zun yi zhu
+擅自停药	shan zi ting yao
+耐药	nai yao
+输液反应	shu ye fan ying
+药物过敏	yao wu guo min
+急救药	ji jiu yao
+药箱	yao xiang
+分药盒	fen yao he
+服药提醒	fu yao ti xing
+底盘	di pan
+离合	li he
+仪表盘	yi biao pan
+转速表	zhuan su biao
+时速表	shi su biao
+里程表	li cheng biao
+挡位	dang wei
+手动挡	shou dong dang
+空挡	kong dang
+倒挡	dao dang
+手刹	shou sha
+脚刹	jiao sha
+雨刮	yu gua
+雨刮片	yu gua pian
+防冻液	fang dong ye
+机油滤	ji you lv
+空气滤	kong qi lv
+空调滤	kong tiao lv
+火花塞	huo hua sai
+保险丝	bao xian si
+备胎	bei tai
+轮毂	lun gu
+胎压	tai ya
+胎压监测	tai ya jian ce
+动平衡	dong ping heng
+减震	jian zhen
+球头	qiu tou
+刹车片	sha che pian
+刹车盘	sha che pan
+刹车油	sha che you
+转向助力	zhuan xiang zhu li
+排气管	pai qi guan
+消音器	xiao yin qi
+三元催化	san yuan cui hua
+氧传感器	yang chuan gan qi
+节气门	jie qi men
+喷油嘴	pen you zui
+正时皮带	zheng shi pi dai
+发动机舱	fa dong ji cang
+后备箱	hou bei xiang
+储物格	chu wu ge
+扶手箱	fu shou xiang
+中控台	zhong kong tai
+出风口	chu feng kou
+暖风	nuan feng
+除雾	chu wu
+内后视镜	nei hou shi jing
+转向灯	zhuan xiang deng
+示宽灯	shi kuan deng
+雾灯	wu deng
+远光	yuan guang
+近光	jin guang
+日行灯	ri xing deng
+双闪	shuang shan
+儿童座椅	er tong zuo yi
+倒车影像	dao che ying xiang
+倒车雷达	dao che lei da
+定速巡航	ding su xun hang
+车道保持	che dao bao chi
+自动泊车	zi dong bo che
+导航仪	dao hang yi
+车载充电	che zai chong dian
+蓝牙连接	lan ya lian jie
+车机	che ji
+车联网	che lian wang
+保养周期	bao yang zhou qi
+首保	shou bao
+小保养	xiao bao yang
+大保养	da bao yang
+机油机滤	ji you ji lv
+空气滤芯	kong qi lv xin
+空调清洗	kong tiao qing xi
+积碳	ji tan
+清洗积碳	qing xi ji tan
+轮胎换位	lun tai huan wei
+封釉	feng you
+镀膜	du mo
+内饰清洗	nei shi qing xi
+座套	zuo tao
+脚垫	jiao dian
+方向盘套	fang xiang pan tao
+行车灯	xing che deng
+续航	xu hang
+纯电	chun dian
+混动	hun dong
+插混	cha hun
+增程	zeng cheng
+电池包	dian chi bao
+快充桩	kuai chong zhuang
+慢充桩	man chong zhuang
+充电口	chong dian kou
+续航里程	xu hang li cheng
+手机壳	shou ji ke
+钢化膜	gang hua mo
+手机膜	shou ji mo
+充电线	chong dian xian
+充电头	chong dian tou
+耳机孔	er ji kong
+蓝牙耳机	lan ya er ji
+降噪耳机	jiang zao er ji
+耳塞式	er sai shi
+入耳式	ru er shi
+头戴式	tou dai shi
+蓝牙音箱	lan ya yin xiang
+智能音箱	zhi neng yin xiang
+平板电脑	ping ban dian nao
+手写笔	shou xie bi
+触控笔	chu kong bi
+机械键盘	ji xie jian pan
+薄膜键盘	bao mo jian pan
+无线鼠标	wu xian shu biao
+游戏鼠标	you xi shu biao
+鼠标垫	shu biao dian
+曲面屏	qu mian ping
+高刷屏	gao shua ping
+刷新率	shua xin lv
+外接屏	wai jie ping
+激光投影	ji guang tou ying
+幕布	mu bu
+激光打印	ji guang da yin
+喷墨打印	pen mo da yin
+墨盒	mo he
+色带	se dai
+打印纸	da yin zhi
+标签机	biao qian ji
+碎纸机	sui zhi ji
+硬盘盒	ying pan he
+扩展坞	kuo zhan wu
+转换头	zhuan huan tou
+内存卡	nei cun ka
+单反	dan fan
+微单	wei dan
+三脚架	san jiao jia
+云台	yun tai
+稳定器	wen ding qi
+补光灯	bu guang deng
+录音笔	lu yin bi
+耳放	er fang
+功放	gong fang
+音箱线	yin xiang xian
+智能手表	zhi neng shou biao
+手环	shou huan
+运动相机	yun dong xiang ji
+门铃	men ling
+智能门锁	zhi neng men suo
+智能插座	zhi neng cha zuo
+智能灯泡	zhi neng deng pao
+键鼠套装	jian shu tao zhuang
+电竞椅	dian jing yi
+防窥膜	fang kui mo
+收纳包	shou na bao
+电脑包	dian nao bao
+内胆包	nei dan bao
+装修风格	zhuang xiu feng ge
+现代简约	xian dai jian yue
+北欧风	bei ou feng
+日式风	ri shi feng
+工业风	gong ye feng
+美式风	mei shi feng
+法式风	fa shi feng
+中式风	zhong shi feng
+新中式	xin zhong shi
+轻奢风	qing she feng
+奶油风	nai you feng
+原木风	yuan mu feng
+极简风	ji jian feng
+田园风	tian yuan feng
+户型图	hu xing tu
+水电图	shui dian tu
+改造方案	gai zao fang an
+拆墙	chai qiang
+承重墙	cheng zhong qiang
+非承重墙	fei cheng zhong qiang
+隔墙	ge qiang
+防水层	fang shui ceng
+闭水试验	bi shui shi yan
+回填	hui tian
+包管	bao guan
+走线	zou xian
+开槽	kai cao
+布线	bu xian
+水管改造	shui guan gai zao
+下水改造	xia shui gai zao
+弱电	ruo dian
+强电	qiang dian
+插座位置	cha zuo wei zhi
+开关位置	kai guan wei zhi
+灯位	deng wei
+主灯	zhu deng
+无主灯	wu zhu deng
+灯带槽	deng dai cao
+石膏线	shi gao xian
+踢脚	ti jiao
+过门石	guo men shi
+门槛石	men kan shi
+窗套	chuang tao
+门套	men tao
+垭口	ya kou
+护墙板	hu qiang ban
+护角	hu jiao
+玄关柜	xuan guan gui
+橱柜门	chu gui men
+石英石	shi ying shi
+人造石	ren zao shi
+岩板	yan ban
+挡水条	dang shui tiao
+水槽	shui cao
+台上盆	tai shang pen
+台下盆	tai xia pen
+抽拉龙头	chou la long tou
+智能马桶	zhi neng ma tong
+蹲便	dun bian
+淋浴房	lin yu fang
+花洒	hua sa
+浴帘杆	yu lian gan
+马桶刷架	ma tong shua jia
+毛巾架	mao jin jia
+镜柜	jing gui
+浴室柜	yu shi gui
+客厅柜	ke ting gui
+电视墙	dian shi qiang
+背景墙	bei jing qiang
+阳台柜	yang tai gui
+洗衣柜	xi yi gui
+榻榻米	ta ta mi
+升降桌	sheng jiang zhuo
+地脚线	di jiao xian
+阴阳角	yin yang jiao
+阳角条	yang jiao tiao
+美缝	mei feng
+勾缝	gou feng
+结构胶	jie gou jiao
+瓷砖胶	ci zhuan jiao
+水泥砂浆	shui ni sha jiang
+腻子	ni zi
+石膏板	shi gao ban
+轻钢龙骨	qing gang long gu
+木龙骨	mu long gu
+大芯板	da xin ban
+生态板	sheng tai ban
+免漆板	mian qi ban
+饰面板	shi mian ban
+木饰面	mu shi mian
+烤漆	kao qi
+免漆	mian qi
+吸塑	xi su
+亚克力板	ya ke li ban
+玻璃隔断	bo li ge duan
+长虹玻璃	chang hong bo li
+磨砂玻璃	mo sha bo li
+断桥铝	duan qiao lv
+纱窗网	sha chuang wang
+入户门	ru hu men
+推拉门	tui la men
+折叠门	zhe die men
+移动门	yi dong men
+隐形门	yin xing men
+门吸条	men xi tiao
+五金件	wu jin jian
+合页铰链	he ye jiao lian
+地弹簧	di tan huang
+锁具	suo ju
+智能猫眼	zhi neng mao yan
+可视对讲	ke shi dui jiang
+晾衣杆	liang yi gan
+大扫除	da sao chu
+小长假	xiao chang jia
+老毛病	lao mao bing
+新花样	xin hua yang
+老规矩	lao gui ju
+老样子	lao yang zi
+老一套	lao yi tao
+新气象	xin qi xiang
+新面貌	xin mian mao
+新玩法	xin wan fa
+旧习惯	jiu xi guan
+坏习惯	huai xi guan
+好习惯	hao xi guan
+小毛病	xiao mao bing
+小问题	xiao wen ti
+大方向	da fang xiang
+小细节	xiao xi jie
+大趋势	da qu shi
+小趋势	xiao qu shi
+硬骨头	ying gu tou
+软柿子	ruan shi zi
+硬指标	ying zhi biao
+软实力	ruan shi li
+硬实力	ying shi li
+死胡同	si hu tong
+活路子	huo lu zi
+冷板凳	leng ban deng
+热饽饽	re bo bo
+香饽饽	xiang bo bo
+紧箍咒	jin gu zhou
+护身符	hu shen fu
+定心丸	ding xin wan
+强心剂	qiang xin ji
+预防针	yu fang zhen
+及时雨	ji shi yu
+雪中炭	xue zhong tan
+下马威	xia ma wei
+马后炮	ma hou pao
+前车之鉴	qian che zhi jian
+血泪教训	xue lei jiao xun
+记忆犹新	ji yi you xin
+历历在目	li li zai mu
+恍如昨日	huang ru zuo ri
+物是人非	wu shi ren fei
+人是物非	ren shi wu fei
+时过境迁	shi guo jing qian
+斗转星移	dou zhuan xing yi
+沧海桑田	cang hai sang tian
+翻天覆地	fan tian fu di
+因时而变	yin shi er bian
+水涨船高	shui zhang chuan gao
+水落石出	shui luo shi chu
+真相大白	zhen xiang da bai
+一清二楚	yi qing er chu
+明明白白	ming ming bai bai
+稀里糊涂	xi li hu tu
+不明不白	bu ming bu bai
+不明就里	bu ming jiu li
+一头雾水	yi tou wu shui
+云里雾里	yun li wu li
+丈二和尚	zhang er he shang
+心知肚明	xin zhi du ming
+有底	you di
+没底	mei di
+志在必得	zhi zai bi dei
+势在必得	shi zai bi dei
+胜券在握	sheng quan zai wo
+胸有成竹	xiong you cheng zhu
+手到擒来	shou dao qin lai
+易如反掌	yi ru fan zhang
+小菜一碟	xiao cai yi die
+不在话下	bu zai hua xia
+难上加难	nan shang jia nan
+难如登天	nan ru deng tian
+千难万险	qian nan wan xian
+艰苦卓绝	jian ku zhuo jue
+千辛万苦	qian xin wan ku
+饱经风霜	bao jing feng shuang
+历经沧桑	li jing cang sang
+一路走来	yi lu zou lai
+说来话长	shuo lai hua chang
+三言两语	san yan liang yu
+长篇大论	chang pian da lun
+滔滔不绝	tao tao bu jue
+喋喋不休	die die bu xiu
+絮絮叨叨	xu xu dao dao
+理直气壮	li zhi qi zhuang
+据理力争	ju li li zheng
+强词夺理	qiang ci duo li
+无理取闹	wu li qu nao
+胡搅蛮缠	hu jiao man chan
+蛮不讲理	man bu jiang li
+不明事理	bu ming shi li
+合情合理	he qing he li
+入情入理	ru qing ru li
+理当如此	li dang ru ci
+名正言顺	ming zheng yan shun
+进货价	jin huo jia
+出货价	chu huo jia
+二级批发	er ji pi fa
+一级代理	yi ji dai li
+区域代理	qu yu dai li
+经销权	jing xiao quan
+代理权	dai li quan
+授权店	shou quan dian
+加盟费	jia meng fei
+发货人	fa huo ren
+寄件人	ji jian ren
+运单号	yun dan hao
+面单号	mian dan hao
+物流信息	wu liu xin xi
+物流跟踪	wu liu gen zong
+在途	zai tu
+已签收	yi qian shou
+派件中	pai jian zhong
+揽件	lan jian
+分拣	fen jian
+干线运输	gan xian yun shu
+末端配送	mo duan pei song
+同城配送	tong cheng pei song
+次日达	ci ri da
+隔日达	ge ri da
+当日达	dang ri da
+包邮区	bao you qu
+偏远地区	pian yuan di qu
+超区	chao qu
+签收单	qian shou dan
+保价单	bao jia dan
+破损件	po sun jian
+丢件	diu jian
+赔付标准	pei fu biao zhun
+理赔流程	li pei liu cheng
+运费险	yun fei xian
+退货运费	tui huo yun fei
+上门取件	shang men qu jian
+自寄	zi ji
+到付	dao fu
+现付	xian fu
+月结	yue jie
+账期结算	zhang qi jie suan
+对账单	dui zhang dan
+开票信息	kai piao xin xi
+含税价	han shui jia
+不含税价	bu han shui jia
+返点	fan dian
+促销返现	cu xiao fan xian
+地推	di tui
+派单	pai dan
+扫街	sao jie
+门店陈列	men dian chen lie
+堆头	dui tou
+端架	duan jia
+促销台	cu xiao tai
+试吃台	shi chi tai
+导购话术	dao gou hua shu
+逼单	bi dan
+进店率	jin dian lv
+转化率	zhuan hua lv
+客单价	ke dan jia
+复购率	fu gou lv
+连带率	lian dai lv
+动销	dong xiao
+滞销	zhi xiao
+尾货	wei huo
+断码	duan ma
+换季	huan ji
+补货单	bu huo dan
+订货会	ding huo hui
+看样	kan yang
+起订量	qi ding liang
+最小包装	zui xiao bao zhuang
+整箱	zheng xiang
+称重	cheng zhong
+打秤	da cheng
+就事论事	jiu shi lun shi
+将心比心	jiang xin bi xin
+设身处地	she shen chu di
+推己及人	tui ji ji ren
+换位思考	huan wei si kao
+感同身受	gan tong shen shou
+身体力行	shen ti li xing
+以理服人	yi li fu ren
+以德服人	yi de fu ren
+以诚待人	yi cheng dai ren
+待人以诚	dai ren yi cheng
+宽以待人	kuan yi dai ren
+严于律己	yan yu lv ji
+宽严相济	kuan yan xiang ji
+恩威并施	en wei bing shi
+恩将仇报	en jiang chou bao
+知恩图报	zhi en tu bao
+以怨报德	yi yuan bao de
+投桃报李	tou tao bao li
+来而不往	lai er bu wang
+有来有往	you lai you wang
+世态炎凉	shi tai yan liang
+人情冷暖	ren qing leng nuan
+人心不古	ren xin bu gu
+古往今来	gu wang jin lai
+古今中外	gu jin zhong wai
+举世无双	ju shi wu shuang
+屈指可数	qu zhi ke shu
+寥寥无几	liao liao wu ji
+凤毛麟角	feng mao lin jiao
+不胜枚举	bu sheng mei ju
+数不胜数	shu bu sheng shu
+不计其数	bu ji qi shu
+习焉不察	xi yan bu cha
+浑然不觉	hun ran bu jue
+后知后觉	hou zhi hou jue
+先知先觉	xian zhi xian jue
+当机立断	dang ji li duan
+优柔寡断	you rou gua duan
+举棋不定	ju qi bu ding
+左右为难	zuo you wei nan
+进退两难	jin tui liang nan
+骑虎难下	qi hu nan xia
+欲罢不能	yu ba bu neng
+身陷其中	shen xian qi zhong
+深陷泥潭	shen xian ni tan
+难以自拔	nan yi zi ba
+力所不及	li suo bu ji
+各尽所能	ge jin suo neng
+各司其职	ge si qi zhi
+分工明确	fen gong ming que
+责任到人	ze ren dao ren
+层层落实	ceng ceng luo shi
+事必躬亲	shi bi gong qin
+亲力亲为	qin li qin wei
+大包大揽	da bao da lan
+越俎代庖	yue zu dai pao
+宽心	kuan xin
+舒坦	shu tan
+畅快	chang kuai
+解气	jie qi
+恼怒	nao nu
+暴怒	bao nu
+发火	fa huo
+发飙	fa biao
+耍脾气	shua pi qi
+闹情绪	nao qing xu
+闹别扭	nao bie niu
+赌气	du qi
+生闷气	sheng men qi
+憋屈	bie qu
+窝火	wo huo
+心慌	xin huang
+心虚	xin xu
+胆寒	dan han
+发怵	fa chu
+发毛	fa mao
+头皮发麻	tou pi fa ma
+心凉	xin liang
+寒心	han xin
+失望透顶	shi wang tou ding
+心灰意冷	xin hui yi leng
+灰心	hui xin
+气馁	qi nei
+振作	zhen zuo
+打起精神	da qi jing shen
+提神	ti shen
+走神	zou shen
+发愣	fa leng
+愣神	leng shen
+出神	chu shen
+迷糊	mi hu
+明白过来	ming bai guo lai
+幡然醒悟	fan ran xing wu
+顿悟	dun wu
+感触	gan chu
+心酸	xin suan
+感激涕零	gan ji ti ling
+惦记	dian ji
+挂念	gua nian
+盼头	pan tou
+奔头	ben tou
+动心	dong xin
+倾心	qing xin
+着迷	zhao mi
+入迷	ru mi
+上瘾	shang yin
+明细表	ming xi biao
+底稿	di gao
+底单	di dan
+存根	cun gen
+印章盒	yin zhang he
+档案袋	dang an dai
+档案室	dang an shi
+资料室	zi liao shi
+材料袋	cai liao dai
+样张	yang zhang
+样品单	yang pin dan
+证件照	zheng jian zhao
+电子照片	dian zi zhao pian
+扫描件	sao miao jian
+传真件	chuan zhen jian
+录音带	lu yin dai
+音频文件	yin pin wen jian
+草稿	cao gao
+初稿	chu gao
+终稿	zhong gao
+修改稿	xiu gai gao
+备份文件	bei fen wen jian
+归档文件	gui dang wen jian
+保险箱	bao xian xiang
+档案柜	dang an gui
+密码本	mi ma ben
+工作簿	gong zuo bu
+任务清单	ren wu qing dan
+清单列表	qing dan lie biao
+看板卡	kan ban ka
+便利贴	bian li tie
+索引卡	suo yin ka
+标签纸	biao qian zhi
+便条	bian tiao
+条子	tiao zi
+批条	pi tiao
+白条	bai tiao
+收条	shou tiao
+借条	jie tiao
+欠条	qian tiao
+领条	ling tiao
+凭条	ping tiao
+留言条	liu yan tiao
+请假条	qing jia tiao
+天气热	tian qi re
+天气冷	tian qi leng
+下雨天	xia yu tian
+下雪天	xia xue tian
+刮风	gua feng
+打雷	da lei
+阴雨天	yin yu tian
+大晴天	da qing tian
+热浪	re lang
+寒气	han qi
+凉意	liang yi
+暖意	nuan yi
+露台	lu tai
+走廊灯	zou lang deng
+楼道灯	lou dao deng
+声控灯	sheng kong deng
+感应灯	gan ying deng
+应急通道	ying ji tong dao
+安全出口	an quan chu kou
+消防通道	xiao fang tong dao
+灭火器	mie huo qi
+消防栓	xiao fang shuan
+烟感	yan gan
+喷淋	pen lin
+逃生通道	tao sheng tong dao
+门禁	men jin
+门禁卡	men jin ka
+指纹识别	zhi wen shi bie
+密码键盘	mi ma jian pan
+访客登记	fang ke deng ji
+快递架	kuai di jia
+公示栏	gong shi lan
+公告栏	gong gao lan
+水表井	shui biao jing
+燃气表箱	ran qi biao xiang
+配电室	pei dian shi
+水泵房	shui beng fang
+锅炉房	guo lu fang
+换热站	huan re zhan
+停水	ting shui
+修水管	xiu shui guan
+爆管	bao guan
+渗水	shen shui
+返潮	fan chao
+霉味	mei wei
+扰民	rao min
+投诉噪音	tou su zao yin
+装修噪音	zhuang xiu zao yin
+广场舞	guang chang wu
+遛弯	liu wan
+健身器材	jian shen qi cai
+休闲椅	xiu xian yi
+长椅	zhang yi
+石凳	shi deng
+凉亭	liang ting
+旗杆	qi gan
+围栏	wei lan
+护栏	hu lan
+铁栅栏	tie zha lan
+绿篱	lv li
+花坛	hua tan
+草坪灯	cao ping deng
+步道	bu dao
+健身步道	jian shen bu dao
+篮球场	lan qiu chang
+足球场	zu qiu chang
+羽毛球场	yu mao qiu chang
+乒乓球台	ping pang qiu tai
+儿童乐园	er tong le yuan
+社区食堂	she qu shi tang
+日间照料	ri jian zhao liao
+电饭煲	dian fan bao
+电水壶	dian shui hu
+电烤箱	dian kao xiang
+抽油烟机	chou you yan ji
+洗碗池	xi wan chi
+洗菜盆	xi cai pen
+淘米水	tao mi shui
+抹布架	ma bu jia
+沥水架	li shui jia
+置物篮	zhi wu lan
+收纳架	shou na jia
+鞋刷子	xie shua zi
+拖布池	tuo bu chi
+搓衣板	cuo yi ban
+洗衣盆	xi yi pen
+保温桶	bao wen tong
+密封盒	mi feng he
+饭盒袋	fan he dai
+便当盒	bian dang he
+水杯盖	shui bei gai
+吸管杯	xi guan bei
+运动水壶	yun dong shui hu
+暖手宝	nuan shou bao
+充电台灯	chong dian tai deng
+床头灯	chuang tou deng
+阅读灯	yue du deng
+台灯罩	tai deng zhao
+挂钟表	gua zhong biao
+日历牌	ri li pai
+便签本	bian qian ben
+记账本	ji zhang ben
+存钱罐	cun qian guan
+储钱罐	chu qian guan
+急救箱	ji jiu xiang
+针线盒	zhen xian he
+剪刀套	jian dao tao
+化妆包	hua zhuang bao
+洗漱包	xi shu bao
+旅行套装	lv xing tao zhuang
+雨伞架	yu san jia
+鞋拔子	xie ba zi
+衣架钩	yi jia gou
+扫把	sao ba
+拖布	tuo bu
+一会儿见	yi hui er jian
+待会儿	dai hui er
+回头见	hui tou jian
+不客气	bu ke qi
+没事儿	mei shi er
+小意思	xiao yi si
+过奖了	guo jiang le
+哪里哪里	na li na li
+不敢当	bu gan dang
+受之有愧	shou zhi you kui
+承蒙	cheng meng
+久仰	jiu yang
+失敬	shi jing
+失陪	shi pei
+告辞	gao ci
+留步	liu bu
+慢走	man zou
+好走	hao zou
+欢迎再来	huan ying zai lai
+请慢用	qing man yong
+马上来	ma shang lai
+稍等片刻	shao deng pian ke
+先说好	xian shuo hao
+说定了	shuo ding le
+一言为定	yi yan wei ding
+君子协定	jun zi xie ding
+算数	suan shu
+说了算	shuo le suan
+说话算话	shuo hua suan hua
+不反悔	bu fan hui
+不放鸽子	bu fang ge zi
+准时到	zhun shi dao
+准点	zhun dian
+早点到	zao dian dao
+晚点到	wan dian dao
+可能会晚	ke neng hui wan
+赶过去	gan guo qu
+路上堵	lu shang du
+马上到	ma shang dao
+到了	dao le
+坐坐	zuo zuo
+喝杯茶	he bei cha
+吃点东西	chi dian dong xi
+别客气	bie ke qi
+随便坐	sui bian zuo
+不用送	bu yong song
+别送了	bie song le
+慢点走	man dian zou
+注意安全	zhu yi an quan
+路上小心	lu shang xiao xin
+保重身体	bao zhong shen ti
+多喝水	duo he shui
+早点休息	zao dian xiu xi
+别熬夜	bie ao ye
+好好休息	hao hao xiu xi
+加油干	jia you gan
+麻烦你了	ma fan ni le
+多亏你	duo kui ni
+感谢配合	gan xie pei he

@@ -1,0 +1,614 @@
+# 自动生成的补充词表（drug）
+# 由 tools/gen_extra.py 从 tools/wordlists/drug*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+阿司匹林	a si pi lin
+对乙酰氨基酚	dui yi xian an ji fen
+布洛芬	bu luo fen
+双氯芬酸	shuang lv fen suan
+吲哚美辛	yin duo mei xin
+萘普生	nai pu sheng
+塞来昔布	sai lai xi bu
+美洛昔康	mei luo xi kang
+氯诺昔康	lv nuo xi kang
+尼美舒利	ni mei shu li
+洛索洛芬	luo suo luo fen
+氟比洛芬	fu bi luo fen
+酮洛芬	tong luo fen
+吡罗昔康	bi luo xi kang
+头孢氨苄	tou bao an bian
+头孢拉定	tou bao la ding
+头孢呋辛	tou bao fu xin
+头孢曲松	tou bao qu song
+头孢噻肟	tou bao sai wo
+头孢他啶	tou bao ta ding
+头孢哌酮	tou bao pai tong
+头孢克洛	tou bao ke luo
+头孢克肟	tou bao ke wo
+头孢地尼	tou bao di ni
+头孢丙烯	tou bao bing xi
+头孢唑林	tou bao zuo lin
+头孢西丁	tou bao xi ding
+头孢吡肟	tou bao bi wo
+头孢米诺	tou bao mi nuo
+拉氧头孢	la yang tou bao
+阿莫西林	a mo xi lin
+氨苄西林	an bian xi lin
+哌拉西林	pai la xi lin
+苄星青霉素	bian xing qing mei su
+苯唑西林	ben zuo xi lin
+氯唑西林	lv zuo xi lin
+美洛西林	mei luo xi lin
+阿洛西林	a luo xi lin
+替卡西林	ti ka xi lin
+红霉素	hong mei su
+阿奇霉素	a qi mei su
+克拉霉素	ke la mei su
+罗红霉素	luo hong mei su
+螺旋霉素	luo xuan mei su
+乙酰螺旋霉素	yi xian luo xuan mei su
+交沙霉素	jiao sha mei su
+多西环素	duo xi huan su
+米诺环素	mi nuo huan su
+四环素	si huan su
+土霉素	tu mei su
+氯霉素	lv mei su
+克林霉素	ke lin mei su
+林可霉素	lin ke mei su
+磷霉素	lin mei su
+万古霉素	wan gu mei su
+去甲万古霉素	qu jia wan gu mei su
+替考拉宁	ti kao la ning
+利奈唑胺	li nai zuo an
+达托霉素	da tuo mei su
+夫西地酸	fu xi di suan
+莫匹罗星	mo pi luo xing
+左氧氟沙星	zuo yang fu sha xing
+环丙沙星	huan bing sha xing
+氧氟沙星	yang fu sha xing
+莫西沙星	mo xi sha xing
+加替沙星	jia ti sha xing
+诺氟沙星	nuo fu sha xing
+依诺沙星	yi nuo sha xing
+培氟沙星	pei fu sha xing
+洛美沙星	luo mei sha xing
+氟罗沙星	fu luo sha xing
+吉米沙星	ji mi sha xing
+帕珠沙星	pa zhu sha xing
+磺胺甲噁唑	huang an jia e zuo
+磺胺嘧啶	huang an mi ding
+甲氧苄啶	jia yang bian ding
+呋喃妥因	fu nan tuo yin
+呋喃唑酮	fu nan zuo tong
+甲硝唑	jia xiao zuo
+替硝唑	ti xiao zuo
+奥硝唑	ao xiao zuo
+异烟肼	yi yan jing
+利福平	li fu ping
+乙胺丁醇	yi an ding chun
+吡嗪酰胺	bi qin xian an
+链霉素	lian mei su
+阿米卡星	a mi ka xing
+庆大霉素	qing da mei su
+妥布霉素	tuo bu mei su
+奈替米星	nai ti mi xing
+依替米星	yi ti mi xing
+新霉素	xin mei su
+卡那霉素	ka na mei su
+氟康唑	fu kang zuo
+伊曲康唑	yi qu kang zuo
+伏立康唑	fu li kang zuo
+泊沙康唑	po sha kang zuo
+酮康唑	tong kang zuo
+咪康唑	mi kang zuo
+克霉唑	ke mei zuo
+特比萘芬	te bi nai fen
+制霉菌素	zhi mei jun su
+两性霉素	liang xing mei su
+灰黄霉素	hui huang mei su
+氟胞嘧啶	fu bao mi ding
+阿昔洛韦	a xi luo wei
+伐昔洛韦	fa xi luo wei
+更昔洛韦	geng xi luo wei
+泛昔洛韦	fan xi luo wei
+喷昔洛韦	pen xi luo wei
+奥司他韦	ao si ta wei
+扎那米韦	zha na mi wei
+利巴韦林	li ba wei lin
+金刚烷胺	jin gang wan an
+金刚乙胺	jin gang yi an
+玛巴洛沙韦	ma ba luo sha wei
+恩替卡韦	en ti ka wei
+拉米夫定	la mi fu ding
+替比夫定	ti bi fu ding
+阿德福韦酯	a de fu wei zhi
+替诺福韦	ti nuo fu wei
+齐多夫定	qi duo fu ding
+司他夫定	si ta fu ding
+去羟肌苷	qu qiang ji gan
+奈韦拉平	nai wei la ping
+依非韦伦	yi fei wei lun
+洛匹那韦	luo pi na wei
+利托那韦	li tuo na wei
+硝苯地平	xiao ben di ping
+氨氯地平	an lv di ping
+非洛地平	fei luo di ping
+尼群地平	ni qun di ping
+尼莫地平	ni mo di ping
+左旋氨氯地平	zuo xuan an lv di ping
+拉西地平	la xi di ping
+贝尼地平	bei ni di ping
+乐卡地平	le ka di ping
+地尔硫卓	di er liu zhuo
+维拉帕米	wei la pa mi
+美托洛尔	mei tuo luo er
+比索洛尔	bi suo luo er
+阿替洛尔	a ti luo er
+普萘洛尔	pu nai luo er
+卡维地洛	ka wei di luo
+拉贝洛尔	la bei luo er
+索他洛尔	suo ta luo er
+艾司洛尔	ai si luo er
+卡托普利	ka tuo pu li
+依那普利	yi na pu li
+贝那普利	bei na pu li
+培哚普利	pei duo pu li
+福辛普利	fu xin pu li
+赖诺普利	lai nuo pu li
+雷米普利	lei mi pu li
+咪达普利	mi da pu li
+缬沙坦	xie sha tan
+氯沙坦	lv sha tan
+厄贝沙坦	e bei sha tan
+替米沙坦	ti mi sha tan
+坎地沙坦	kan di sha tan
+奥美沙坦	ao mei sha tan
+氢氯噻嗪	qing lv sai qin
+吲达帕胺	yin da pa an
+呋塞米	fu sai mi
+托拉塞米	tuo la sai mi
+布美他尼	bu mei ta ni
+螺内酯	luo nei zhi
+氨苯蝶啶	an ben die ding
+阿米洛利	a mi luo li
+甘露醇	gan lu chun
+甘油果糖	gan you guo tang
+硝酸甘油	xiao suan gan you
+硝酸异山梨酯	xiao suan yi shan li zhi
+单硝酸异山梨酯	dan xiao suan yi shan li zhi
+尼可地尔	ni ke di er
+曲美他嗪	qu mei ta qin
+地高辛	di gao xin
+去乙酰毛花苷	qu yi xian mao hua gan
+胺碘酮	an dian tong
+普罗帕酮	pu luo pa tong
+美西律	mei xi lv
+利多卡因	li duo ka yin
+阿托品	a tuo pin
+山莨菪碱	shan lang dang jian
+东莨菪碱	dong lang dang jian
+多巴胺	duo ba an
+多巴酚丁胺	duo ba fen ding an
+去甲肾上腺素	qu jia shen shang xian su
+肾上腺素	shen shang xian su
+异丙肾上腺素	yi bing shen shang xian su
+间羟胺	jian qiang an
+硝普钠	xiao pu na
+乌拉地尔	wu la di er
+酚妥拉明	fen tuo la ming
+氯吡格雷	lv bi ge lei
+替格瑞洛	ti ge rui luo
+双嘧达莫	shuang mi da mo
+华法林	hua fa lin
+利伐沙班	li fa sha ban
+阿哌沙班	a pai sha ban
+达比加群酯	da bi jia qun zhi
+肝素钠	gan su na
+低分子肝素	di fen zi gan su
+依诺肝素	yi nuo gan su
+尿激酶	niao ji mei
+链激酶	lian ji mei
+阿替普酶	a ti pu mei
+氨甲环酸	an jia huan suan
+氨甲苯酸	an jia ben suan
+鱼精蛋白	yu jing dan bai
+阿托伐他汀	a tuo fa ta ting
+瑞舒伐他汀	rui shu fa ta ting
+辛伐他汀	xin fa ta ting
+普伐他汀	pu fa ta ting
+氟伐他汀	fu fa ta ting
+匹伐他汀	pi fa ta ting
+洛伐他汀	luo fa ta ting
+非诺贝特	fei nuo bei te
+苯扎贝特	ben zha bei te
+吉非罗齐	ji fei luo qi
+依折麦布	yi zhe mai bu
+普罗布考	pu luo bu kao
+二甲双胍	er jia shuang gua
+格列本脲	ge lie ben niao
+格列齐特	ge lie qi te
+格列吡嗪	ge lie bi qin
+格列喹酮	ge lie kui tong
+格列美脲	ge lie mei niao
+瑞格列奈	rui ge lie nai
+那格列奈	na ge lie nai
+阿卡波糖	a ka bo tang
+伏格列波糖	fu ge lie bo tang
+吡格列酮	bi ge lie tong
+罗格列酮	luo ge lie tong
+西格列汀	xi ge lie ting
+沙格列汀	sha ge lie ting
+维格列汀	wei ge lie ting
+利格列汀	li ge lie ting
+达格列净	da ge lie jing
+恩格列净	en ge lie jing
+卡格列净	ka ge lie jing
+艾塞那肽	ai sai na tai
+利拉鲁肽	li la lu tai
+度拉糖肽	du la tang tai
+甘精胰岛素	gan jing yi dao su
+门冬胰岛素	men dong yi dao su
+赖脯胰岛素	lai pu yi dao su
+重组人胰岛素	chong zu ren yi dao su
+左甲状腺素	zuo jia zhuang xian su
+甲巯咪唑	jia qiu mi zuo
+丙硫氧嘧啶	bing liu yang mi ding
+碘化钾	dian hua jia
+泼尼松	po ni song
+泼尼松龙	po ni song long
+甲泼尼龙	jia po ni long
+地塞米松	di sai mi song
+倍他米松	bei ta mi song
+氢化可的松	qing hua ke di song
+可的松	ke di song
+曲安奈德	qu an nai de
+布地奈德	bu di nai de
+氟替卡松	fu ti ka song
+糠酸莫米松	kang suan mo mi song
+倍氯米松	bei lv mi song
+睾酮	gao tong
+十一酸睾酮	shi yi suan gao tong
+雌二醇	ci er chun
+戊酸雌二醇	wu suan ci er chun
+结合雌激素	jie he ci ji su
+黄体酮	huang ti tong
+地屈孕酮	di qu yun tong
+炔诺酮	que nuo tong
+左炔诺孕酮	zuo que nuo yun tong
+米非司酮	mi fei si tong
+米索前列醇	mi suo qian lie chun
+缩宫素	suo gong su
+垂体后叶素	chui ti hou ye su
+溴隐亭	xiu yin ting
+卡麦角林	ka mai jiao lin
+氯米芬	lv mi fen
+来曲唑	lai qu zuo
+他莫昔芬	ta mo xi fen
+阿那曲唑	a na qu zuo
+氟他胺	fu ta an
+比卡鲁胺	bi ka lu an
+戈舍瑞林	ge she rui lin
+亮丙瑞林	liang bing rui lin
+曲普瑞林	qu pu rui lin
+甲羟孕酮	jia qiang yun tong
+环磷酰胺	huan lin xian an
+异环磷酰胺	yi huan lin xian an
+顺铂	shun bo
+卡铂	ka bo
+奥沙利铂	ao sha li bo
+奈达铂	nai da bo
+洛铂	luo bo
+氟尿嘧啶	fu niao mi ding
+卡培他滨	ka pei ta bin
+替吉奥	ti ji ao
+吉西他滨	ji xi ta bin
+阿糖胞苷	a tang bao gan
+甲氨蝶呤	jia an die ling
+培美曲塞	pei mei qu sai
+依托泊苷	yi tuo po gan
+替尼泊苷	ti ni po gan
+长春新碱	chang chun xin jian
+长春瑞滨	chang chun rui bin
+紫杉醇	zi shan chun
+多西他赛	duo xi ta sai
+多柔比星	duo rou bi xing
+表柔比星	biao rou bi xing
+吡柔比星	bi rou bi xing
+米托蒽醌	mi tuo en kun
+丝裂霉素	si lie mei su
+博来霉素	bo lai mei su
+羟基脲	qiang ji niao
+达卡巴嗪	da ka ba qin
+伊马替尼	yi ma ti ni
+吉非替尼	ji fei ti ni
+厄洛替尼	e luo ti ni
+埃克替尼	ai ke ti ni
+奥希替尼	ao xi ti ni
+阿法替尼	a fa ti ni
+克唑替尼	ke zuo ti ni
+色瑞替尼	se rui ti ni
+阿来替尼	a lai ti ni
+曲妥珠单抗	qu tuo zhu dan kang
+帕妥珠单抗	pa tuo zhu dan kang
+贝伐珠单抗	bei fa zhu dan kang
+利妥昔单抗	li tuo xi dan kang
+西妥昔单抗	xi tuo xi dan kang
+尼妥珠单抗	ni tuo zhu dan kang
+纳武利尤单抗	na wu li you dan kang
+帕博利珠单抗	pa bo li zhu dan kang
+信迪利单抗	xin di li dan kang
+卡瑞利珠单抗	ka rui li zhu dan kang
+特瑞普利单抗	te rui pu li dan kang
+替雷利珠单抗	ti lei li zhu dan kang
+阿达木单抗	a da mu dan kang
+英夫利西单抗	ying fu li xi dan kang
+依那西普	yi na xi pu
+托珠单抗	tuo zhu dan kang
+来氟米特	lai fu mi te
+柳氮磺吡啶	liu dan huang bi ding
+羟氯喹	qiang lv kui
+青霉胺	qing mei an
+硫唑嘌呤	liu zuo piao ling
+环孢素	huan bao su
+他克莫司	ta ke mo si
+西罗莫司	xi luo mo si
+吗替麦考酚酯	ma ti mai kao fen zhi
+沙利度胺	sha li du an
+来那度胺	lai na du an
+硼替佐米	peng ti zuo mi
+卡非佐米	ka fei zuo mi
+伊沙佐米	yi sha zuo mi
+别嘌醇	bie piao chun
+非布司他	fei bu si ta
+苯溴马隆	ben xiu ma long
+秋水仙碱	qiu shui xian jian
+碳酸氢钠	tan suan qing na
+枸橼酸铋钾	ju yuan suan bi jia
+奥美拉唑	ao mei la zuo
+兰索拉唑	lan suo la zuo
+泮托拉唑	pan tuo la zuo
+雷贝拉唑	lei bei la zuo
+艾司奥美拉唑	ai si ao mei la zuo
+艾普拉唑	ai pu la zuo
+雷尼替丁	lei ni ti ding
+法莫替丁	fa mo ti ding
+西咪替丁	xi mi ti ding
+尼扎替丁	ni zha ti ding
+铝碳酸镁	lv tan suan mei
+硫糖铝	liu tang lv
+磷酸铝	lin suan lv
+蒙脱石散	meng tuo shi san
+多潘立酮	duo pan li tong
+莫沙必利	mo sha bi li
+伊托必利	yi tuo bi li
+甲氧氯普胺	jia yang lv pu an
+昂丹司琼	ang dan si qiong
+格拉司琼	ge la si qiong
+托烷司琼	tuo wan si qiong
+阿瑞匹坦	a rui pi tan
+匹维溴铵	pi wei xiu an
+曲美布汀	qu mei bu ting
+复方谷氨酰胺	fu fang gu an xian an
+双歧杆菌	shuang qi gan jun
+乳酸菌素	ru suan jun su
+地衣芽孢杆菌	di yi ya bao gan jun
+枯草杆菌	ku cao gan jun
+酪酸梭菌	lao suan suo jun
+乳果糖	ru guo tang
+聚乙二醇	ju yi er chun
+开塞露	kai sai lu
+液状石蜡	ye zhuang shi la
+酚酞	fen tai
+比沙可啶	bi sha ke ding
+洛哌丁胺	luo pai ding an
+消旋卡多曲	xiao xuan ka duo qu
+谷氨酸	gu an suan
+联苯双酯	lian ben shuang zhi
+双环醇	shuang huan chun
+甘草酸二铵	gan cao suan er an
+多烯磷脂酰胆碱	duo xi lin zhi xian dan jian
+腺苷蛋氨酸	xian gan dan an suan
+熊去氧胆酸	xiong qu yang dan suan
+茴三硫	hui san liu
+门冬氨酸鸟氨酸	men dong an suan niao an suan
+精氨酸	jing an suan
+支链氨基酸	zhi lian an ji suan
+左卡尼汀	zuo ka ni ting
+氨溴索	an xiu suo
+溴己新	xiu ji xin
+乙酰半胱氨酸	yi xian ban guang an suan
+羧甲司坦	suo jia si tan
+桉柠蒎	an ning pai
+氨茶碱	an cha jian
+多索茶碱	duo suo cha jian
+茶碱	cha jian
+沙丁胺醇	sha ding an chun
+特布他林	te bu ta lin
+福莫特罗	fu mo te luo
+沙美特罗	sha mei te luo
+班布特罗	ban bu te luo
+丙卡特罗	bing ka te luo
+异丙托溴铵	yi bing tuo xiu an
+噻托溴铵	sai tuo xiu an
+乌美溴铵	wu mei xiu an
+格隆溴铵	ge long xiu an
+孟鲁司特	meng lu si te
+扎鲁司特	zha lu si te
+普仑司特	pu lun si te
+色甘酸钠	se gan suan na
+酮替芬	tong ti fen
+氯雷他定	lv lei ta ding
+地氯雷他定	di lv lei ta ding
+西替利嗪	xi ti li qin
+左西替利嗪	zuo xi ti li qin
+非索非那定	fei suo fei na ding
+依巴斯汀	yi ba si ting
+咪唑斯汀	mi zuo si ting
+氯苯那敏	lv ben na min
+苯海拉明	ben hai la ming
+异丙嗪	yi bing qin
+赛庚啶	sai geng ding
+曲尼司特	qu ni si te
+麻黄碱	ma huang jian
+羟甲唑啉	qiang jia zuo lin
+赛洛唑啉	sai luo zuo lin
+右美沙芬	you mei sha fen
+可待因	ke dai yin
+福尔可定	fu er ke ding
+喷托维林	pen tuo wei lin
+苯丙哌林	ben bing pai lin
+愈创甘油醚	yu chuang gan you mi
+氯化铵	lv hua an
+氨溴特罗	an xiu te luo
+麦角胺	mai jiao an
+舒马曲普坦	shu ma qu pu tan
+佐米曲普坦	zuo mi qu pu tan
+利扎曲普坦	li zha qu pu tan
+氟桂利嗪	fu gui li qin
+倍他司汀	bei ta si ting
+地芬尼多	di fen ni duo
+茶苯海明	cha ben hai ming
+苯巴比妥	ben ba bi tuo
+地西泮	di xi pan
+艾司唑仑	ai si zuo lun
+阿普唑仑	a pu zuo lun
+劳拉西泮	lao la xi pan
+氯硝西泮	lv xiao xi pan
+硝西泮	xiao xi pan
+咪达唑仑	mi da zuo lun
+三唑仑	san zuo lun
+佐匹克隆	zuo pi ke long
+唑吡坦	zuo bi tan
+扎来普隆	zha lai pu long
+右佐匹克隆	you zuo pi ke long
+雷美替胺	lei mei ti an
+水合氯醛	shui he lv quan
+丙泊酚	bing po fen
+依托咪酯	yi tuo mi zhi
+氯胺酮	lv an tong
+芬太尼	fen tai ni
+瑞芬太尼	rui fen tai ni
+舒芬太尼	shu fen tai ni
+吗啡	ma fei
+哌替啶	pai ti ding
+布桂嗪	bu gui qin
+曲马多	qu ma duo
+羟考酮	qiang kao tong
+美沙酮	mei sha tong
+丁丙诺啡	ding bing nuo fei
+纳洛酮	na luo tong
+氟马西尼	fu ma xi ni
+卡马西平	ka ma xi ping
+奥卡西平	ao ka xi ping
+丙戊酸钠	bing wu suan na
+苯妥英钠	ben tuo ying na
+拉莫三嗪	la mo san qin
+左乙拉西坦	zuo yi la xi tan
+托吡酯	tuo bi zhi
+加巴喷丁	jia ba pen ding
+普瑞巴林	pu rui ba lin
+乙琥胺	yi hu an
+氟哌啶醇	fu pai ding chun
+氯丙嗪	lv bing qin
+奥氮平	ao dan ping
+喹硫平	kui liu ping
+利培酮	li pei tong
+阿立哌唑	a li pai zuo
+帕利哌酮	pa li pai tong
+齐拉西酮	qi la xi tong
+氨磺必利	an huang bi li
+舒必利	shu bi li
+氯氮平	lv dan ping
+丙米嗪	bing mi qin
+阿米替林	a mi ti lin
+多塞平	duo sai ping
+氯米帕明	lv mi pa ming
+舍曲林	she qu lin
+氟西汀	fu xi ting
+帕罗西汀	pa luo xi ting
+氟伏沙明	fu fu sha ming
+西酞普兰	xi tai pu lan
+艾司西酞普兰	ai si xi tai pu lan
+文拉法辛	wen la fa xin
+度洛西汀	du luo xi ting
+米氮平	mi dan ping
+曲唑酮	qu zuo tong
+安非他酮	an fei ta tong
+瑞波西汀	rui bo xi ting
+阿戈美拉汀	a ge mei la ting
+坦度螺酮	tan du luo tong
+丁螺环酮	ding luo huan tong
+多奈哌齐	duo nai pai qi
+卡巴拉汀	ka ba la ting
+加兰他敏	jia lan ta min
+美金刚	mei jin gang
+石杉碱甲	shi shan jian jia
+奥拉西坦	ao la xi tan
+吡拉西坦	bi la xi tan
+胞磷胆碱	bao lin dan jian
+银杏叶提取物	yin xing ye ti qu wu
+左旋多巴	zuo xuan duo ba
+卡比多巴	ka bi duo ba
+恩他卡朋	en ta ka peng
+普拉克索	pu la ke suo
+罗匹尼罗	luo pi ni luo
+吡贝地尔	bi bei di er
+苯海索	ben hai suo
+司来吉兰	si lai ji lan
+雷沙吉兰	lei sha ji lan
+依达拉奉	yi da la feng
+丁苯酞	ding ben tai
+甲钴胺	jia gu an
+腺苷钴胺	xian gan gu an
+硫辛酸	liu xin suan
+依帕司他	yi pa si ta
+前列地尔	qian lie di er
+贝前列素钠	bei qian lie su na
+西洛他唑	xi luo ta zuo
+沙格雷酯	sha ge lei zhi
+羟苯磺酸钙	qiang ben huang suan gai
+复方甘草酸苷	fu fang gan cao suan gan
+骨化三醇	gu hua san chun
+阿法骨化醇	a fa gu hua chun
+碳酸钙	tan suan gai
+乳酸钙	ru suan gai
+葡萄糖酸钙	pu tao tang suan gai
+枸橼酸钙	ju yuan suan gai
+硫酸亚铁	liu suan ya tie
+富马酸亚铁	fu ma suan ya tie
+琥珀酸亚铁	hu po suan ya tie
+蔗糖铁	zhe tang tie
+重组人促红素	chong zu ren cu hong su
+氯化钾	lv hua jia
+枸橼酸钾	ju yuan suan jia
+氯化钠	lv hua na
+果糖	guo tang
+木糖醇	mu tang chun
+脂肪乳	zhi fang ru
+人血白蛋白	ren xue bai dan bai
+免疫球蛋白	mian yi qiu dan bai
+胸腺肽	xiong xian tai
+干扰素	gan rao su
+白细胞介素	bai xi bao jie su
+促红素	cu hong su
+血凝酶	xue ning mei
+碘伏	dian fu
+聚维酮碘	ju wei tong dian
+过氧化氢	guo yang hua qing
+高锰酸钾	gao meng suan jia
+苯扎氯铵	ben zha lv an
+氯己定	lv ji ding
+红霉素软膏	hong mei su ruan gao
+磺胺嘧啶银	huang an mi ding yin
+联苯苄唑	lian ben bian zuo
+氧化锌	yang hua xin
+阿达帕林	a da pa lin
+过氧苯甲酰	guo yang ben jia xian
+吡美莫司	bi mei mo si
+卡泊三醇	ka po san chun
+玻璃酸钠	bo li suan na
+透明质酸	tou ming zhi suan
+布地奈德鼻喷	bu di nai de bi pen
+氯雷他定糖浆	lv lei ta ding tang jiang
+对乙酰氨基酚栓	dui yi xian an ji fen shuan
+双氯芬酸钠栓	shuang lv fen suan na shuan
+吲哚美辛栓	yin duo mei xin shuan

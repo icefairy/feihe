@@ -1,0 +1,441 @@
+# 自动生成的补充词表（place）
+# 由 tools/gen_extra.py 从 tools/wordlists/place*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+大庆	da qing
+鸡西	ji xi
+鹤岗	he gang
+双鸭山	shuang ya shan
+伊春	yi chun
+七台河	qi tai he
+绥化	sui hua
+黑河	hei he
+邯郸	han dan
+邢台	xing tai
+保定	bao ding
+衡水	heng shui
+太原	tai yuan
+大同	da tong
+阳泉	yang quan
+长治	chang zhi
+晋城	jin cheng
+朔州	shuo zhou
+晋中	jin zhong
+运城	yun cheng
+忻州	xin zhou
+临汾	lin fen
+吕梁	lv liang
+鞍山	an shan
+本溪	ben xi
+锦州	jin zhou
+营口	ying kou
+阜新	fu xin
+辽阳	liao yang
+盘锦	pan jin
+铁岭	tie ling
+葫芦岛	hu lu dao
+四平	si ping
+辽源	liao yuan
+通化	tong hua
+白山	bai shan
+松原	song yuan
+白城	bai cheng
+延边	yan bian
+常州	chang zhou
+南通	nan tong
+淮安	huai an
+盐城	yan cheng
+镇江	zhen jiang
+宿迁	su qian
+嘉兴	jia xing
+湖州	hu zhou
+金华	jin hua
+舟山	zhou shan
+丽水	li shui
+芜湖	wu hu
+铜陵	tong ling
+安庆	an qing
+黄山	huang shan
+滁州	chu zhou
+阜阳	fu yang
+宿州	su zhou
+六安	lu an
+亳州	bo zhou
+池州	chi zhou
+宣城	xuan cheng
+三明	san ming
+漳州	zhang zhou
+南平	nan ping
+龙岩	long yan
+宁德	ning de
+萍乡	ping xiang
+新余	xin yu
+鹰潭	ying tan
+赣州	gan zhou
+吉安	ji an
+抚州	fu zhou
+济南	ji nan
+淄博	zi bo
+枣庄	zao zhuang
+东营	dong ying
+济宁	ji ning
+泰安	tai an
+临沂	lin yi
+德州	de zhou
+滨州	bin zhou
+菏泽	he ze
+平顶山	ping ding shan
+安阳	an yang
+鹤壁	he bi
+新乡	xin xiang
+焦作	jiao zuo
+许昌	xu chang
+漯河	ta he
+南阳	nan yang
+信阳	xin yang
+周口	zhou kou
+驻马店	zhu ma dian
+黄石	huang shi
+十堰	shi yan
+宜昌	yi chang
+襄阳	xiang yang
+鄂州	e zhou
+荆门	jing men
+孝感	xiao gan
+黄冈	huang gang
+咸宁	xian ning
+随州	sui zhou
+恩施	en shi
+株洲	zhu zhou
+湘潭	xiang tan
+邵阳	shao yang
+常德	chang de
+益阳	yi yang
+郴州	chen zhou
+永州	yong zhou
+怀化	huai hua
+娄底	lou di
+韶关	shao guan
+汕头	shan tou
+江门	jiang men
+湛江	zhan jiang
+茂名	mao ming
+惠州	hui zhou
+汕尾	shan wei
+阳江	yang jiang
+清远	qing yuan
+潮州	chao zhou
+揭阳	jie yang
+云浮	yun fu
+梧州	wu zhou
+防城港	fang cheng gang
+钦州	qin zhou
+贵港	gui gang
+玉林	yu lin
+百色	bai se
+贺州	he zhou
+河池	he chi
+崇左	chong zuo
+三沙	san sha
+儋州	dan zhou
+自贡	zi gong
+攀枝花	pan zhi hua
+泸州	lu zhou
+德阳	de yang
+绵阳	mian yang
+广元	guang yuan
+遂宁	sui ning
+内江	nei jiang
+眉山	mei shan
+达州	da zhou
+巴中	ba zhong
+资阳	zi yang
+阿坝	a ba
+甘孜	gan zi
+凉山	liang shan
+六盘水	liu pan shui
+安顺	an shun
+毕节	bi jie
+铜仁	tong ren
+黔西南	qian xi nan
+黔东南	qian dong nan
+黔南	qian nan
+曲靖	qu jing
+玉溪	yu xi
+保山	bao shan
+昭通	zhao tong
+临沧	lin cang
+楚雄	chu xiong
+红河	hong he
+文山	wen shan
+大理	da li
+德宏	de hong
+怒江	nu jiang
+迪庆	di qing
+日喀则	ri ka ze
+昌都	chang dou
+林芝	lin zhi
+山南	shan nan
+那曲	na qu
+铜川	tong chuan
+宝鸡	bao ji
+渭南	wei nan
+汉中	han zhong
+榆林	yu lin
+商洛	shang luo
+嘉峪关	jia yu guan
+金昌	jin chang
+天水	tian shui
+武威	wu wei
+张掖	zhang ye
+平凉	ping liang
+酒泉	jiu quan
+庆阳	qing yang
+定西	ding xi
+陇南	long nan
+临夏	lin xia
+甘南	gan nan
+海东	hai dong
+海北	hai bei
+黄南	huang nan
+海南州	hai nan zhou
+果洛	guo luo
+玉树	yu shu
+海西	hai xi
+石嘴山	shi zui shan
+吴忠	wu zhong
+固原	gu yuan
+中卫	zhong wei
+克拉玛依	ke la ma yi
+吐鲁番	tu lu fan
+哈密	ha mi
+昌吉	chang ji
+博尔塔拉	bo er ta la
+巴音郭楞	ba yin guo leng
+阿克苏	a ke su
+克孜勒苏	ke zi lei su
+喀什	ka shi
+伊犁	yi li
+塔城	ta cheng
+阿勒泰	a lei tai
+石河子	shi he zi
+五家渠	wu jia qu
+阿拉尔	a la er
+图木舒克	tu mu shu ke
+昆玉	kun yu
+台中	tai zhong
+台南	tai nan
+新北	xin bei
+基隆	ji long
+新竹	xin zhu
+嘉义	jia yi
+石景山区	shi jing shan qu
+通州区	tong zhou qu
+大兴区	da xing qu
+顺义区	shun yi qu
+房山区	fang shan qu
+门头沟	men tou gou
+平谷	ping gu
+密云	mi yun
+延庆	yan qing
+黄浦	huang pu
+长宁	zhang ning
+静安	jing an
+虹口	hong kou
+杨浦	yang pu
+闵行	min xing
+宝山	bao shan
+嘉定	jia ding
+松江	song jiang
+青浦	qing pu
+奉贤	feng xian
+崇明	chong ming
+河北区	he bei qu
+南开区	nan kai qu
+红桥区	hong qiao qu
+武清	wu qing
+宝坻	bao di
+蓟州	ji zhou
+渝中	yu zhong
+江北	jiang bei
+沙坪坝	sha ping ba
+九龙坡	jiu long po
+北碚	bei bei
+渝北	yu bei
+巴南	ba nan
+杭州西湖	hang zhou xi hu
+上城	shang cheng
+拱墅	gong shu
+滨江	bin jiang
+萧山	xiao shan
+余杭	yu hang
+临平	lin ping
+钱塘	qian tang
+富阳	fu yang
+临安	lin an
+桐庐	tong lu
+淳安	chun an
+建德	jian de
+江宁	jiang ning
+秦淮	qin huai
+建邺	jian ye
+浦口	pu kou
+栖霞	qi xia
+雨花台	yu hua tai
+溧水	li shui
+高淳	gao chun
+天河	tian he
+越秀	yue xiu
+海珠	hai zhu
+荔湾	li wan
+黄埔	huang pu
+番禺	pan yu
+南沙	nan sha
+从化	cong hua
+增城	zeng cheng
+盐田	yan tian
+宝安	bao an
+坪山	ping shan
+江岸	jiang an
+江汉	jiang han
+硚口	qiao kou
+汉阳	han yang
+洪山	hong shan
+东西湖	dong xi hu
+汉南	han nan
+蔡甸	cai dian
+江夏	jiang xia
+黄陂	huang pi
+新洲	xin zhou
+青羊	qing yang
+武侯	wu hou
+成华	cheng hua
+龙泉驿	long quan yi
+青白江	qing bai jiang
+新都	xin dou
+温江	wen jiang
+双流	shuang liu
+郫都	pi dou
+新津	xin jin
+都江堰	du jiang yan
+彭州	peng zhou
+邛崃	qiong lai
+崇州	chong zhou
+简阳	jian yang
+碑林	bei lin
+雁塔	yan ta
+莲湖	lian hu
+未央	wei yang
+灞桥	ba qiao
+高陵	gao ling
+鄠邑	hu yi
+临潼	lin tong
+蓝田	lan tian
+周至	zhou zhi
+沙依巴克	sha yi ba ke
+新市	xin shi
+水磨沟	shui mo gou
+头屯河	tou tun he
+达坂城	da ban cheng
+米东	mi dong
+珠江	zhu jiang
+海河	hai he
+松花江	song hua jiang
+辽河	liao he
+雅鲁藏布江	ya lu zang bu jiang
+澜沧江	lan cang jiang
+汉江	han jiang
+湘江	xiang jiang
+赣江	gan jiang
+闽江	min jiang
+钱塘江	qian tang jiang
+岷江	min jiang
+嘉陵江	jia ling jiang
+乌江	wu jiang
+洞庭湖	dong ting hu
+鄱阳湖	po yang hu
+洪泽湖	hong ze hu
+巢湖	chao hu
+青海湖	qing hai hu
+纳木错	na mu cuo
+滇池	dian chi
+洱海	er hai
+千岛湖	qian dao hu
+泰山	tai shan
+嵩山	song shan
+衡山	heng shan
+恒山	heng shan
+武当山	wu dang shan
+雁荡山	yan dang shan
+昆仑山	kun lun shan
+祁连山	qi lian shan
+秦岭	qin ling
+太行山	tai hang shan
+大别山	da bie shan
+五指山	wu zhi shan
+玉龙雪山	yu long xue shan
+珠穆朗玛峰	zhu mu lang ma feng
+贡嘎山	gong ga shan
+大兴安岭	da xing an ling
+小兴安岭	xiao xing an ling
+阴山	yin shan
+贺兰山	he lan shan
+六盘山	liu pan shan
+阿尔泰山	a er tai shan
+喀喇昆仑	ka la kun lun
+巴颜喀拉	ba yan ka la
+唐古拉	tang gu la
+冈底斯	gang di si
+喜马拉雅	xi ma la ya
+横断山	heng duan shan
+南岭	nan ling
+雪峰山	xue feng shan
+罗霄山	luo xiao shan
+天目山	tian mu shan
+莫干山	mo gan shan
+普陀山	pu tuo shan
+九华山	jiu hua shan
+五台山	wu tai shan
+崂山	lao shan
+沂蒙山	yi meng shan
+伏牛山	fu niu shan
+桐柏山	tong bai shan
+大洪山	da hong shan
+武陵山	wu ling shan
+苗岭	miao ling
+猫儿山	mao er shan
+十万大山	shi wan da shan
+海南岛	hai nan dao
+台湾岛	tai wan dao
+舟山群岛	zhou shan qun dao
+崇明岛	chong ming dao
+长兴岛	chang xing dao
+横沙岛	heng sha dao
+南沙群岛	nan sha qun dao
+西沙群岛	xi sha qun dao
+中沙群岛	zhong sha qun dao
+东沙群岛	dong sha qun dao
+赤尾屿	chi wei yu
+黄岩岛	huang yan dao
+北部湾	bei bu wan
+琼州海峡	qiong zhou hai xia
+台湾海峡	tai wan hai xia
+马六甲	ma liu jia
+苏伊士	su yi shi
+巴拿马	ba na ma
+红海	hong hai
+黑海	hei hai
+波罗的海	bo luo di hai
+北冰洋	bei bing yang
+印度洋	yin du yang
+北美洲	bei mei zhou
+南美洲	nan mei zhou
+大洋洲	da yang zhou
+南极洲	nan ji zhou
+西亚	xi ya
+南欧	nan ou
+巴尔干	ba er gan
+斯堪的纳维亚	si kan de na wei ya
+伊比利亚	yi bi li ya
+阿拉伯半岛	a la bo ban dao
+朝鲜半岛	chao xian ban dao
+中南半岛	zhong nan ban dao

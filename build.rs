@@ -101,6 +101,17 @@ fn gen_dict_bin(manifest: &std::path::Path, out: &std::path::Path) {
     }
     sources.push("src/dict.txt");
     sources.push("src/extra_dict.txt");
+    // 按分类自动生成的补充词表（`tools/gen_extra.py` 产出）。
+    //
+    // 分文件而不是全塞进 `extra_dict.txt`：那份是手工挑的，混进上万行生成内容
+    // 之后就没人愿意维护了。顺序在这里无关紧要——去重是先到先得，这些文件都在
+    // `dict.txt` 之后，所以不会抢走基础词库里的词。
+    sources.push("src/extra_common.txt");
+    sources.push("src/extra_it.txt");
+    sources.push("src/extra_place.txt");
+    sources.push("src/extra_drug.txt");
+    sources.push("src/extra_tcm_herb.txt");
+    sources.push("src/extra_tcm_patent.txt");
 
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();

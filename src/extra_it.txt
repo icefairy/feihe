@@ -1,0 +1,356 @@
+# 自动生成的补充词表（it）
+# 由 tools/gen_extra.py 从 tools/wordlists/it*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+机械硬盘	ji xie ying pan
+虚拟机	xu ni ji
+异步	yi bu
+常量	chang liang
+哈希	ha xi
+元组	yuan zu
+多态	duo tai
+反向代理	fan xiang dai li
+负载均衡	fu zai jun heng
+集群部署	ji qun bu shu
+容器化	rong qi hua
+蓝绿	lan lv
+缩容	suo rong
+兜底	dou di
+竞态	jing tai
+信号量	xin hao liang
+死循环	si xun huan
+栈溢出	zhan yi chu
+空指针	kong zhi zhen
+野指针	ye zhi zhen
+未定义	wei ding yi
+告警	gao jing
+链路	lian lu
+看板	kan ban
+报表	bao biao
+接口文档	jie kou wen dang
+缩进	suo jin
+换行	huan hang
+解密	jie mi
+公钥	gong yao
+私钥	si yao
+令牌	ling pai
+会话	hui hua
+登录态	deng lu tai
+租户	zu hu
+双因素	shuang yin su
+单点登录	dan dian deng lu
+跨域	kua yu
+同源	tong yuan
+防盗链	fang dao lian
+限速	xian su
+重试	zhong shi
+轮询	lun xun
+推送	tui song
+发布订阅	fa bu ding yue
+队列积压	dui lie ji ya
+主从	zhu cong
+分片	fen pian
+慢查询	man cha xun
+执行计划	zhi xing ji hua
+事务隔离	shi wu ge li
+行锁	xing suo
+表锁	biao suo
+外键	wai jian
+联合索引	lian he suo yin
+覆盖索引	fu gai suo yin
+回表	hui biao
+死锁检测	si suo jian ce
+内存池	nei cun chi
+对象池	dui xiang chi
+分代	fen dai
+引用计数	yin yong ji shu
+逃逸分析	tao yi fen xi
+字节码	zi jie ma
+中间码	zhong jian ma
+静态链接	jing tai lian jie
+动态链接	dong tai lian jie
+栈帧	zhan zhen
+调用栈	diao yong zhan
+单步	dan bu
+调试器	tiao shi qi
+性能分析	xing neng fen xi
+火焰图	huo yan tu
+基准测试	ji zhun ce shi
+压测	ya ce
+单元测试	dan yuan ce shi
+冒烟测试	mao yan ce shi
+端到端	duan dao duan
+断言失败	duan yan shi bai
+版本控制	ban ben kong zhi
+拉取	la qu
+发布分支	fa bu fen zhi
+代码评审	dai ma ping shen
+重构	zhong gou
+技术债	ji shu zhai
+单例	dan li
+观察者	guan cha zhe
+装饰器	zhuang shi qi
+责任链	ze ren lian
+领域模型	ling yu mo xing
+切图	qie tu
+栅格	zha ge
+响应式	xiang ying shi
+断点续传	duan dian xu chuan
+首屏	shou ping
+白屏	bai ping
+骨架屏	gu jia ping
+懒加载	lan jia zai
+预加载	yu jia zai
+按需加载	an xu jia zai
+锁文件	suo wen jian
+工作区	gong zuo qu
+镜像仓库	jing xiang cang ku
+制品库	zhi pin ku
+定时任务	ding shi ren wu
+守护进程	shou hu jin cheng
+服务注册	fu wu zhu ce
+服务发现	fu wu fa xian
+配置中心	pei zhi zhong xin
+脚本语言	jiao ben yu yan
+正则	zheng ze
+通配符	tong pei fu
+转义	zhuan yi
+分隔符	fen ge fu
+绝对路径	jue dui lu jing
+相对路径	xiang dui lu jing
+子目录	zi mu lu
+软链接	ruan lian jie
+硬链接	ying lian jie
+挂载	gua zai
+分区表	fen qu biao
+权限位	quan xian wei
+读写执行	du xie zhi xing
+覆盖写	fu gai xie
+截断	jie duan
+偏移	pian yi
+编码格式	bian ma ge shi
+字符集	zi fu ji
+十六进制	shi liu jin zhi
+补码	bu ma
+位运算	wei yun suan
+掩码	yan ma
+标志位	biao zhi wei
+字节序	zi jie xu
+校验和	jiao yan he
+散列	san lie
+随机数	sui ji shu
+时间戳	shi jian chuo
+夏令时	xia ling shi
+字重	zi zhong
+行高	xing gao
+边距	bian ju
+内边距	nei bian ju
+外边距	wai bian ju
+圆角	yuan jiao
+蒙版	meng ban
+画布	hua bu
+色域	se yu
+帧率	zhen lv
+重绘	zhong hui
+重排	zhong pai
+事件循环	shi jian xun huan
+微任务	wei ren wu
+宏任务	hong ren wu
+事件冒泡	shi jian mao pao
+代理事件	dai li shi jian
+节流	jie liu
+弹性布局	tan xing bu ju
+网格布局	wang ge bu ju
+盒模型	he mo xing
+伪类	wei lei
+选择器	xuan ze qi
+样式表	yang shi biao
+预处理器	yu chu li qi
+变量作用域	bian liang zuo yong yu
+严格模式	yan ge mo shi
+类型推断	lei xing tui duan
+类型转换	lei xing zhuan huan
+装箱	zhuang xiang
+拆箱	chai xiang
+元数据	yuan shu ju
+结构体	jie gou ti
+位域	wei yu
+流式	liu shi
+游标	you biao
+偏移分页	pian yi fen ye
+虚拟列表	xu ni lie biao
+无限滚动	wu xian gun dong
+热区	re qu
+埋点上报	mai dian shang bao
+覆盖率统计	fu gai lv tong ji
+健康检查	jian kang jian cha
+存活探针	cun huo tan zhen
+就绪探针	jiu xu tan zhen
+滚动更新	gun dong geng xin
+副本集	fu ben ji
+状态集	zhuang tai ji
+守护集	shou hu ji
+标签选择器	biao qian xuan ze qi
+资源配额	zi yuan pei e
+弹性伸缩	tan xing shen suo
+云主机	yun zhu ji
+对象存储	dui xiang cun chu
+块存储	kuai cun chu
+文件存储	wen jian cun chu
+内容分发	nei rong fen fa
+边缘节点	bian yuan jie dian
+源站	yuan zhan
+回源	hui yuan
+预热	yu re
+缓存击穿	huan cun ji chuan
+冷启动	leng qi dong
+预热数据	yu re shu ju
+全量	quan liang
+同步延迟	tong bu yan chi
+主备	zhu bei
+两地三中心	liang di san zhong xin
+容灾	rong zai
+备份	bei fen
+快照	kuai zhao
+复现	fu xian
+热修	re xiu
+语义化	yu yi hua
+预发布	yu fa bu
+生产环境	sheng chan huan jing
+测试环境	ce shi huan jing
+开发环境	kai fa huan jing
+预发环境	yu fa huan jing
+沙箱	sha xiang
+隔离环境	ge li huan jing
+白名单	bai ming dan
+灰度名单	hui du ming dan
+配置项	pei zhi xiang
+默认值	mo ren zhi
+兜底值	dou di zhi
+校验规则	jiao yan gui ze
+表结构	biao jie gou
+主键值	zhu jian zhi
+唯一约束	wei yi yue shu
+非空	fei kong
+默认约束	mo ren yue shu
+索引失效	suo yin shi xiao
+全表扫描	quan biao sao miao
+数据集	shu ju ji
+维度	wei du
+指标口径	zhi biao kou jing
+去重	qu zhong
+下钻	xia zuan
+上卷	shang juan
+补全	bu quan
+去噪	qu zao
+标注数据	biao zhu shu ju
+超参	chao can
+调参	diao can
+过拟合	guo ni he
+欠拟合	qian ni he
+损失函数	sun shi han shu
+梯度	ti du
+召回率	zhao hui lv
+精确率	jing que lv
+混淆矩阵	hun xiao ju zhen
+基线	ji xian
+大模型	da mo xing
+提示词	ti shi ci
+检索增强	jian suo zeng qiang
+微调	wei diao
+多模态	duo mo tai
+机器翻译	ji qi fan yi
+推荐系统	tui jian xi tong
+协同过滤	xie tong guo lv
+粗排	cu pai
+精排	jing pai
+排序模型	pai xu mo xing
+实时计算	shi shi ji suan
+离线计算	li xian ji suan
+批处理任务	pi chu li ren wu
+消息中间件	xiao xi zhong jian jian
+任务队列	ren wu dui lie
+定时调度	ding shi diao du
+依赖编排	yi lai bian pai
+数据同步	shu ju tong bu
+数据订阅	shu ju ding yue
+数据血缘	shu ju xue yuan
+元数据中心	yuan shu ju zhong xin
+数据质量	shu ju zhi liang
+数据治理	shu ju zhi li
+数据资产	shu ju zi chan
+数据目录	shu ju mu lu
+权限管控	quan xian guan kong
+审计日志	shen ji ri zhi
+操作日志	cao zuo ri zhi
+访问日志	fang wen ri zhi
+错误码	cuo wu ma
+异常栈	yi chang zhan
+崩溃日志	beng kui ri zhi
+核心转储	he xin zhuan chu
+堆转储	dui zhuan chu
+内存快照	nei cun kuai zhao
+性能瓶颈	xing neng ping jing
+热点函数	re dian han shu
+耗时分布	hao shi fen bu
+平均耗时	ping jun hao shi
+尾延迟	wei yan chi
+每秒查询	mei miao cha xun
+每秒事务	mei miao shi wu
+日活	ri huo
+月活	yue huo
+漏斗	lou dou
+埋点方案	mai dian fang an
+灰度实验	hui du shi yan
+对照组	dui zhao zu
+置信度	zhi xin du
+显著性	xian zhu xing
+归因	gui yin
+下钻分析	xia zuan fen xi
+看板搭建	kan ban da jian
+自助分析	zi zhu fen xi
+指标平台	zhi biao ping tai
+报表平台	bao biao ping tai
+数据接口	shu ju jie kou
+开放平台	kai fang ping tai
+应用市场	ying yong shi chang
+服务号	fu wu hao
+订阅号	ding yue hao
+消息模板	xiao xi mu ban
+模板消息	mu ban xiao xi
+用户画像	yong hu hua xiang
+标签体系	biao qian ti xi
+人群包	ren qun bao
+推送通道	tui song tong dao
+厂商通道	chang shang tong dao
+到达率	dao da lv
+卸载率	xie zai lv
+渠道包	qu dao bao
+增量更新	zeng liang geng xin
+补丁包	bu ding bao
+签名校验	qian ming jiao yan
+完整性校验	wan zheng xing jiao yan
+防篡改	fang cuan gai
+加壳	jia ke
+反编译	fan bian yi
+逆向	ni xiang
+补丁日	bu ding ri
+渗透测试	shen tou ce shi
+越权	yue quan
+跨站脚本	kua zhan jiao ben
+勒索软件	le suo ruan jian
+提权	ti quan
+横移	heng yi
+免杀	mian sha
+沙箱检测	sha xiang jian ce
+白名单进程	bai ming dan jin cheng
+最小权限	zui xiao quan xian
+密钥轮换	mi yao lun huan
+证书链	zheng shu lian
+双向认证	shuang xiang ren zheng
+传输加密	chuan shu jia mi
+存储加密	cun chu jia mi
+脱敏	tuo min
+溯源	su yuan
+合规	he gui
+等保	deng bao
+数据出境	shu ju chu jing

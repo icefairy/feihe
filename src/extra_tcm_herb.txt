@@ -1,0 +1,469 @@
+# 自动生成的补充词表（tcm_herb）
+# 由 tools/gen_extra.py 从 tools/wordlists/tcm_herb*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+白术	bai zhu
+茯苓	fu ling
+川芎	chuan xiong
+白芍	bai shao
+熟地黄	shu di huang
+生地黄	sheng di huang
+金银花	jin yin hua
+连翘	lian qiao
+板蓝根	ban lan gen
+大青叶	da qing ye
+蒲公英	pu gong ying
+紫花地丁	zi hua di ding
+鱼腥草	yu xing cao
+败酱草	bai jiang cao
+白头翁	bai tou weng
+黄连	huang lian
+黄芩	huang qin
+黄柏	huang bo
+龙胆草	long dan cao
+夏枯草	xia ku cao
+决明子	jue ming zi
+苦丁茶	ku ding cha
+桑叶	sang ye
+桑白皮	sang bai pi
+桃仁	tao ren
+火麻仁	huo ma ren
+郁李仁	yu li ren
+酸枣仁	suan zao ren
+柏子仁	bai zi ren
+远志	yuan zhi
+合欢皮	he huan pi
+夜交藤	ye jiao teng
+珍珠母	zhen zhu mu
+磁石	ci shi
+代赭石	dai zhe shi
+天麻	tian ma
+钩藤	gou teng
+全蝎	quan xie
+蜈蚣	wu gong
+僵蚕	jiang can
+地龙	di long
+水蛭	shui zhi
+蒲黄	pu huang
+艾叶	ai ye
+侧柏叶	ce bai ye
+白及	bai ji
+仙鹤草	xian he cao
+棕榈炭	zong lv tan
+血余炭	xue yu tan
+益母草	yi mu cao
+牛膝	niu xi
+川牛膝	chuan niu xi
+鸡血藤	ji xue teng
+穿山甲	chuan shan jia
+王不留行	wang bu liu xing
+泽兰	ze lan
+五灵脂	wu ling zhi
+延胡索	yan hu suo
+郁金	yu jin
+姜黄	jiang huang
+莪术	e shu
+三棱	san leng
+乳香	ru xiang
+没药	mo yao
+苏木	su mu
+骨碎补	gu sui bu
+续断	xu duan
+杜仲	du zhong
+桑寄生	sang ji sheng
+狗脊	gou ji
+淫羊藿	yin yang huo
+巴戟天	ba ji tian
+仙茅	xian mao
+补骨脂	bu gu zhi
+益智仁	yi zhi ren
+肉苁蓉	rou cong rong
+锁阳	suo yang
+菟丝子	tu si zi
+沙苑子	sha yuan zi
+韭子	jiu zi
+蛤蚧	ge jie
+冬虫夏草	dong chong xia cao
+鹿茸	lu rong
+鹿角胶	lu jiao jiao
+龟甲	gui jia
+鳖甲	bie jia
+阿胶	e jiao
+紫河车	zi he che
+五味子	wu wei zi
+乌梅	wu mei
+山茱萸	shan zhu yu
+覆盆子	fu pen zi
+金樱子	jin ying zi
+桑螵蛸	sang piao xiao
+海螵蛸	hai piao xiao
+麻黄	ma huang
+桂枝	gui zhi
+紫苏	zi su
+香薷	xiang ru
+荆芥	jing jie
+羌活	qiang huo
+白芷	bai zhi
+细辛	xi xin
+藁本	gao ben
+苍耳子	cang er zi
+辛夷	xin yi
+牛蒡子	niu bang zi
+蝉蜕	chan tui
+葛根	ge gen
+柴胡	chai hu
+升麻	sheng ma
+淡豆豉	dan dou chi
+知母	zhi mu
+芦根	lu gen
+天花粉	tian hua fen
+淡竹叶	dan zhu ye
+栀子	zhi zi
+大黄	da huang
+芒硝	mang xiao
+番泻叶	fan xie ye
+甘遂	gan sui
+大戟	da ji
+芫花	yuan hua
+牵牛子	qian niu zi
+巴豆	ba dou
+独活	du huo
+威灵仙	wei ling xian
+秦艽	qin jiao
+防己	fang ji
+桑枝	sang zhi
+豨莶草	xi xian cao
+络石藤	luo shi teng
+海风藤	hai feng teng
+千年健	qian nian jian
+五加皮	wu jia pi
+藿香	huo xiang
+佩兰	pei lan
+苍术	cang zhu
+厚朴	hou po
+砂仁	sha ren
+白豆蔻	bai dou kou
+草豆蔻	cao dou kou
+草果	cao guo
+猪苓	zhu ling
+泽泻	ze xie
+车前子	che qian zi
+滑石	hua shi
+木通	mu tong
+通草	tong cao
+瞿麦	qu mai
+萹蓄	bian xu
+石韦	shi wei
+冬葵子	dong kui zi
+灯心草	deng xin cao
+茵陈	yin chen
+金钱草	jin qian cao
+虎杖	hu zhang
+附子	fu zi
+干姜	gan jiang
+肉桂	rou gui
+吴茱萸	wu zhu yu
+小茴香	xiao hui xiang
+高良姜	gao liang jiang
+青皮	qing pi
+枳实	zhi shi
+枳壳	zhi qiao
+木香	mu xiang
+香附	xiang fu
+乌药	wu yao
+沉香	chen xiang
+檀香	tan xiang
+川楝子	chuan lian zi
+佛手	fo shou
+香橼	xiang yuan
+绿萼梅	lv e mei
+薤白	xie bai
+大腹皮	da fu pi
+神曲	shen qu
+麦芽	mai ya
+谷芽	gu ya
+鸡内金	ji nei jin
+莱菔子	lai fu zi
+苦楝皮	ku lian pi
+使君子	shi jun zi
+槟榔	bing lang
+南瓜子	nan gua zi
+雷丸	lei wan
+鹤草芽	he cao ya
+白茅根	bai mao gen
+地榆	di yu
+槐花	huai hua
+茜草	qian cao
+虻虫	meng chong
+月季花	yue ji hua
+凌霄花	ling xiao hua
+自然铜	zi ran tong
+血竭	xue jie
+儿茶	er cha
+刘寄奴	liu ji nu
+半夏	ban xia
+天南星	tian nan xing
+白附子	bai fu zi
+芥子	jie zi
+桔梗	jie geng
+旋覆花	xuan fu hua
+白前	bai qian
+前胡	qian hu
+瓜蒌	gua lou
+贝母	bei mu
+川贝母	chuan bei mu
+浙贝母	zhe bei mu
+竹茹	zhu ru
+竹沥	zhu li
+天竺黄	tian zhu huang
+海藻	hai zao
+昆布	kun bu
+蛤壳	ge qiao
+瓦楞子	wa leng zi
+礞石	meng shi
+紫菀	zi wan
+款冬花	kuan dong hua
+百部	bai bu
+葶苈子	ting li zi
+枇杷叶	pi pa ye
+马兜铃	ma dou ling
+白果	bai guo
+洋金花	yang jin hua
+朱砂	zhu sha
+龙眼肉	long yan rou
+何首乌	he shou wu
+石决明	shi jue ming
+羚羊角	ling yang jiao
+牛黄	niu huang
+熊胆	xiong dan
+麝香	she xiang
+冰片	bing pian
+石菖蒲	shi chang pu
+苏合香	su he xiang
+蟾酥	chan su
+党参	dang shen
+太子参	tai zi shen
+西洋参	xi yang shen
+丹参	dan shen
+苦参	ku shen
+玄参	xuan can
+沙参	sha shen
+明党参	ming dang shen
+黄精	huang jing
+黄药子	huang yao zi
+大枣	da zao
+饴糖	yi tang
+麦冬	mai dong
+天冬	tian dong
+玉竹	yu zhu
+石斛	shi hu
+莲子	lian zi
+莲心	lian xin
+芡实	qian shi
+薏苡仁	yi yi ren
+北沙参	bei sha shen
+南沙参	nan sha shen
+麦门冬	mai men dong
+天门冬	tian men dong
+枸杞子	gou qi zi
+女贞子	nv zhen zi
+墨旱莲	mo han lian
+黑芝麻	hei zhi ma
+桑椹	sang shen
+五倍子	wu bei zi
+浮小麦	fu xiao mai
+糯稻根	nuo dao gen
+麻黄根	ma huang gen
+陈皮	chen pi
+青蒿	qing hao
+地骨皮	di gu pi
+银柴胡	yin chai hu
+胡黄连	hu huang lian
+白薇	bai wei
+葎草	lv cao
+鸭跖草	ya zhi cao
+穿心莲	chuan xin lian
+半边莲	ban bian lian
+半枝莲	ban zhi lian
+白花蛇舌草	bai hua she she cao
+山慈菇	shan ci gu
+土茯苓	tu fu ling
+萆薢	bi xie
+海金沙	hai jin sha
+石淋通	shi lin tong
+鸡矢藤	ji shi teng
+徐长卿	xu zhang qing
+两面针	liang mian zhen
+八角枫	ba jiao feng
+闹羊花	nao yang hua
+洋地黄	yang di huang
+夹竹桃	jia zhu tao
+苦楝子	ku lian zi
+川乌	chuan wu
+草乌	cao wu
+天雄	tian xiong
+雪上一枝蒿	xue shang yi zhi hao
+雷公藤	lei gong teng
+昆明山海棠	kun ming shan hai tang
+马钱子	ma qian zi
+土木鳖	tu mu bie
+斑蝥	ban mao
+青娘子	qing niang zi
+红娘子	hong niang zi
+蟾皮	chan pi
+守宫	shou gong
+蛇蜕	she tui
+乌梢蛇	wu shao she
+白花蛇	bai hua she
+蕲蛇	qi she
+金钱白花蛇	jin qian bai hua she
+蛤蟆油	ha ma you
+紫梢花	zi shao hua
+阳起石	yang qi shi
+钟乳石	zhong ru shi
+花蕊石	hua rui shi
+禹余粮	yu yu liang
+赤石脂	chi shi zhi
+白石英	bai shi ying
+紫石英	zi shi ying
+寒水石	han shui shi
+秋石	qiu shi
+人中白	ren zhong bai
+童便	tong bian
+血余	xue yu
+紫草	zi cao
+大蓟	da ji
+小蓟	xiao ji
+地锦草	di jin cao
+马齿苋	ma chi xian
+铁苋菜	tie xian cai
+翻白草	fan bai cao
+委陵菜	wei ling cai
+贯众	guan zhong
+绵马贯众	mian ma guan zhong
+土荆皮	tu jing pi
+木槿皮	mu jin pi
+蛇床子	she chuang zi
+鹤虱	he shi
+雄黄	xiong huang
+硫黄	liu huang
+轻粉	qing fen
+白矾	bai fan
+硼砂	peng sha
+炉甘石	lu gan shi
+铅丹	qian dan
+密陀僧	mi tuo seng
+樟脑	zhang nao
+薄荷脑	bo he nao
+桉叶油	an ye you
+丁香油	ding xiang you
+桂皮油	gui pi you
+松节油	song jie you
+蓖麻油	bi ma you
+火麻油	huo ma you
+茶油	cha you
+桐油	tong you
+亚麻子	ya ma zi
+胡麻仁	hu ma ren
+黑脂麻	hei zhi ma
+亚麻仁	ya ma ren
+蕤仁	rui ren
+木鳖子	mu bie zi
+大风子	da feng zi
+榧子	fei zi
+马槟榔	ma bing lang
+山楂核	shan zha he
+荔枝核	li zhi he
+橘核	ju he
+柚核	you he
+橙皮	cheng pi
+橘红	ju hong
+化橘红	hua ju hong
+橘络	ju luo
+橘叶	ju ye
+橘饼	ju bing
+柿蒂	shi di
+柿霜	shi shuang
+石榴皮	shi liu pi
+番石榴叶	fan shi liu ye
+望江南	wang jiang nan
+罗布麻	luo bu ma
+杜仲叶	du zhong ye
+银杏叶	yin xing ye
+荷梗	he geng
+莲房	lian fang
+藕节	ou jie
+菱角	ling jiao
+荸荠	bi qi
+慈姑	ci gu
+葱白	cong bai
+小蒜	xiao suan
+韭汁	jiu zhi
+芥菜	jie cai
+莱菔叶	lai fu ye
+地骷髅	di ku lou
+炮姜	pao jiang
+姜皮	jiang pi
+姜汁	jiang zhi
+良姜	liang jiang
+红豆蔻	hong dou kou
+肉豆蔻	rou dou kou
+胡椒	hu jiao
+荜茇	bi ba
+荜澄茄	bi cheng qie
+山柰	shan nai
+椒目	jiao mu
+八角茴香	ba jiao hui xiang
+桂皮	gui pi
+桂子	gui zi
+安息香	an xi xiang
+阿魏	a wei
+松香	song xiang
+白胶香	bai jiao xiang
+藤黄	teng huang
+云母	yun mu
+阴起石	yin qi shi
+方解石	fang jie shi
+石燕	shi yan
+石蟹	shi xie
+鱼脑石	yu nao shi
+海浮石	hai fu shi
+海蛤壳	hai ha ke
+紫贝齿	zi bei chi
+白贝齿	bai bei chi
+贝子	bei zi
+蚕蜕	can tui
+蚕砂	can sha
+夜明砂	ye ming sha
+望月砂	wang yue sha
+鸭内金	ya nei jin
+鹅内金	e nei jin
+猪胰	zhu yi
+牛胆	niu dan
+羊胆	yang dan
+鸡苦胆	ji ku dan
+蛇胆	she dan
+虎骨	hu gu
+豹骨	bao gu
+狗骨	gou gu
+猪骨	zhu gu
+牛骨	niu gu
+象牙屑	xiang ya xie
+鹿角	lu jiao
+鹿角霜	lu jiao shuang
+鹿胎	lu tai
+鹿鞭	lu bian
+鹿血	lu xue
+鹿筋	lu jin
+鹿尾	lu wei
+鹿肾	lu shen
+海狗肾	hai gou shen
+脐带	qi dai
+人乳	ren ru
+人指甲	ren zhi jia
+人发	ren fa
+人中黄	ren zhong huang
+金汁	jin zhi
+地浆	di jiang
+井水	jing shui
+露水	lu shui
+雪水	xue shui

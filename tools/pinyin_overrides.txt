@@ -1,0 +1,93 @@
+# 拼音人工校正表：`词<TAB>全拼`，优先级高于 pypinyin。
+#
+# 只放**确实错了**的：pypinyin 的字级读音在生僻字上会翻车（川芎→chuan qiong），
+# 地名的古音它也不认识（六安→liu an）。每加一条都要能说出依据，别把这里当第二个词表用。
+#
+# 中药 / 饮片
+川芎	chuan xiong
+黄柏	huang bo
+苍术	cang zhu
+枳壳	zhi qiao
+蛤壳	ge qiao
+桑螵蛸	sang piao xiao
+海螵蛸	hai piao xiao
+荜澄茄	bi cheng qie
+荜茇	bi ba
+萆薢	bi xie
+萹蓄	bian xu
+豨莶草	xi xian cao
+枸橼	ju yuan
+枸橼酸	ju yuan suan
+桔梗	jie geng
+荠菜	ji cai
+荸荠	bi qi
+马齿苋	ma chi xian
+墨旱莲	mo han lian
+女贞子	nv zhen zi
+菟丝子	tu si zi
+萆薢分清丸	bi xie fen qing wan
+萆薢渗湿汤	bi xie shen shi tang
+白蒺藜	bai ji li
+蒺藜	ji li
+诃子	he zi
+诃黎勒	he li le
+秦艽	qin jiao
+菖蒲	chang pu
+薤白	xie bai
+没药	mo yao
+羌活	qiang huo
+款冬花	kuan dong hua
+蔓荆子	man jing zi
+牛蒡子	niu bang zi
+阿胶	e jiao
+龟甲	gui jia
+龟甲胶	gui jia jiao
+白术	bai zhu
+熟地黄	shu di huang
+山柰	shan nai
+荜澄茄丸	bi cheng qie wan
+#
+# 地名：古音 / 方言音，pypinyin 按常用读音给，全错
+六安	lu an
+六安市	lu an shi
+单县	shan xian
+长治	chang zhi
+长治市	chang zhi shi
+龟兹	qiu ci
+尉犁	yu li
+尉犁县	yu li xian
+铅山	yan shan
+铅山县	yan shan xian
+涡阳	guo yang
+涡阳县	guo yang xian
+枞阳	zong yang
+枞阳县	zong yang xian
+歙县	she xian
+黟县	yi xian
+蚌埠	beng bu
+亳州	bo zhou
+番禺	pan yu
+黄陂	huang pi
+大冶	da ye
+尉迟	yu chi
+月氏	yue zhi
+吐蕃	tu bo
+大宛	da yuan
+会稽	kuai ji
+藁城	gao cheng
+婺源	wu yuan
+郓城	yun cheng
+郯城	tan cheng
+邳州	pi zhou
+盱眙	xu yi
+沭阳	shu yang
+邗江	han jiang
+濉溪	sui xi
+荔浦	li pu
+犍为	qian wei
+#
+# 药品：化学名的习惯读法
+炔诺酮	que nuo tong
+左炔诺孕酮	zuo que nuo yun tong
+对乙酰氨基酚	dui yi xian an ji fen
+磺胺甲噁唑	huang an jia e zuo

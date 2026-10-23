@@ -797,6 +797,51 @@ pub(crate) mod tests {
     /// 凡是碰这两个状态的用例（包括其它模块的）统一拿这把锁串行。
     pub(crate) static SCHEME_LOCK: Mutex<()> = Mutex::new(());
 
+    /// 生成词表的每条都必须**真的能查到**。
+    ///
+    /// 词库存的是全拼，拼音错了码就错了，词等于不存在——而这批词是 pypinyin 算的，
+    /// 错一个不会有任何提示。所以这里把 6 份 `src/extra_*.txt` 全量跑一遍：
+    /// 按文件里的拼音编码，再按码查，必须能查回这个词本身。
+    ///
+    /// 挂了就去 `tools/pinyin_overrides.txt` 钉读音，然后重跑 `tools/gen_extra.py --write`。
+    /// 别改这个测试去迁就数据。
+    #[test]
+    fn generated_words_are_all_searchable() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        let mut bad = Vec::new();
+        let mut total = 0;
+        for f in [
+            "src/extra_common.txt",
+            "src/extra_it.txt",
+            "src/extra_place.txt",
+            "src/extra_drug.txt",
+            "src/extra_tcm_herb.txt",
+            "src/extra_tcm_patent.txt",
+        ] {
+            let text = std::fs::read_to_string(f).unwrap_or_default();
+            for line in text.lines() {
+                let Some((w, py)) = line.split_once('\t') else { continue };
+                let Some(code) = shuangpin::encode_pinyin(Scheme::Xiaohe, py) else {
+                    bad.push(format!("{w} 编码失败 {py}"));
+                    continue;
+                };
+                total += 1;
+                let r = lookup(&code, 90);
+                if !r.iter().any(|x| &**x == w) {
+                    bad.push(format!("{w} 查不到 code={code} py={py}"));
+                }
+            }
+        }
+        assert!(total > 5000, "词表没读进来？只检查了 {total} 条");
+        assert!(
+            bad.is_empty(),
+            "{} 条查不到（前 20 条：{:?}）",
+            bad.len(),
+            &bad[..bad.len().min(20)]
+        );
+    }
+
     #[test]
     fn dict_not_empty() {
         let (total, _, _) = stats();
