@@ -26,7 +26,7 @@ use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Variant::{VariantInit, VT_I4};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5,
+    GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_1, VK_OEM_2, VK_OEM_4, VK_OEM_5,
     VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::TextServices::*;
@@ -214,6 +214,17 @@ impl FeiheTextService {
             vk == VK_OEM_1.0 as u8
         } else {
             vk == VK_OEM_7.0 as u8
+        }
+    }
+
+    /// 引导符本身当字符上屏时的样子。开了全角标点就给全角 `／`，和 `，` `。` 一致。
+    ///
+    /// 抽成纯函数是为了能单测——`commit_raw` 要 `&self`，测试里造不出来。
+    fn prefix_literal(fullwidth: bool) -> char {
+        if fullwidth {
+            '／'
+        } else {
+            '/'
         }
     }
 
@@ -506,15 +517,14 @@ impl FeiheTextService {
     /// 全角标点映射（只处理不带 Shift 的那一排键）。
     /// Shift 组合（`?` `:` `|` 等）交给应用，避免和我们自己算的字符对不上。
     ///
-    /// `\` → `、` 是照搜狗的习惯（微软拼音把 `、` 放在 `/` 上）。两个键都给 `、`
-    /// 不冲突，反而是两拨用户都能用。注意 `\` 原来是快捷输入的引导符，引导符
-    /// 已经挪到 `` ` ``（见 `is_code_key`）——不然 `、` 根本打不出来。
+    /// `\` → `、` 是照搜狗的习惯。`/` **不再**出顿号——它是快捷输入的引导符
+    /// （见 `quick::PREFIX`），顿号留 `\` 一个键就够，两拨用户的习惯里 `\` 是
+    /// 更主流的那个。
     fn fullwidth_punct(vk: u8) -> Option<char> {
         let ch = match vk {
             v if v == VK_OEM_COMMA.0 as u8 => '，',
             v if v == VK_OEM_PERIOD.0 as u8 => '。',
             v if v == VK_OEM_1.0 as u8 => '；',
-            v if v == VK_OEM_2.0 as u8 => '、',
             v if v == VK_OEM_5.0 as u8 => '、',
             v if v == VK_OEM_4.0 as u8 => '【',
             v if v == VK_OEM_6.0 as u8 => '】',
@@ -542,18 +552,18 @@ impl FeiheTextService {
     /// 该虚拟键是否属于当前方案的编码键。
     /// 双拼：小鹤只有字母；微软双拼的 `ing` 落在分号键上，所以还要放行 VK_OEM_1。
     /// 全拼：只有字母。
-    /// 另外都接受手动分隔键（见 `is_separator_key`）和快捷输入的引导符 `` ` ``。
+    /// 另外都接受手动分隔键（见 `is_separator_key`）和快捷输入的引导符 `/`。
     fn is_code_key(vk: u8) -> bool {
         if vk.is_ascii_uppercase() {
             return true;
         }
-        // Shift 组合不参与编码：`Shift+\` 要输出 `|`，`Shift+`` ` `` 要输出 `~`，
+        // Shift 组合不参与编码：`Shift+/` 要输出 `?`、`Shift+\` 要输出 `|`，
         // 这些都得原样交给应用。字母不受影响（上面已经返回 true 了）。
         if Self::shift_down() {
             return false;
         }
-        // 快捷输入的引导符 `` ` ``
-        if vk == VK_OEM_3.0 as u8 {
+        // 快捷输入的引导符 `/`
+        if vk == VK_OEM_2.0 as u8 {
             return true;
         }
         // 微软双拼的 `ing` 在分号键
@@ -569,7 +579,7 @@ impl FeiheTextService {
         if vk.is_ascii_uppercase() {
             return Some((vk as char).to_ascii_lowercase());
         }
-        if vk == VK_OEM_3.0 as u8 {
+        if vk == VK_OEM_2.0 as u8 {
             return Some(quick::PREFIX);
         }
         if vk == VK_OEM_1.0 as u8 && !config::pinyin_mode() && dict::scheme() == Scheme::Ms {
@@ -583,7 +593,7 @@ impl FeiheTextService {
 
     /// 组合串里允许出现哪些字符（全拼模式放宽到纯字母，两种模式都允许手动分隔符）
     fn code_allowed(s: &str) -> bool {
-        // 快捷输入：引导符（反引号，见 quick::PREFIX）+ 纯小写字母
+        // 快捷输入：引导符（`/`，见 quick::PREFIX）+ 纯小写字母
         if let Some(rest) = s.strip_prefix(quick::PREFIX) {
             return rest.chars().all(|c| c.is_ascii_lowercase());
         }
@@ -620,7 +630,7 @@ impl FeiheTextService {
             let word = self.segments.borrow()[idx].word.clone();
             let list = FeiheTextService::lookup_any(&code, candidate_limit(&code));
             // 选中项对齐到这一段当前选中的词，左右移动时不会跳回第一项
-            let sel = list.iter().position(|w| &**w == word).unwrap_or(0);
+            let sel = list.iter().position(|w| **w == word).unwrap_or(0);
             self.candidates.borrow_mut().clone_from(&list);
             self.selected.set(sel);
             self.page.set(0);
@@ -816,11 +826,17 @@ impl FeiheTextService_Impl {
     /// 回车：把已经敲进去的编码原样上屏。
     ///
     /// 和空格的区别就在这儿——空格是「选第一个候选」，回车是「我就要这几个字母」。
-    /// 快捷输入（`\rq`）例外：`\rq` 本身没有意义，退回第一个候选（当前日期）。
+    /// 快捷输入（`/rq`）例外：`/rq` 本身没有意义，退回第一个候选（当前日期）。
+    /// 但**只敲了引导符本身**时又回到「原样上屏」：`/` 现在是引导符，不给这条
+    /// 出口的话中文模式下就再也打不出斜杠了。
     fn commit_raw(&self) {
         let code = self.code.borrow().clone();
         let text = if code.starts_with(quick::PREFIX) {
-            self.current_word()
+            if code.chars().count() == 1 {
+                FeiheTextService::prefix_literal(config::get().fullwidth).to_string()
+            } else {
+                self.current_word()
+            }
         } else {
             // 手动分隔符是打字辅助，不该进文档：`ni'hao` 上屏的是 `nihao`
             FeiheTextService::query_code(&code).into_owned()
@@ -1924,6 +1940,9 @@ unsafe fn caret_screen_rect(context: &ITfContext, ec: u32, range: &ITfRange) -> 
 mod tests {
     use super::*;
 
+    /// 反引号已经彻底退出键位表，只有测试还要断言「它确实什么都不做」。
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_OEM_3;
+
     /// 碰 `SCHEME` / `pinyin_mode` 的用例统一拿 dict 模块那把共享锁串行，
     /// 否则和 dict.rs 的测试并行跑会互相篡改（小鹤码在微软方案下查不到）。
     fn lock() -> std::sync::MutexGuard<'static, ()> {
@@ -1965,20 +1984,21 @@ mod tests {
         assert!(!FeiheTextService::code_allowed("nih\u{1}"));
         assert!(!FeiheTextService::code_allowed("ni\u{8}c"));
         // 快捷输入的引导符 + 字母是合法的
-        assert!(FeiheTextService::code_allowed("`rq"));
-        assert!(!FeiheTextService::code_allowed("`r1"));
-        // 旧的 `\` 引导符已经让给顿号，不再是编码字符
+        assert!(FeiheTextService::code_allowed("/rq"));
+        assert!(!FeiheTextService::code_allowed("/r1"));
+        // 旧的 `\` 引导符已经让给顿号，反引号也不再是编码字符
         assert!(!FeiheTextService::code_allowed("\\rq"));
+        assert!(!FeiheTextService::code_allowed("`rq"));
     }
 
     #[test]
     fn fullwidth_punct_only_for_unshifted_keys() {
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_COMMA.0 as u8), Some('，'));
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_PERIOD.0 as u8), Some('。'));
-        // 顿号两个键都给：`\`（搜狗习惯）和 `/`（微软拼音习惯）
+        // 顿号只留 `\` 一个键（搜狗习惯），`/` 让给快捷输入引导符
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_5.0 as u8), Some('、'));
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_2.0 as u8), Some('、'));
-        // 反引号现在是快捷输入引导符，不再是间隔号
+        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_2.0 as u8), None);
+        // 反引号既不是引导符也不是间隔号，原样交给应用
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
         assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
@@ -1999,16 +2019,26 @@ mod tests {
     }
 
     #[test]
-    fn backslash_and_backquote_keys_are_split() {
+    fn slash_is_prefix_and_backslash_is_dunhao() {
         // `\` 不再进编码：中文+全角标点时它输出「、」，Shift 组合交给应用出「|」
         assert!(!FeiheTextService::is_code_key(VK_OEM_5.0 as u8));
         assert_eq!(FeiheTextService::code_char(VK_OEM_5.0 as u8), None);
-        // `` ` `` 接管快捷输入引导符
-        assert!(FeiheTextService::is_code_key(VK_OEM_3.0 as u8));
+        // `/` 接管快捷输入引导符
+        assert!(FeiheTextService::is_code_key(VK_OEM_2.0 as u8));
         assert_eq!(
-            FeiheTextService::code_char(VK_OEM_3.0 as u8),
+            FeiheTextService::code_char(VK_OEM_2.0 as u8),
             Some(crate::quick::PREFIX)
         );
+        // 反引号彻底退出：既不是引导符也不是顿号
+        assert!(!FeiheTextService::is_code_key(VK_OEM_3.0 as u8));
+        assert_eq!(FeiheTextService::code_char(VK_OEM_3.0 as u8), None);
+    }
+
+    #[test]
+    fn bare_prefix_commits_a_slash() {
+        // 只敲了引导符本身再回车：中文模式下必须还能打出斜杠
+        assert_eq!(FeiheTextService::prefix_literal(false), '/');
+        assert_eq!(FeiheTextService::prefix_literal(true), '／');
     }
 
     /// 一个小词典，模拟「vhsjli = 张三 + 李」但整串无候选的场景
