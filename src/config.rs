@@ -116,6 +116,12 @@ pub fn no_popup() -> bool {
     NO_POPUP.load(Ordering::Acquire)
 }
 
+/// 单测专用：直接改镜像，绕开配置文件。候选窗的鼠标测试需要「允许弹窗」。
+#[cfg(test)]
+pub fn set_no_popup_for_test(v: bool) {
+    NO_POPUP.store(v, Ordering::Release);
+}
+
 /// 把配置里的热路径开关同步到原子镜像。`load` / `update` 各调一次。
 fn sync_mirrors(cfg: &Config) {
     PINYIN_MODE.store(cfg.pinyin_mode, Ordering::Release);

@@ -3,7 +3,7 @@
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
 **当前版本 0.2.0** ｜ 安装包 1.39 MB ｜ 装完约 6.0 MB ｜ 单字 8006 ｜ 词条 38024 ｜
-不联网、不弹窗、无账号 ｜ 145 项单元测试
+不联网、不弹窗、无账号 ｜ 148 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
 > 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
@@ -530,7 +530,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶，共 145 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶，共 148 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零

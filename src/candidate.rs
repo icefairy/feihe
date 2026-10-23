@@ -172,6 +172,15 @@ fn hit(st: &CandState, x: i32) -> Option<usize> {
     st.spans.iter().position(|(l, r)| x >= *l && x < *r)
 }
 
+/// 从鼠标消息的 `lParam` 取出客户区 x 坐标（低 16 位，带符号）。
+///
+/// **不要用 `GetCursorPos`**：那是「处理消息时」的鼠标位置，不是「消息发生那一刻」
+/// 的位置。用户点得快一点、或者点击后顺手移开，就会算到相邻的候选上去。鼠标消息的
+/// `lParam` 本身就是事件发生时的客户区坐标，Windows 已经替我们记好了。
+fn client_x(l: LPARAM) -> i32 {
+    (l.0 as u32 & 0xFFFF) as u16 as i16 as i32
+}
+
 
 unsafe fn ensure_class() -> bool {
     if CLASS_REGISTERED.load(Ordering::Acquire) {
@@ -230,14 +239,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
 
         WM_LBUTTONDOWN => {
             let idx = {
-                let mut pt = POINT::default();
-                let _ = GetCursorPos(&mut pt);
-                let _ = ScreenToClient(hwnd, &mut pt);
                 let mut st = match STATE.lock() {
                     Ok(g) => g,
                     Err(e) => e.into_inner(),
                 };
-                let idx = hit(&st, pt.x);
+                let idx = hit(&st, client_x(l));
                 st.pressed = idx;
                 idx
             };
@@ -248,16 +254,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            let _ = ReleaseCapture();
+            // 顺序不能反：`ReleaseCapture()` 会**同步**给本窗口发 WM_CAPTURECHANGED，
+            // 而那个分支要把 `pressed` 清掉（那是给「捕获被别人抢走」用的）。
+            // 先释放就会把这次点击自己抹掉——表现为「点候选完全没反应」，
+            // 而且不会报任何错。所以先把命中判定做完再释放。
             let target = {
-                let mut pt = POINT::default();
-                let _ = GetCursorPos(&mut pt);
-                let _ = ScreenToClient(hwnd, &mut pt);
                 let mut st = match STATE.lock() {
                     Ok(g) => g,
                     Err(e) => e.into_inner(),
                 };
-                let up = hit(&st, pt.x);
+                let up = hit(&st, client_x(l));
                 let pressed = st.pressed.take();
                 // 按下和抬起必须落在同一项，否则算误触
                 if pressed.is_some() && pressed == up {
@@ -266,6 +272,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                     None
                 }
             };
+            let _ = ReleaseCapture();
             // 锁已释放，这里才回调
             if let Some(i) = target {
                 invoke_click(i);
@@ -276,14 +283,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         // 而「按下就动作」在多页签程序里更跟手（右键菜单一次都没弹过）。
         WM_RBUTTONUP => {
             let idx = {
-                let mut pt = POINT::default();
-                let _ = GetCursorPos(&mut pt);
-                let _ = ScreenToClient(hwnd, &mut pt);
                 let st = match STATE.lock() {
                     Ok(g) => g,
                     Err(e) => e.into_inner(),
                 };
-                hit(&st, pt.x)
+                hit(&st, client_x(l))
             };
             if let Some(i) = idx {
                 invoke_right(i);
@@ -493,5 +497,108 @@ pub fn destroy() {
     unsafe {
         let hwnd = HWND(raw as *mut core::ffi::c_void);
         let _ = DestroyWindow(hwnd);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `lParam` 的低 16 位是客户区 x，按 i16 解释（窗口贴屏幕左边缘时 x 可能为负）。
+    #[test]
+    fn client_x_sign_extends() {
+        assert_eq!(client_x(LPARAM(0x0005_0003)), 3);
+        assert_eq!(client_x(LPARAM(0x0005_0000)), 0);
+        // 高 16 位是 y，不能污染 x
+        assert_eq!(client_x(LPARAM(0x03FF_0012)), 0x12);
+        // x = 0xFFFF 应解释成 -1，而不是 65535
+        assert_eq!(client_x(LPARAM(0x0000_FFFF)), -1);
+    }
+
+    /// 端到端验证「点候选」这条路径：真建窗口、真发鼠标消息、真走回调。
+    ///
+    /// 这段代码以前一行测试都没有，于是「点了没反应」只能靠人工点——而人工点分不清
+    /// 是「消息没到窗口」「命中算错」还是「回调没注册」。这里三件事一起钉住。
+    ///
+    /// 用 `SendMessageW` 而不是 `SendInput`：消息直接进 `wndproc`，不需要光标真的在
+    /// 那个位置，CI 里也能跑（前提是有桌面——没有窗口站的纯服务环境会失败）。
+    #[test]
+    fn click_and_right_click_reach_handlers() {
+        // STATE / 回调槽都是进程级静态，两个用例并行会互相踩
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        crate::config::set_no_popup_for_test(false);
+        show(&["甲", "乙", "丙"], 0, 0, 200, 200);
+
+        let hwnd = unsafe { FindWindowW(CLASS_NAME, w!("")) }.unwrap_or_default();
+        assert!(!hwnd.is_invalid(), "候选窗没建出来");
+
+        // 取第一项的中心：命中区的几何就是布局算出来那份
+        let (x1, x2) = {
+            STATE
+                .lock()
+                .unwrap()
+                .spans
+                .first()
+                .copied()
+                .expect("spans 为空")
+        };
+        let px = (x1 + x2) / 2;
+        let lp = |x: i32| Some(LPARAM((((15i32) << 16) | (x & 0xFFFF)) as isize));
+
+        static LEFT: AtomicIsize = AtomicIsize::new(-1);
+        static RIGHT: AtomicIsize = AtomicIsize::new(-1);
+        LEFT.store(-1, Ordering::Release);
+        RIGHT.store(-1, Ordering::Release);
+        set_click_handler(7, || {
+            Arc::new(|i: usize| LEFT.store(i as isize, Ordering::Release))
+        });
+        set_right_click_handler(7, || {
+            Arc::new(|i: usize| RIGHT.store(i as isize, Ordering::Release))
+        });
+
+        unsafe {
+            SendMessageW(hwnd, WM_LBUTTONDOWN, Some(WPARAM(0)), lp(px));
+            SendMessageW(hwnd, WM_LBUTTONUP, Some(WPARAM(0)), lp(px));
+            assert_eq!(LEFT.load(Ordering::Acquire), 0, "左键应命中第 0 项");
+
+            SendMessageW(hwnd, WM_RBUTTONUP, Some(WPARAM(0)), lp(px));
+            assert_eq!(RIGHT.load(Ordering::Acquire), 0, "右键应命中第 0 项");
+
+            // 按下和抬起不在同一项 = 误触，不该回调
+            SendMessageW(hwnd, WM_LBUTTONDOWN, Some(WPARAM(0)), lp(px));
+            SendMessageW(hwnd, WM_LBUTTONUP, Some(WPARAM(0)), lp(x2 + 500));
+            assert_eq!(LEFT.load(Ordering::Acquire), 0, "抬起跑偏后不该再有回调");
+
+            // 窗口外的点（x 为负）也不该命中
+            SendMessageW(hwnd, WM_RBUTTONUP, Some(WPARAM(0)), Some(LPARAM(-1)));
+            assert_eq!(RIGHT.load(Ordering::Acquire), 0, "负坐标不该命中");
+        }
+
+        hide();
+        clear_click_handler();
+        clear_right_click_handler();
+    }
+
+    /// 命中区是左闭右开；边界落在右端点时属于下一项，这是「不留 1px 重叠」的约定。
+    #[test]
+    fn hit_uses_half_open_intervals() {
+        let mut st = CandState {
+            items: vec!["甲".into(), "乙".into()],
+            selected: 0,
+            page: 0,
+            x: 0,
+            y: 0,
+            spans: vec![(6, 30), (30, 54)],
+            pressed: None,
+        };
+        assert_eq!(hit(&st, 5), None, "左边留白不该命中");
+        assert_eq!(hit(&st, 6), Some(0));
+        assert_eq!(hit(&st, 29), Some(0));
+        assert_eq!(hit(&st, 30), Some(1));
+        assert_eq!(hit(&st, 54), None, "右端点属于不存在的下一项");
+        st.spans.clear();
+        assert_eq!(hit(&st, 10), None);
     }
 }

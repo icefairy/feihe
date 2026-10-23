@@ -10,7 +10,9 @@
 ;    老的 ProgramData 副本会在安装时尽力清理（锁住的排到重启删）。
 ; 3. 覆盖 DLL 时先 Delete 再 Rename 兜底：ctfmon / explorer 常常已经把旧 DLL
 ;    映射进进程，直接 Copy 会失败。Windows 允许**重命名**已映射的文件，
-;    所以改名成 .old 再拷新文件就行，.old 排到重启删。
+;    所以改名成 .old-<随机> 再拷新文件就行。后缀必须唯一——固定 `.old` 一旦被
+;    上一次留下的、仍被映射的旧文件占着，删不掉也改不进去，整条替换链就断了
+;    （这个坑真的发生过：装完仍是上一版 DLL，功能像没修一样）。
 ;    但改名只换了磁盘上的文件——ctfmon 进程里映射的仍是旧代码。install_tip.ps1
 ;    最后一步会重启 ctfmon（Windows 按需自动拉起，中等完整性；不能从提权进程
 ;    手动拉，UIPI 会挡消息），覆盖安装后点一下输入框就加载新 DLL，不用注销。
@@ -115,25 +117,75 @@ UninstallIcon "assets\feihe.ico"
 
 ; ── 工具函数 ────────────────────────────────────────────────────
 
-; 覆盖一个可能被占用（已被 ctfmon / explorer 映射）的文件。
-; 入参：$R8 = 源文件，$R9 = 目标文件
+; 覆盖一个可能被占用（已被 ctfmon / explorer / 记事本映射）的文件。
+; 入参：$R8 = 源文件，$R9 = 目标文件；出参：失败时置 $R5 = 1
+;
+; 失败链是踩出来的，改之前先看完：
+;   1. 直接 Copy 失败——目标被映射，正常现象
+;   2. 改名成**固定** `.old`——如果上一次留下的 `.old` 还被旧进程映射着，
+;      `Delete` 删不掉、`Rename` 又因为目标已存在而失败，整条链就断在这里
+;   3. 再 Copy 还是失败 → 老版本走 `Delete /REBOOTOK "$R9"`，那是**删掉**，
+;      用户一重启输入法就彻底没了
+;   4. 兜底校验只看 `FileExists`，旧文件还在 → 静默「安装成功」
+;      （真实案例：装完 feihe.dll 还是上一个版本，右键置顶、排序修复全都不生效）
+; 所以现在：改名一律用**唯一后缀**（保证 Rename 的目标不存在）；
+;           不再做 /REBOOTOK 删除（宁可当场报错，让人关掉程序重装）；
+;           复制完比**文件大小**，不一致算失败。
 Function CopyOrReplace
   ClearErrors
   CopyFiles /SILENT "$R8" "$R9"
-  IfErrors 0 done
-    DetailPrint "  $R9 被占用，改名旧文件后重试"
-    ; Windows 允许重命名已映射的文件，这是绕开「无法覆盖正在使用的 DLL」的正路
-    Delete "$R9.old"
-    ClearErrors
-    Rename "$R9" "$R9.old"
-    ClearErrors
-    CopyFiles /SILENT "$R8" "$R9"
-    IfErrors 0 done
-      DetailPrint "  [!] 仍然失败，排到重启后替换"
-      Delete /REBOOTOK "$R9"
-      CopyFiles /SILENT "$R8" "$R9"
-    Goto done
-  done:
+  IfErrors 0 verify
+
+  DetailPrint "  $R9 被占用，改名旧文件后重试"
+  ; 后缀要唯一：固定名一旦被上一次的 .old 占着，Rename 就失败了。
+  ; NSIS 没有 $RANDOM（老版本没有），用 GetTickCount 的毫秒数当随机源。
+  System::Call 'kernel32::GetTickCount()i.r2'
+  StrCpy $R2 "$R9.old-$R2"
+  ${If} ${FileExists} "$R2"
+    StrCpy $R2 "$R2-b"
+  ${EndIf}
+  ClearErrors
+  Rename "$R9" "$R2"
+  ${If} ${Errors}
+    DetailPrint "[!] 改名失败（$R2 也不可用），无法替换 $R9"
+    StrCpy $R5 1
+    Goto verify
+  ${EndIf}
+  DetailPrint "  旧文件已改名为 $R2"
+  ClearErrors
+  CopyFiles /SILENT "$R8" "$R9"
+  ${If} ${Errors}
+    DetailPrint "[!] 旧文件已挪走，但新文件写不进 $R9"
+    StrCpy $R5 1
+  ${EndIf}
+
+  verify:
+  ; 大小比对是这里唯一的硬校验：只查 FileExists 会把「旧文件还在」当成成功。
+  ; FileFunc 的 GetSize 只统计目录（内部 IfFileExists "$path\*.*"），这里用
+  ; FileSeek 到 END 直接拿长度——没有外部依赖，也不涉及结构体封送。
+  ClearErrors
+  FileOpen $R3 "$R8" r
+  ${If} ${Errors}
+    StrCpy $R6 -1
+  ${Else}
+    FileSeek $R3 0 END $R6
+    FileClose $R3
+  ${EndIf}
+  ClearErrors
+  FileOpen $R3 "$R9" r
+  ${If} ${Errors}
+    StrCpy $R4 -1
+  ${Else}
+    FileSeek $R3 0 END $R4
+    FileClose $R3
+  ${EndIf}
+  ${If} $R6 != $R4
+    DetailPrint "[!] $R9 大小不符（应为 $R6，实际 $R4）"
+    StrCpy $R5 1
+  ${EndIf}
+  ; 顺手清历史残留；删不掉（映射中）就算了，不影响本次安装
+  Delete "$R9.old"
+  Delete "$R9.old-*"
 FunctionEnd
 
 ; 调 PowerShell 脚本并检查退出码。入参：$R7 = 完整命令行
@@ -171,6 +223,8 @@ Section "主程序" SecMain
   File /oname=feihe32.dll "${DLL32}"
 
   SetOutPath "$INSTDIR"
+  StrCpy $R5 0
+
   DetailPrint "部署 64 位 DLL…"
   StrCpy $R8 "$PLUGINSDIR\ime\feihe.dll"
   StrCpy $R9 "$INSTDIR\feihe.dll"
@@ -183,10 +237,11 @@ Section "主程序" SecMain
 
   ; 兜底校验：CopyOrReplace 的任何失败路径都不许静默——DLL 没落地还继续注册的话，
   ; 症状是「装完了但输入法不存在」，比当场报错难查得多。失败姿势和 RunPs 一致。
-  ${If} ${FileExists} "$INSTDIR\feihe.dll"
+  ${If} $R5 == "0"
+  ${AndIf} ${FileExists} "$INSTDIR\feihe.dll"
   ${AndIf} ${FileExists} "$INSTDIR\feihe32.dll"
   ${Else}
-    MessageBox MB_ICONSTOP|MB_OK "DLL 部署失败：$INSTDIR\feihe.dll 未正确写入。$\r$\n$\r$\n请检查杀毒软件是否锁定了该文件，然后重新运行安装程序。"
+    MessageBox MB_ICONSTOP|MB_OK "DLL 部署失败：$INSTDIR\feihe.dll 未正确写入。$\r$\n$\r$\n多半是旧文件还被某个程序（ctfmon、打开中的记事本或浏览器）占用着。$\r$\n请关掉这些程序后重新运行安装程序；也可以先把 $INSTDIR 里 feihe.dll.old* 之类改个名字再装。"
     SetErrorLevel 1
     Abort
   ${EndIf}

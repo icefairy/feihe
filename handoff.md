@@ -40,8 +40,8 @@
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
-实测数据：安装包 1.39 MB、装完约 6.0 MB、64 位 DLL 3091 KB、`base.bin` 38024 条 /
-2321 KB、145 项单测。
+实测数据：安装包 1.39 MB、装完约 6.0 MB、64 位 DLL 3090 KB、`base.bin` 38024 条 /
+2321 KB、148 项单测。
 
 
 ## 自绘窗口架构（v2 新增）
@@ -542,6 +542,30 @@ GBK 那两万多字（异形字 / 繁体 / 日韩汉字）不收：繁体靠 `zh
 回调槽（和左键那个 `Handler` 同构），`textservice::toggle_pin_candidate` 切换后调
 `refresh()` + `show_candidates()`——钉上的词跳到第一位就是反馈，不弹提示。
 
+**左键点选曾经一直是坏的**，而且是那种「看起来实现了、其实从来没生效」的坏：
+
+```rust
+WM_LBUTTONUP => {
+    let _ = ReleaseCapture();   // ← 这里会同步发 WM_CAPTURECHANGED 给自己
+    let target = { ... st.pressed.take() ... };  // pressed 已经是 None 了
+}
+```
+
+`ReleaseCapture()` 释放自己的捕获时会**同步**调用本窗口的 `WM_CAPTURECHANGED`，
+而这个分支的职责是把 `pressed` 清掉（原本是给「捕获被别的窗口抢走」用的）。
+于是按下时记的项在抬起判定之前就被自己抹掉了，回调一次都不会触发，也不报错。
+修法：先算完命中（`pressed.take()`），再 `ReleaseCapture()`。
+
+**现在有端到端测试了**（`candidate::tests::click_and_right_click_reach_handlers`）：
+真建窗口、真发 `SendMessageW` 的 `WM_LBUTTONDOWN/UP`、`WM_RBUTTONUP`，断言回调收到了
+正确的下标，并覆盖「抬起跑偏」「负坐标」两种不该命中的情况。这段代码以前一行测试
+都没有，所以坏了很久没人发现——人工点一次分不清是「消息没到」「命中算错」还是
+「回调没注册」。
+
+顺带把命中坐标从 `GetCursorPos()` 换成鼠标消息自带的 `lParam`：前者是「处理消息
+那一刻」的位置，点得快或点完顺手移开就会算到相邻候选上；后者是事件发生时的客户区
+坐标，Windows 已经记好了（也可以用 `SendMessage` 精确构造，测试才跑得起来）。
+
 
 
 `Ctrl+数字` = 置顶该候选并上屏，对已置顶的那个再按一次 = 取消。
@@ -878,8 +902,20 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
   正确做法：`File` 解到 `$PLUGINSDIR\ime`，再 `CopyFiles` 到 `$INSTDIR`。
   验证手法：`Install data` 应等于 `DLL64 + DLL32 + 两个 ps1`（约 5,444,758 字节），
   多出的 ~55 KB 是 MUI2 自带的向导位图。
-- **覆盖被占用的 DLL 只能「改名再拷」**。Windows 允许重命名已映射的文件，不允许覆盖。
-  `CopyOrReplace` 先 `CopyFiles`，失败则 `Rename` 成 `.old` 再拷，仍失败则 `Delete /REBOOTOK`。
+- **覆盖被占用的 DLL 只能「改名再拷」，而改名的后缀必须唯一**。Windows 允许重命名已映射
+  的文件，不允许覆盖。`CopyOrReplace` 先 `CopyFiles`，失败则 `Rename` 再拷。三条铁律，
+  全是踩出来的：
+
+  1. **后缀用毫秒数**（`feihe.dll.old-<GetTickCount>`；NSIS 3.13 没有 `$RANDOM`）。
+     用固定 `.old` 时，只要上一版留下的 `.old` **还**被旧进程映射着，`Delete` 删不掉、
+     `Rename` 又因目标已存在而失败，整条替换链就断在那里——**装完还是上一版 DLL**。
+     真实事故：右键置顶、`ig` 排序修复「全都不生效」，用户手工把 `.old` 改名后重装才好。
+     症状极像代码没修对，其实是升级没落地。
+  2. **失败别 `Delete /REBOOTOK` 目标文件**。那是「标记重启后删除」，用户下次启动
+     输入法直接消失。宁可当场弹错让人关掉程序重装。
+  3. **校验必须比文件大小**，只查 `FileExists` 不行——旧文件还在时它为真，安装器就
+     静默报成功了。用 `FileSeek ... END` 拿长度（`FileFunc` 的 `${GetSize}` 内部按
+     `"$path\*.*"` 判断，只统计目录）。
 - **NSIS 是 32 位程序**，启动的 PowerShell 也是 32 位 → 写 `Wow6432Node\...` 会二次重定向。
   `install_tip.ps1` 开头检测 `[IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432`，
   切 `Sysnative\WindowsPowerShell\v1.0\powershell.exe` 重跑。
