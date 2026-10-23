@@ -1,0 +1,381 @@
+# 二级简码（二简词）表：两键出一个常用两字词
+#
+# 码 = 首字首码 + 次字首码（小鹤双拼两键码的第一个键：zh->v ch->i sh->u，
+# 零声母取韵母首字母）。例如 难道 = n + d = "nd"，所以 = s + y = "sy"。
+#
+# 来源：小鹤入门 2.1 简码的「二简词」表（首选 273 + 次选 97）。
+# 第三列写「次」的是次选词：它的两键码本来就有更常用的单字占着
+# （mm 是「面」、uu 是「书」），所以排在那个字后面，不当第一候选。
+#
+# 改这张表不用改代码：brief2.rs 在第一次查询时解析本文件。
+# 顺序必须按码升序（brief2 的单测会检查）。
+ab 安保
+ac 按错
+ad 按到
+ae 挨饿
+af 安分
+ag 昂贵
+aj 安静
+aj 按键 次
+ak 拗口
+al 按理
+am 暧昧
+ap 安排
+aq 安全
+ar 黯然
+as 暗算
+at 凹凸
+au 按时
+av 按照
+aw 安慰
+ax 爱惜
+ay 安逸
+az 暗自
+be 不饿
+bj 背景 次
+bl 本来
+bq 并且
+br 不然
+bs 比赛
+bt 不同
+bv 保证
+bx 必须
+by 必要
+bz 不再
+cb 从不
+cj 参加 次
+ck 参考
+cl 从来
+cm 聪明
+cn 才能
+cp 存盘
+cq 采取
+cq 从前 次
+ct 从头
+cw 错误
+cx 才行
+db 代表
+dd 达到 次
+df 地方
+dl 到了
+dn 电脑 次
+dr 当然 次
+ds 打算 次
+dt 代替
+dv 等着 次
+dx 东西
+ea 恩爱
+eb 而不
+ec 恩赐
+ed 恶毒
+ef 而非
+eg 恶搞
+ej 耳机
+ek 儿科
+el 恶劣
+em 噩梦
+ep 恶评
+eq 而且
+es 饿死
+et 儿童
+eu 而是
+ev 二者
+ew 额外
+ex 恶心
+ey 而已
+ez 儿子
+fb 方便
+fb 分别 次
+fc 讽刺
+fd 反对
+fe 反而
+fh 反悔 次
+fi 非常
+fj 附件 次
+fk 反馈
+fl 分类
+fm 方面
+fn 烦恼
+fp 分配
+fq 放弃
+fr 否认
+fs 放松
+fs 发送 次
+ft 繁体
+fv 反正
+fv 分钟 次
+fx 发现
+fx 分享 次
+fy 反应
+fz 否则 次
+gb 根本
+gg 刚刚 次
+gi 过程
+gj 感觉 次
+gm 干嘛
+gn 功能
+gp 公平
+gq 过去
+gs 公司 次
+gt 沟通
+gv 跟着 次
+gx 更新 次
+gz 规则 次
+hb 何必
+hf 回复 次
+hi 好处
+hm 后面
+hn 湖南
+hp 害怕
+hq 回去
+ht 后天
+ib 成本
+id 程度 次
+ii 尝尝 次
+ik 窗口
+im 重码
+in 承诺
+ip 产品
+iq 重启
+it 传统
+iw 成为
+ix 出现
+ja 骄傲
+jb 基本 次
+jc 精彩
+jd 简单
+jd 绝对 次
+je 金额
+jf 解放
+jg 结果
+jg 尽管 次
+jh 几乎
+jj 解决
+jj 渐渐 次
+jk 即可 次
+jl 举例 次
+jo 奇偶
+jq 极其 次
+jr 假如 次
+js 计算
+jt 今天
+jt 几天 次
+ju 即使 次
+jv 简直
+jv 极致 次
+jw 今晚
+jw 极为 次
+jz 节奏
+kb 恐怖
+ki 开车
+km 昆明
+kn 可能
+kn 困难 次
+kp 恐怕
+kq 况且
+kt 开头
+lb 两边 次
+lf 浪费
+lj 了解
+lj 链接 次
+lt 两天
+lw 两位 次
+lx 联系
+ml 美丽
+mm 慢慢 次
+mq 目前
+mq 面前 次
+mr 默认
+ms 貌似
+mt 明天
+mt 每天 次
+mv 每周
+mx 明显
+my 满意
+nd 难道
+nl 努力
+nx 那些
+ny 那样
+nz 脑子
+oe 偶尔
+or 偶然
+ot 呕吐
+ov 欧洲
+ox 偶像
+oy 欧阳
+pe 普洱
+pl 漂亮
+pq 脾气
+pr 骗人
+ps 配送
+pt 平台
+pv 配置
+px 培训
+py 拼音
+qc 其次
+qd 确定
+qe 全额
+qf 缺乏
+qg 奇怪
+qh 切换
+qj 期间
+qk 情况 次
+qm 前面 次
+qo 群殴
+qq 恰恰 次
+qr 确认 次
+qt 其他 次
+qu 歧视 次
+qv 其中
+qw 千万
+qz 亲自
+ra 热爱
+rb 日本
+rd 认得
+rk 认可
+rl 人类
+rm 人们
+rn 热闹
+rp 人品
+rq 日期
+rr 仍然 次
+rt 认同
+rv 认真
+rw 认为
+rw 任务 次
+rx 如下
+ry 容易
+sb 随便
+sd 速度 次
+sh 似乎
+sk 思考
+sl 算了
+sn 随你
+sp 碎片
+sq 索取
+sr 虽然 次
+ss 搜索 次
+st 三天
+sv 随着 次
+sw 所谓
+sx 思想
+sy 所以
+tb 特别
+td 推导 次
+tf 头发
+tg 推广 次
+tj 推荐 次
+tl 讨论
+tq 天气
+tt 天天
+tt 淘汰 次
+tw 台湾
+tx 同学
+ty 统一
+tz 投资 次
+ub 顺便
+ud 收到
+uf 束缚 次
+uh 伤害 次
+uj 世纪 次
+um 什么
+um 上面 次
+up 双拼
+uq 事情
+us 神似
+ut 身体
+uu 试试 次
+uw 食物 次
+ux 首先
+vb 准备
+vc 这次 次
+vd 知道
+vd 直到 次
+vf 征服 次
+vh 只会 次
+vi 支持 次
+vj 直接 次
+vm 这么
+vn 只能
+vp 只怕
+vq 正确
+vq 追求 次
+vt 折腾
+vu 只是 次
+vv 真正 次
+vw 掌握
+vw 周围 次
+vx 这些 次
+vy 这样
+vy 主意 次
+vz 正在 次
+wb 五笔
+wc 为此
+wd 味道 次
+wi 完成
+wk 唯恐
+wl 为了
+wm 我们
+wm 完美 次
+wn 无奈
+wp 网盘
+wq 完全
+wr 微软
+ws 猥琐
+wt 问题
+wv 位置
+wv 未知 次
+wx 无线
+wx 微信 次
+wy 唯一
+wz 文字
+xa 西安
+xc 下次
+xd 相当
+xe 险恶
+xf 相反
+xg 习惯
+xg 修改 次
+xh 喜欢
+xj 现金
+xm 下面 次
+xo 西欧
+xu 小时 次
+xv 下周
+xv 修正 次
+xw 希望
+xx 学习 次
+xy 需要
+xz 现在
+xz 选择 次
+yb 一边 次
+yd 一定
+yf 缘分
+yg 应该
+yl 原来
+ym 郁闷
+yn 云南
+yp 一片
+yq 要求
+yq 与其 次
+yv 一直
+yv 意志 次
+yw 因为
+yx 一下
+yx 悠闲 次
+zb 咋不
+zg 总共 次
+zj 自己
+zk 最快
+zl 走了
+zm 怎么
+zn 怎能
+zp 作品
+zq 暂且
+zr 自然
+zs 总算 次
+zt 昨天
+zv 最终 次
+zw 座位 次
+zx 在线
+zy 怎样

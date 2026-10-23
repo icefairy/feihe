@@ -2,6 +2,7 @@
 // M1：注册用外部 installer（reg 脚本），DLL 只需 DllGetClassObject/DllCanUnloadNow
 mod assist;
 mod brief;
+mod brief2;
 mod candidate;
 mod classfactory;
 mod clsid;

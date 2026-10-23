@@ -370,6 +370,27 @@ fn search(
         }
     }
 
+    // 二简词：两键出一个常用两字词（`nd` 难道、`sy` 所以）。小鹤官方「二简」，
+    // 见 `brief2`。
+    //
+    // 只在小鹤方案下生效：表里的码是按小鹤键位算的，微软双拼的零声母用 `o` 占位，
+    // 同一串两键码指向的音节完全不同，套上去等于乱给候选。
+    //
+    // 带辅助码筛选时也不参与，理由同自造词：用户已经主动筛了一道，而二简词没有
+    // 可靠的首字辅助码可对。
+    //
+    // 首选提到 0 号位（哪怕候选里本来没有它），次选放在 1 号位——次选的存在前提
+    // 就是「这个码本来归某个更常用的单字」，抢了 0 号位就跟首选撞车了。
+    // 置顶仍在最后执行，所以用户显式钉的词照样赢过二简词。
+    if !pinyin && assist_prefix.is_empty() && scheme() == Scheme::Xiaohe {
+        if let Some(w) = crate::brief2::word_for(prefix) {
+            promote(&mut out, w, true, limit);
+        }
+        if let Some(w) = crate::brief2::alt_for(prefix) {
+            place(&mut out, w, 1, limit);
+        }
+    }
+
     // 一简字：单键查询时把「这个键该出的字」提到第一位。
     //
     // 放在 `freq::rank` **之后**，所以一简字赢过动态词频——这是刻意的：
@@ -408,6 +429,24 @@ fn promote(out: &mut Vec<Cow<'static, str>>, word: &str, insert_missing: bool, l
         return;
     }
     out.insert(0, Cow::Owned(word.to_string()));
+    out.truncate(limit.max(1));
+}
+
+/// 把 `word` 放到候选第 `pos` 位（越界就放到末尾）。不在列表里也插进去。
+///
+/// 和 `promote` 只差「放第几位」：次选二简词得排在该码的单字后面，不能抢 0 号位。
+/// 必须允许插入——次选词是 `brief2.txt` 里列的，词库未必收，不插就永远不出现。
+fn place(out: &mut Vec<Cow<'static, str>>, word: &str, pos: usize, limit: usize) {
+    if word.is_empty() {
+        return;
+    }
+    let at = pos.min(out.len());
+    if let Some(i) = out.iter().position(|w| w.as_ref() == word) {
+        let w = out.remove(i);
+        out.insert(at.min(out.len()), w);
+        return;
+    }
+    out.insert(at, Cow::Owned(word.to_string()));
     out.truncate(limit.max(1));
 }
 
@@ -750,6 +789,38 @@ pub(crate) mod tests {
         // 存的是全拼不是双拼码，所以换成全拼模式照样打得出来
         let r = lookup_pinyin("feihezizaocishi", 90);
         assert_eq!(r.first().map(|s| &**s), Some(word), "got {r:?}");
+    }
+
+
+    /// 二简词（`brief2`）：两键出常用两字词。
+    ///
+    /// 三条语义各守一条：
+    /// 1. 首选词**压过同码的单字**——`nd` 出「难道」，「奶」退到第二位
+    /// 2. 次选词**排在该码的单字之后**——`mm` 仍是「面」打头，「慢慢」占第二位
+    /// 3. 换方案就失效——微软双拼的两键码含义不同，不能套小鹤的表
+    #[test]
+    fn brief2_words_are_promoted() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+
+        let r = lookup("nd", 10);
+        assert_eq!(r.first().map(|s| &**s), Some("难道"), "got {r:?}");
+        assert!(r.iter().any(|w| &**w == "奶"), "同码单字不能被挤掉：{r:?}");
+
+        let r = lookup("mm", 10);
+        assert_eq!(r.first().map(|s| &**s), Some("面"), "次选不该抢 0 号位：{r:?}");
+        assert_eq!(r.get(1).map(|s| &**s), Some("慢慢"), "got {r:?}");
+
+        // 首选 + 次选同码时占满前两位
+        let r = lookup("vd", 10);
+        assert_eq!(r.first().map(|s| &**s), Some("知道"), "got {r:?}");
+        assert_eq!(r.get(1).map(|s| &**s), Some("直到"), "got {r:?}");
+
+        // 微软双拼不查这张表
+        set_scheme(Scheme::Ms);
+        let r = lookup("nd", 10);
+        assert!(r.iter().all(|w| &**w != "难道"), "微软方案不该出二简词：{r:?}");
+        set_scheme(Scheme::Xiaohe);
     }
 
     #[test]
