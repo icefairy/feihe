@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.23 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.24 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -243,7 +243,7 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n">1.23<small>MB</small></div><div class="k">安装包</div></div>
+      <div class="stat"><div class="n">1.24<small>MB</small></div><div class="k">安装包</div></div>
       <div class="stat"><div class="n">8006</div><div class="k">收录单字</div></div>
       <div class="stat"><div class="n">38024</div><div class="k">词条</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
@@ -268,7 +268,7 @@
           <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
         </thead>
         <tbody>
-          <tr><td>安装包</td><td class="me">1.23 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>安装包</td><td class="me">1.24 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
           <tr><td>装完占用</td><td class="me">约 5.7 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
           <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
           <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
@@ -317,7 +317,7 @@
       <div class="card">
         <h3>不自动上屏</h3>
         <p>只有你按空格 / 数字 / 回车 / 标点，字才落进文档。长句切成分段让你一段段选，
-          绝不替你猜一半先写进去。</p>
+          绝不替你猜一半先写进去。自动组出来的词不对，按退格能把它拆回单个字。</p>
       </div>
       <div class="card">
         <h3>生僻字不缺</h3>
@@ -493,7 +493,8 @@ rustup target add i686-pc-windows-gnullvm
       <div>安装包代码签名</div>
     </div>
     <p class="sub" style="margin-top:26px">
-      已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词、候选窗鼠标点选、
+      已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词（退格可拆词）、
+      候选窗鼠标点选、
       全角标点、简繁切换、动态词频、状态浮窗、设置窗、符号软键盘、搜狗个人词库导入、
       用户词库编译成二进制走 mmap。
     </p>

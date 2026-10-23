@@ -322,6 +322,77 @@ impl FeiheTextService {
         }
     }
 
+    /// 把第 `idx` 段拆成逐音节段（「通传」→「通」+「传」）。
+    ///
+    /// 返回 `false` 表示拆不动——本来就是单音节段。
+    ///
+    /// 自动分段是 DP 贪心取最长（`tsirll` → `通传|两`），但那个切法只是**词库里
+    /// 最长的匹配**，不一定是用户想要的。退格把这一段拆开，用户就能一个字一个字
+    /// 自己组。拆出来的每段先给第一个候选当默认值，和首次进入分词时一个口径。
+    fn expand_segment(segs: &mut Vec<Segment>, idx: usize) -> bool {
+        let Some(seg) = segs.get(idx) else {
+            return false;
+        };
+        let units = FeiheTextService::syllables(&seg.code);
+        if units.len() < 2 {
+            return false;
+        }
+        let split: Vec<Segment> = units
+            .iter()
+            .map(|u| Segment {
+                code: u.clone(),
+                word: FeiheTextService::lookup_any(u, 1)
+                    .first()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+            })
+            .collect();
+        segs.splice(idx..=idx, split);
+        true
+    }
+
+    /// 退格该拆哪一段：当前段优先，其次最后一个还能拆的段。
+    ///
+    /// 「最后」而不是「第一个」是因为退格的方向是从右往左——用户刚打出来的那个词
+    /// 才是他想改的。全都不够拆（每段都是单字）返回 `None`，调用方去删音节。
+    fn pick_expand_target(segs: &[Segment], idx: usize) -> Option<usize> {
+        let splittable = |i: usize| {
+            segs.get(i)
+                .is_some_and(|s| FeiheTextService::syllables(&s.code).len() > 1)
+        };
+        if splittable(idx) {
+            return Some(idx);
+        }
+        (0..segs.len()).rev().find(|&i| splittable(i))
+    }
+
+    /// 去掉编码末尾的一个完整音节（连同它后面的分隔符）。
+    ///
+    /// 双拼音节定长 2，只删一个键会留下 `tsirl` 这种半截串——屏幕上是一堆没有
+    /// 意义的字母，用户还得再按一次才回到 `tsir`。按音节退，一次退到上一个
+    /// 能出候选的位置。
+    ///
+    /// 切不出音节（还没打完）时退一个字符，保证退格永远有反应。
+    fn drop_last_syllable(code: &str) -> String {
+        // 末尾是分隔符就先删它——那是用户上一步刚敲的键，不该连音节一起吞掉
+        if let Some(s) = code.strip_suffix(Self::SEP) {
+            return s.to_string();
+        }
+        let mut s = code.to_string();
+        let units = FeiheTextService::syllables(&s);
+        let n = units
+            .last()
+            .map(|u| u.chars().count())
+            .unwrap_or(1)
+            .max(1);
+        for _ in 0..n {
+            if s.pop().is_none() {
+                break;
+            }
+        }
+        s.trim_end_matches(Self::SEP).to_string()
+    }
+
     /// 把分段选择拼成上屏文本。纯函数，理由同 `plan_segments`。
     ///
     /// 空段必须兜底：`plan_segments` 退到逐音节时，个别音节可能查不到候选，
@@ -839,15 +910,60 @@ impl FeiheTextService_Impl {
         self.clear_state();
     }
 
-    /// 退出分词模式，并按普通退格删掉编码最后一个字符
+    /// 退出分词模式，并退掉编码末尾的一个音节。
     fn exit_segment_mode(&self) {
         self.segments.borrow_mut().clear();
         self.seg_idx.set(0);
-        self.backspace();
+        self.pop_syllable();
+    }
+
+    /// 删掉编码末尾的一个完整音节，然后重新查候选。
+    fn pop_syllable(&self) {
+        let empty = {
+            let mut code = self.code.borrow_mut();
+            let next = FeiheTextService::drop_last_syllable(&code);
+            *code = next;
+            code.is_empty()
+        };
+        if empty {
+            self.cancel();
+        } else {
+            self.refresh();
+            self.update_composition();
+        }
+    }
+
+    /// 分词模式下的退格：先「拆词」，拆不动再退一个音节。
+    ///
+    /// 搜狗那套手感的核心就是这一层：自动组出来的词不是你要的，按退格把它拆回
+    /// 单个字，候选窗立刻变成这一段第一个字的候选，选完自动跳到下一个字——
+    /// 于是「词库里没有的词」也能一个字一个字拼出来。
+    ///
+    /// 退格永远不丢编码（除非整串退空）：`tsirll` 退一次变 `[通][传]两`，
+    /// 再退才删掉 `ll` 变 `tsir`（通传）。
+    fn segment_backspace(&self) {
+        let idx = {
+            let n = self.segments.borrow().len();
+            if n == 0 {
+                return;
+            }
+            self.seg_idx.get().min(n - 1)
+        };
+        let target = FeiheTextService::pick_expand_target(&self.segments.borrow(), idx);
+        if let Some(t) = target {
+            FeiheTextService::expand_segment(&mut self.segments.borrow_mut(), t);
+            // 光标停在拆出来的第一段，从这个字开始往右重选
+            self.seg_idx.set(t);
+            self.refresh();
+            self.update_composition();
+            return;
+        }
+        // 全是单字了，再退就是删掉最后一个音节，回到「整串有候选」的普通态
+        self.exit_segment_mode();
     }
 
     /// 分词模式的按键处理。`←`/`→` 移段，`↑`/`↓` 和 `-`/`=` 翻页，数字选词，
-    /// 空格确认，回车上屏，退格退出，编码键延长编码并重新分段，
+    /// 空格确认，回车上屏，退格拆词（拆不动再退音节），编码键延长编码并重新分段，
     /// 标点等其他键整体上屏后原样交给应用。
     fn on_segment_key(&self, vk: u8) -> Result<BOOL> {
         let n = self.segments.borrow().len();
@@ -891,9 +1007,9 @@ impl FeiheTextService_Impl {
                 self.confirm_segment((vk - 0x30) as usize - 1);
                 Ok(BOOL::from(true))
             }
-            // 退格：退出分词模式，回到普通编码态再删一个字符
+            // 退格：先把当前段拆成单字（组词），拆不动再退一个音节
             0x08 => {
-                self.exit_segment_mode();
+                self.segment_backspace();
                 Ok(BOOL::from(true))
             }
             0x1B => {
@@ -1955,6 +2071,104 @@ mod tests {
         config::set_pinyin_mode(false);
     }
 
+    /// 用户实际反馈的串：`tsirll`（通传两）整串无候选时，自动切成 `通传|两`。
+    ///
+    /// 这里用假词典固定切法：真实词库里恰好有「铜川两」这种整串能命中的词，
+    /// 会走「有候选、不分词」的另一条路，测不到分段本身。
+    #[test]
+    fn tsirll_splits_into_word_plus_char() {
+        let _g = lock();
+        config::set_pinyin_mode(false);
+        let units = FeiheTextService::syllables_ds("tsirll");
+        assert_eq!(units, ["ts", "ir", "ll"]);
+        let r = FeiheTextService::split_segments_units(&units, |p| {
+            matches!(p, "ts" | "ir" | "ll" | "tsir")
+        });
+        assert_eq!(r, vec!["tsir", "ll"]);
+    }
+
+    #[test]
+    fn expand_segment_splits_word_into_single_chars() {
+        let _g = lock();
+        dict::set_scheme(Scheme::Xiaohe);
+        config::set_pinyin_mode(false);
+        let mut segs = vec![
+            Segment {
+                code: "tsir".into(),
+                word: "通传".into(),
+            },
+            Segment {
+                code: "ll".into(),
+                word: "两".into(),
+            },
+        ];
+        assert!(FeiheTextService::expand_segment(&mut segs, 0));
+        let codes: Vec<&str> = segs.iter().map(|s| s.code.as_str()).collect();
+        assert_eq!(codes, vec!["ts", "ir", "ll"]);
+        // 拆出来的每段都要有默认候选，不能是空词
+        assert!(segs.iter().all(|s| !s.word.is_empty()), "{segs:?}");
+        // 原来那个「通传」已经被拆掉了，不能残留在第一段
+        assert_ne!(segs[0].word, "通传");
+    }
+
+    #[test]
+    fn expand_segment_refuses_single_syllable() {
+        let _g = lock();
+        dict::set_scheme(Scheme::Xiaohe);
+        config::set_pinyin_mode(false);
+        let mut segs = vec![
+            Segment {
+                code: "tsir".into(),
+                word: "通传".into(),
+            },
+            Segment {
+                code: "ll".into(),
+                word: "两".into(),
+            },
+        ];
+        // 第 1 段本来就是单音节 → 拆不动，调用方应该退而去删音节
+        assert!(!FeiheTextService::expand_segment(&mut segs, 1));
+        assert_eq!(segs.len(), 2);
+        // 越界也不能 panic（组合态可能刚好被宿主打断）
+        assert!(!FeiheTextService::expand_segment(&mut segs, 9));
+    }
+
+    #[test]
+    fn pick_expand_target_prefers_cursor_then_last() {
+        let _g = lock();
+        config::set_pinyin_mode(false);
+        let seg = |code: &str, word: &str| Segment {
+            code: code.into(),
+            word: word.into(),
+        };
+        // 光标在多音节段上 → 拆它
+        let segs = vec![seg("tsir", "通传"), seg("ll", "两")];
+        assert_eq!(FeiheTextService::pick_expand_target(&segs, 0), Some(0));
+        // 光标停在单字上 → 拆最后一个还能拆的段（退格是从右往左）
+        assert_eq!(FeiheTextService::pick_expand_target(&segs, 1), Some(0));
+        // 全是单字 → 拆不动，交给删音节
+        let segs = vec![seg("ts", "通"), seg("ir", "传"), seg("ll", "两")];
+        assert_eq!(FeiheTextService::pick_expand_target(&segs, 2), None);
+        // 越界索引不 panic
+        assert_eq!(FeiheTextService::pick_expand_target(&segs, 9), None);
+    }
+
+    #[test]
+    fn drop_last_syllable_goes_by_syllable() {
+        let _g = lock();
+        config::set_pinyin_mode(false);
+        // 一次退一个音节（2 键），不会停在 `tsirl` 这种半截串上
+        assert_eq!(FeiheTextService::drop_last_syllable("tsirll"), "tsir");
+        assert_eq!(FeiheTextService::drop_last_syllable("tsir"), "ts");
+        assert_eq!(FeiheTextService::drop_last_syllable("ts"), "");
+        // 分隔符先单独退掉，不连音节一起吞
+        assert_eq!(FeiheTextService::drop_last_syllable("ni'hc"), "ni");
+        assert_eq!(FeiheTextService::drop_last_syllable("ni'"), "ni");
+        // 半截音节（还没打完）退一个字符，保证退格永远有反应
+        assert_eq!(FeiheTextService::drop_last_syllable("tsirl"), "tsir");
+        assert_eq!(FeiheTextService::drop_last_syllable("t"), "");
+    }
+
     /// 零声母词的可达性回归。
     ///
     /// 小鹤的零声母按韵母长度分三种，**双字母韵母保持全拼形式**：
@@ -2151,3 +2365,4 @@ mod tests {
         assert!(!FeiheTextService::is_shift(0x0D));
     }
 }
+
