@@ -1006,14 +1006,19 @@ impl FeiheTextService_Impl {
     /// 触发条件：音节完整（双拼偶数长度 / 全拼能切出合法音节）、至少 2 个音节、
     /// 整串候选为空。切不出多段就什么都不做，等用户继续敲或退格。
     fn maybe_split(&self) {
-        self.try_segment(&[]);
+        self.try_segment(&[], false);
     }
 
     /// 尝试进入分词模式。成功返回 `true`（已 refresh + 更新组合串）。
     ///
     /// `prev` 是上一轮的分段选择：继续敲字重新分段时，如果某一段的码没变，
     /// 就沿用用户已经选过的词。否则「选完第一段再往下打」会把选择冲掉。
-    fn try_segment(&self, prev: &[(String, String, bool)]) -> bool {
+    ///
+    /// `force` 只由左右键传 `true`：**整串已经有候选也要进**。为什么必须留这个口子——
+    /// 自造词是「整串一个码」，`limkyr` 学会「李明远」之后这个码的候选永远非空，
+    /// 老条件就再也进不了分词模式，用户没法在同一个码下再造一个「李明源」。
+    /// 自动触发（`maybe_split`）仍然要用非强制版：有候选就该正常选词。
+    fn try_segment(&self, prev: &[(String, String, bool)], force: bool) -> bool {
         if self.assist_active.get() {
             return false;
         }
@@ -1021,7 +1026,7 @@ impl FeiheTextService_Impl {
         if code.starts_with(quick::PREFIX) {
             return false; // 快捷输入不拆
         }
-        if !self.candidates.borrow().is_empty() {
+        if !force && !self.candidates.borrow().is_empty() {
             return false; // 有候选，正常走
         }
         let has = |p: &str| !FeiheTextService::lookup_any(p, 1).is_empty();
@@ -1057,6 +1062,27 @@ impl FeiheTextService_Impl {
         *self.segments.borrow_mut() = segments;
         // 光标留在原来的段上（首次进入是 0），越界就夹到末段
         self.seg_idx.set(self.seg_idx.get().min(n - 1));
+        self.refresh();
+        self.update_composition();
+        true
+    }
+
+    /// `←` / `→`：能拆就进分词模式并在段间移动，拆不了才退化成页内移动。
+    ///
+    /// 这是「用左右键一个字一个字选」的入口，也是**同码第二个自造词唯一能做出来的
+    /// 路径**：`limkyr` 已经学会「李明远」之后整串就有候选，`try_segment` 的老条件
+    /// （候选为空才拆）永远不成立，用户只能删掉编码重来——而那正是用户报的
+    /// 「输入整码再退格就没法操作了，退格只删字母」的由来。所以这里传 `force`。
+    ///
+    /// 单音节的码（`de`、`ni`）拆不开，原样保留页内移动的老手感：这类码本来
+    /// 就没有「哪个字」可选，只有「哪个候选」可选。
+    fn arrow_into_segments(&self, delta: isize) -> bool {
+        if !self.try_segment(&[], true) {
+            return false;
+        }
+        let n = self.segments.borrow().len() as isize;
+        let i = (self.seg_idx.get() as isize + delta).clamp(0, n - 1);
+        self.seg_idx.set(i as usize);
         self.refresh();
         self.update_composition();
         true
@@ -1315,7 +1341,7 @@ impl FeiheTextService_Impl {
                 self.segments.borrow_mut().clear();
                 self.refresh();
                 // 新编码可能整串就有候选了（或音节还没打完），那就退出分词模式
-                if !self.try_segment(&prev) {
+                if !self.try_segment(&prev, false) {
                     self.update_composition();
                 }
                 Ok(BOOL::from(true))
@@ -2027,13 +2053,18 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 self.pick((vk - 0x30) as usize);
                 Ok(BOOL::from(true))
             }
-            // 左右：页内移动
+            // 左右：先把整串切成段逐字选（同码第二个自造词就靠这条路），
+            // 拆不开的（单个音节）才退回页内移动
             0x25 => {
-                self.move_selection(-1);
+                if !self.arrow_into_segments(-1) {
+                    self.move_selection(-1);
+                }
                 Ok(BOOL::from(true))
             }
             0x27 => {
-                self.move_selection(1);
+                if !self.arrow_into_segments(1) {
+                    self.move_selection(1);
+                }
                 Ok(BOOL::from(true))
             }
             // 上下：翻页（和 - / = 一起由 handle_page_key 统一处理）
@@ -2562,6 +2593,23 @@ mod tests {
         assert_eq!(
             FeiheTextService::plan_segments("viuiqi", has),
             vec!["vi", "ui", "qi"]
+        );
+    }
+
+    /// 整串本身就是一个「词」（自造词、超长词条）时，也必须能拆成逐音节。
+    ///
+    /// 这是「同码第二个自造词造不出来」的回归测试：`djdjth` 学会「蛋蛋堂」之后，
+    /// 这个码整串就有候选，DP 贪心会取最长（整串一段），左右键进分词模式后
+    /// 只能看到一段、退格直接退音节。`plan_segments` 见到「只切出一段」必须
+    /// 退回逐音节，否则逐字选择这条路就断了。
+    #[test]
+    fn plan_segments_splits_whole_code_word_into_syllables() {
+        // 假词典：只有整串这个词，单音节也都有字（真实情况就是这样）
+        let has = |p: &str| matches!(p, "djdjth" | "dj" | "th");
+        assert_eq!(
+            FeiheTextService::plan_segments("djdjth", has),
+            vec!["dj", "dj", "th"],
+            "整串是一个词时也要拆到逐音节"
         );
     }
 

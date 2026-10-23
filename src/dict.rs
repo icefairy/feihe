@@ -835,6 +835,33 @@ pub(crate) mod tests {
     }
 
 
+    /// 同一个码下可以挂多个自造词，最新的排最前。
+    ///
+    /// 这是「造了 蛋蛋堂 之后再造 弹弹堂 就不行了」的回归测试：学习路径本身一直
+    /// 支持同码多词（`phrase::learn` 按**词**去重），真正堵住用户的是进不去分词
+    /// 模式（见 `textservice::arrow_into_segments`）。这里守的是另一半：
+    /// 学会之后两个词都得在候选里，而且新的在前。
+    #[test]
+    fn two_phrases_under_one_code_coexist() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        let py = "dan dan tang";
+        let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect("should encode");
+        crate::phrase::learn("蛋蛋堂", py);
+        crate::phrase::learn("弹弹堂", py);
+
+        let r = lookup(&code, 90);
+        assert_eq!(r.first().map(|s| &**s), Some("弹弹堂"), "最新的在前：{r:?}");
+        assert!(r.iter().any(|w| &**w == "蛋蛋堂"), "旧的不能丢：{r:?}");
+
+        // 全拼索引也一样：两个词都认，新的在前
+        let r = lookup_pinyin("dandantang", 90);
+        let fresh = r.iter().position(|w| &**w == "弹弹堂");
+        let old = r.iter().position(|w| &**w == "蛋蛋堂");
+        assert!(fresh.is_some() && old.is_some(), "got {r:?}");
+        assert!(fresh < old, "新的在前：{r:?}");
+    }
+
     /// 二简词（`brief2`）：两键出常用两字词。
     ///
     /// 三条语义各守一条：

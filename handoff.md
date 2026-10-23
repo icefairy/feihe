@@ -40,8 +40,8 @@
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
-实测数据：安装包 1.40 MB、装完约 6.0 MB、64 位 DLL 3127 KB、`base.bin` 38743 条 /
-2356 KB、153 项单测。
+实测数据：安装包 1.40 MB、装完约 6.0 MB、64 位 DLL 3128 KB、`base.bin` 38743 条 /
+2356 KB、155 项单测。
 
 
 ## 自绘窗口架构（v2 新增）
@@ -773,8 +773,11 @@ QI `ITfUIElement` 也能成功。
 `EditOp::Split` 已整个删除。现在 `maybe_split` 只做一件事：切成多段、进分词模式；
 切不出来就什么都不做，等用户继续敲或退格。
 
-**触发条件**：音节完整（双拼偶数长度 / 全拼能切出合法音节）、至少 2 个音节、整串候选为空、
-不是辅助码态、不是 `/` 快捷输入。
+**自动触发条件**（`maybe_split`）：音节完整（双拼偶数长度 / 全拼能切出合法音节）、
+至少 2 个音节、整串候选为空、不是辅助码态、不是 `/` 快捷输入。
+
+**手动入口**：`←`/`→` 走 `arrow_into_segments(delta)` → `try_segment(&[], true)`，
+**跳过「候选为空」这一条**（`force`）。理由见下面「整串有候选也能进」一节。
 
 `split_segments_units(units, has)` 的 DP 目标不是「切得最长」，而是**每一段都能出候选**。
 纯贪心会把 `vhsjli` 切成 `vh`(张)+`sj`(三)+`li`(李)，因为 `vh` 单独就有候选。先算 `ok[i]`
@@ -802,7 +805,7 @@ QI `ITfUIElement` 也能成功。
 self.code.borrow_mut().push(ch);
 self.segments.borrow_mut().clear();
 self.refresh();
-if !self.try_segment(&prev) { self.update_composition(); }
+if !self.try_segment(&prev, false) { self.update_composition(); }
 ```
 
 `prev` 是上一轮的 `(段码, 已选词, 是否手动确认过)`，重新分段时**段码没变就沿用**——
@@ -852,6 +855,33 @@ if !self.try_segment(&prev) { self.update_composition(); }
 
 拆段/退音节都是纯函数（`expand_segment` / `pick_expand_target` /
 `drop_last_syllable`），单测直接钉住 `limkyr` 这个用例。
+
+### 整串有候选也能进（同码第二个自造词）
+
+用户原话：
+
+> 当我造了一个 djdjth＝蛋蛋堂 后 还想再造一个 djdjth＝弹弹堂 就没办法操作了，
+> 因为输入 djdjth 再退格 直接就没法操作了，退格直接就删除了最后一个字母，
+> 也没有办法用左右按键来单个字进行选择。
+
+根因不是自造词表不支持同码多词（`phrase::learn` 一直按**词**去重，两个词并存完全没问题），
+而是**根本进不去分词模式**：`try_segment` 的老条件是「整串一个候选都没有」，
+自造词恰恰是「整串一个码一个词」，于是这个码永远有候选 → 永远进不去 →
+左右键只在段间移动的逻辑也就永远用不上，退格只剩「删字母」一种行为。
+
+改法：`←`/`→` 成为**手动入口**，带 `force` 绕过候选检查。
+
+- `plan_segments` 此时 DP 会贪心取最长（整串一段，因为整串在词表里），
+  它见到「只切出一段」会退回**逐音节**——这正是用户要的「一个字一个字选」。
+  `plan_segments_splits_whole_code_word_into_syllables` 钉住这条。
+- 单音节的码（`de`、`ni`）切不出第二段，`arrow_into_segments` 返回 `false`，
+  调用方落回 `move_selection`——页内移动的老手感在这一档保留。
+- 学会了「李明源」之后再敲 `limkyr`，`dict::search` 里 `words_for` 给的是
+  「新学的在前」，倒着 promote 让最新的落到 0 号位，旧的排在后面而不是被顶掉
+  （`two_phrases_under_one_code_coexist`）。
+
+**不要把它改成「退格也拆」。** 退格的第一职责永远是「我打错了，删一个键」。
+把两件事挤到一个键上，用户纠正错字时就会莫名其妙地进入分词模式。
 
 ## 手动分隔（`;`）
 
