@@ -200,6 +200,12 @@ pub fn update(f: impl FnOnce(&mut Config)) {
 }
 
 pub fn save(cfg: &Config) {
+    // 测试进程绝不写盘。`cargo test` 里有好几个用例会调 `set_pinyin_mode()`，
+    // 那会走到 update() → save()，而测试进程里的 CFG 是默认值——一跑测试就把
+    // 用户真实的 config.ini 覆盖成默认配置了。
+    if cfg!(test) {
+        return;
+    }
     let _ = std::fs::create_dir_all(dir());
     let text = format!(
         "; 飞鹤输入法配置\n\

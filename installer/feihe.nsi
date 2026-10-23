@@ -61,7 +61,13 @@ Unicode true
 Name "${APP_NAME}"
 OutFile "${OUTDIR}\Feihe-Setup-${APP_VER}.exe"
 InstallDir "${INSTALL_ROOT}"
-InstallDirRegKey HKLM "${UNINST_KEY}" "InstallLocation"
+; 自检模式不读注册表里的旧安装路径。
+; 否则本机装过正式包（InstallLocation=C:\Program Files\Feihe）之后，自检包会被
+; 注册表覆盖成往 Program Files 装 —— 没有管理员权限 → 静默失败 → 退出码还是 0，
+; 表现为「自检说装完了但文件不在」。这个坑踩过一次。
+!ifndef SELFTEST
+  InstallDirRegKey HKLM "${UNINST_KEY}" "InstallLocation"
+!endif
 RequestExecutionLevel "${REQ_LEVEL}"
 SetCompressor /SOLID lzma
 SetCompressorDictSize 32

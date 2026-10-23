@@ -563,7 +563,7 @@ impl FeiheTextService {
             for (i, seg) in segs.iter().enumerate() {
                 // 组合串要显示「将来会写进文档的样子」，否则开了繁体之后
                 // 预览是简体、上屏是繁体，看着像 bug
-                let word = crate::zhconv::to_traditional(&seg.word);
+                let word = crate::zhconv::apply(&seg.word);
                 if i == cur {
                     s.push('[');
                     s.push_str(&word);
@@ -1470,7 +1470,7 @@ impl FeiheTextService_Impl {
                     crate::trace!("edit: Commit('{text}')");
                     // 简繁转换只在这一个出口做：候选里存的永远是词库原文（简体），
                     // 显示层和上屏层各自转。这样切换字形不需要重建任何索引。
-                    let text = crate::zhconv::to_traditional(&text);
+                    let text = crate::zhconv::apply(&text);
                     let comp = self.composition.borrow_mut().take();
                     if let Some(comp) = comp {
                         let r = comp.GetRange()?;
@@ -1487,7 +1487,7 @@ impl FeiheTextService_Impl {
                     crate::trace!("edit: Insert('{text}')");
                     // 标点、软键盘符号转换是空操作（它们本来就不在简繁映射里），
                     // 但快捷输入的日期/星期文本要跟着走，所以统一在这里过一遍
-                    let text = crate::zhconv::to_traditional(&text);
+                    let text = crate::zhconv::apply(&text);
                     let Ok(range) = caret_range(&context, ec) else {
                         return Ok(());
                     };

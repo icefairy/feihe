@@ -50,7 +50,7 @@ static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
 /// 简繁转换放在这里而不是查词时做：候选表里存的永远是词库原文，切换字形不用
 /// 重建任何东西，也不会因为转换而影响「选中项对齐到哪个词」的判断。
 fn label(index_in_page: usize, word: &str) -> String {
-    format!("{}.{}", index_in_page + 1, crate::zhconv::to_traditional(word))
+    format!("{}.{}", index_in_page + 1, crate::zhconv::apply(word))
 }
 
 fn page_slice(st: &CandState) -> &[String] {

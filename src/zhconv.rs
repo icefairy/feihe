@@ -24,7 +24,19 @@ use windows::Win32::Globalization::{LCMapStringEx, LCMAP_TRADITIONAL_CHINESE};
 /// 用 `LOCALE_NAME_SYSTEM_DEFAULT` 在英文系统上会失败，所以显式指定。
 const LOCALE: PCWSTR = windows::core::w!("zh-CN");
 
-/// 简体 → 繁体。
+/// 按当前设置转换：**只在「字形 = 繁体」时才动手**。
+///
+/// 所有调用点都必须走这个函数，不要直接调 `to_traditional`——后者是「无条件转」，
+/// 早期版本就是因为四个调用点全都直接调它、谁也没看配置，导致选了简体也照样出繁体。
+/// 把开关收在入口里，调用点就不需要（也不可能忘记）重复判断。
+pub fn apply(s: &str) -> Cow<'_, str> {
+    if !crate::config::get().traditional {
+        return Cow::Borrowed(s);
+    }
+    to_traditional(s)
+}
+
+/// 简体 → 繁体（**无条件**，不看配置）。
 ///
 /// 纯 ASCII（编码、标点、数字）直接原样返回，不做任何系统调用——这条快路径
 /// 覆盖了绝大多数调用，因为组合串和候选里的短词经常是纯字母/纯标点。
@@ -67,6 +79,32 @@ fn map(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 和 textservice / dict 的用例共用一把锁：`config` 是进程级全局状态
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::dict::tests::SCHEME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn apply_is_noop_when_simplified() {
+        let _g = lock();
+        crate::config::update(|c| c.traditional = false);
+        // 选简体就必须原样输出——这是用户报的 bug：选了简体却打出繁体
+        assert_eq!(apply("设置").as_ref(), "设置");
+        assert!(matches!(apply("设置"), Cow::Borrowed(_)));
+        // 恢复默认，别影响同进程里后面的用例
+        crate::config::update(|c| c.traditional = false);
+    }
+
+    #[test]
+    fn apply_converts_when_traditional() {
+        let _g = lock();
+        crate::config::update(|c| c.traditional = true);
+        assert_eq!(apply("设置").as_ref(), "設置");
+        crate::config::update(|c| c.traditional = false);
+    }
 
     #[test]
     fn ascii_is_untouched() {
