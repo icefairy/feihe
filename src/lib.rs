@@ -13,6 +13,7 @@ mod dllcount;
 mod font;
 mod freq;
 mod insert;
+mod phrase;
 mod pin;
 mod quick;
 mod settings;
@@ -21,6 +22,7 @@ mod softkbd;
 mod statusbar;
 mod textservice;
 mod theme;
+mod uielement;
 mod zhconv;
 
 use windows::core::*;

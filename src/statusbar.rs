@@ -186,8 +186,8 @@ unsafe fn create() -> Option<HWND> {
 
 /// 显示状态浮窗（幂等）
 pub fn show() {
-    // UILess 模式下一个窗口都不弹，理由同 `candidate::show`。
-    if config::uileless() {
+    // 不弹窗模式下一个窗口都不弹，理由同 `candidate::show`。
+    if config::no_popup() {
         hide();
         return;
     }
@@ -210,7 +210,7 @@ pub fn show() {
     VISIBLE.store(true, Ordering::Release);
 }
 
-/// 隐藏状态浮窗（UILess 模式、以及设置窗切换开关时用）
+/// 隐藏状态浮窗（不弹窗模式、UILess 宿主、以及设置窗切换开关时用）
 pub fn hide() {
     let h = hwnd();
     if h.is_invalid() {

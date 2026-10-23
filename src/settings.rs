@@ -55,7 +55,7 @@ const ID_FOLLOW: i32 = 132;
 const ID_LEARN: i32 = 133;
 const ID_LEARN_RESET: i32 = 134;
 const ID_LEARN_HINT: i32 = 135;
-const ID_UILESS: i32 = 136;
+const ID_NO_POPUP: i32 = 136;
 const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
 const ID_PIN_HINT: i32 = 143;
@@ -193,13 +193,14 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_HANZI_TRAD, cfg.traditional);
     set_checked(h, ID_FULLWIDTH, cfg.fullwidth);
     set_checked(h, ID_FOLLOW, cfg.bar_follow);
-    set_checked(h, ID_UILESS, cfg.uileless);
+    set_checked(h, ID_NO_POPUP, cfg.no_popup);
     set_checked(h, ID_LEARN, cfg.learn);
     let learned = crate::freq::len();
+    let phrases = crate::phrase::len();
     set_text(
         h,
         ID_LEARN_HINT,
-        &format!("已记录 {learned} 个词的使用次数（%APPDATA%\\Feihe\\freq.txt）"),
+        &format!("已记 {learned} 个词频 · {phrases} 个自造词（%APPDATA%\\Feihe\\）"),
     );
     // 条目少的时候直接把「码→词」列出来，用户不用去翻文件
     let pinned = crate::pin::list();
@@ -316,9 +317,9 @@ unsafe fn on_command(h: HWND, id: i32) {
             let on = checked(GetDlgItem(Some(h), ID_LEARN).unwrap_or_default());
             config::update(|c| c.learn = on);
         }
-        ID_UILESS => {
-            let on = checked(GetDlgItem(Some(h), ID_UILESS).unwrap_or_default());
-            config::update(|c| c.uileless = on);
+        ID_NO_POPUP => {
+            let on = checked(GetDlgItem(Some(h), ID_NO_POPUP).unwrap_or_default());
+            config::update(|c| c.no_popup = on);
             // 打开时立刻把可能挂着的窗口收掉，用户才看得出「生效了」；
             // 关掉时立刻把浮窗放回来，否则要等下一次切换输入法才出现。
             if on {
@@ -330,7 +331,12 @@ unsafe fn on_command(h: HWND, id: i32) {
         }
         ID_LEARN_RESET => {
             let n = crate::freq::clear();
-            set_text(h, ID_LEARN_HINT, &format!("已清空 {n} 条词频记录"));
+            let m = crate::phrase::clear();
+            set_text(
+                h,
+                ID_LEARN_HINT,
+                &format!("已清空 {n} 条词频、{m} 个自造词"),
+            );
         }
         ID_PIN_RESET => {
             let n = crate::pin::clear();
@@ -427,8 +433,8 @@ unsafe fn build(h: HWND) {
     check(h, "状态浮窗跟随光标（默认固定在屏幕右下角，可拖动）", 16, y - 2, 420, ID_FOLLOW);
 
     y += 30;
-    check(h, "UILess：不弹候选窗和浮窗，候选显示在组合串里（全屏游戏用）", 16, y - 2, 428, ID_UILESS);
-    label(h, "UILess 下 Ctrl+Shift+U 可切回（浮窗被藏了，这是唯一的入口）", 16, y + 18, 428, 0);
+    check(h, "不弹窗模式：候选写进组合串，不弹候选窗和浮窗（全屏游戏 / 远程桌面）", 16, y - 2, 428, ID_NO_POPUP);
+    label(h, "本模式 Ctrl+Shift+U 可切回（浮窗被藏了，这是唯一的入口）", 16, y + 18, 428, 0);
     y += 20; // 给上面那行提示留位置
 
     y += 30;

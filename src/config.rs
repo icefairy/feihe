@@ -57,14 +57,17 @@ pub struct Config {
     pub traditional: bool,
     /// 动态词频（按用户实际选词重排候选）。见 `freq` 模块。
     pub learn: bool,
-    /// UILess 模式：不弹候选窗、不显示状态浮窗，只靠宿主自己的组合串显示。
+    /// 不弹窗模式：不弹候选窗、不显示状态浮窗，候选写进组合串跟编码一起显示。
     ///
-    /// 给「窗口叠在上面的东西一律看不见」的场合用：独占全屏的游戏、远程桌面、
-    /// 部分虚拟机控制台。这些环境下自绘的 popup 要么不显示，要么会把焦点抢走，
-    /// 但**宿主自己的组合串**是画在游戏界面里的，通常还能看见。
+    /// 给「叠在上面的窗口一律看不见」的场合用：远程桌面、部分虚拟机控制台、
+    /// 以及独占全屏但没走 UILess 协商的程序。这些环境下自绘的 popup 要么不显示，
+    /// 要么会把焦点抢走，但**宿主自己的组合串**是画在界面里的，通常还能看见。
+    ///
+    /// 和真 UILess 的区别：那个是**宿主**驱动的（`ActivateEx` 的标志，见 `uielement`
+    /// 模块），候选由宿主自己画，没有开关；这里是**用户**选的，候选变成纯文本。
     ///
     /// 代价是没有候选窗可看，只能「空格上屏第一候选 / 数字键盲选」。
-    pub uileless: bool,
+    pub no_popup: bool,
 }
 
 impl Config {
@@ -82,8 +85,8 @@ impl Config {
         traditional: false,
         // 默认开：输入法本来就该越用越顺手。不想要的人在设置里关掉即可。
         learn: true,
-        // 默认关：正常桌面环境有候选窗才好用，UILess 是给特定场景开的。
-        uileless: false,
+        // 默认关：正常桌面环境有候选窗才好用，这个开关是给特定场景开的。
+        no_popup: false,
     };
 }
 
@@ -103,20 +106,20 @@ pub fn pinyin_mode() -> bool {
     PINYIN_MODE.load(Ordering::Acquire)
 }
 
-/// **UILess 开关的原子镜像。**
+/// **不弹窗开关的原子镜像。**
 ///
 /// 和 `PINYIN_MODE` 一个道理：候选窗每次按键都要问一遍「该不该弹」，
 /// 状态浮窗在激活时也要问，走 Mutex 不划算。
-static UILESS: AtomicBool = AtomicBool::new(false);
+static NO_POPUP: AtomicBool = AtomicBool::new(false);
 
-pub fn uileless() -> bool {
-    UILESS.load(Ordering::Acquire)
+pub fn no_popup() -> bool {
+    NO_POPUP.load(Ordering::Acquire)
 }
 
 /// 把配置里的热路径开关同步到原子镜像。`load` / `update` 各调一次。
 fn sync_mirrors(cfg: &Config) {
     PINYIN_MODE.store(cfg.pinyin_mode, Ordering::Release);
-    UILESS.store(cfg.uileless, Ordering::Release);
+    NO_POPUP.store(cfg.no_popup, Ordering::Release);
 }
 
 pub fn set_pinyin_mode(on: bool) {
@@ -139,7 +142,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 4;
+const CONFIG_VER: u32 = 5;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -158,9 +161,15 @@ pub fn load() -> Config {
     // v2 → v3：新增 `learn`（动态词频）。`parse` 对缺失的键已经给了默认值 true，
     // 这里不需要额外动作——只把版本号写进文件，免得下次又走一遍迁移判断。
 
-    // v3 → v4：新增 `uileless`（UILess 模式）。缺省 false，同样不需要迁移动作。
+    // v3 → v4：新增 `uileless`（不弹窗模式）。缺省 false，同样不需要迁移动作。
 
-    // 原子镜像必须在锁外同步：`pinyin_mode()` / `uileless()` 是热路径，读的是原子量
+    // v4 → v5：`uileless` 改名成 `no_popup`。**没有行为变化，纯改名。**
+    // 为什么要改：真正的 TSF UILess 是宿主驱动的（候选交给宿主自己画，见
+    // `uielement` 模块），这个开关只是「不弹窗、候选拼进组合串」。两件事同名，
+    // 代码和文档里会一直有人搞混。`parse` 仍然认旧键，所以老配置不需要额外动作，
+    // 下次 `save` 就写成新键名了。
+
+    // 原子镜像必须在锁外同步：`pinyin_mode()` / `no_popup()` 是热路径，读的是原子量
     sync_mirrors(&cfg);
     if let Ok(mut g) = CFG.lock() {
         *g = cfg;
@@ -205,7 +214,9 @@ fn parse(text: &str) -> (Config, u32) {
             "pinyin_mode" => cfg.pinyin_mode = parse_bool(v),
             "traditional" => cfg.traditional = parse_bool(v),
             "learn" => cfg.learn = parse_bool(v),
-            "uileless" => cfg.uileless = parse_bool(v),
+            "no_popup" => cfg.no_popup = parse_bool(v),
+            // v4 及更早的键名，读到就当成新名字（见 `load` 里的 v4→v5 说明）
+            "uileless" => cfg.no_popup = parse_bool(v),
             _ => {}
         }
     }
@@ -256,7 +267,7 @@ pub fn save(cfg: &Config) {
          pinyin_mode={}\n\
          traditional={}\n\
          learn={}\n\
-         uileless={}\n",
+         no_popup={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -267,7 +278,7 @@ pub fn save(cfg: &Config) {
         cfg.pinyin_mode as u8,
         cfg.traditional as u8,
         cfg.learn as u8,
-        cfg.uileless as u8
+        cfg.no_popup as u8
     );
     // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
     // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程
@@ -310,18 +321,27 @@ mod tests {
         assert!(!cfg.traditional);
         assert!(cfg.fullwidth, "全新配置默认应该是中文标点");
         assert!(cfg.learn, "动态词频默认开");
-        assert!(!cfg.uileless, "UILess 默认关");
+        assert!(!cfg.no_popup, "不弹窗模式默认关");
     }
 
     #[test]
     fn parses_new_switches() {
         let (cfg, _) = parse(&format!(
-            "config_ver={CONFIG_VER}\npinyin_mode=1\ntraditional=1\nlearn=0\nuileless=1\n"
+            "config_ver={CONFIG_VER}\npinyin_mode=1\ntraditional=1\nlearn=0\nno_popup=1\n"
         ));
         assert!(cfg.pinyin_mode);
         assert!(cfg.traditional);
         assert!(!cfg.learn);
-        assert!(cfg.uileless);
+        assert!(cfg.no_popup);
+    }
+
+    /// v4 的键名 `uileless` 还要认：用户升级后不能把开关悄悄关掉。
+    #[test]
+    fn legacy_uileless_key_still_reads() {
+        let (cfg, ver) = parse("config_ver=4\nuileless=1\n");
+        assert_eq!(ver, 4);
+        assert!(cfg.no_popup, "旧键要映射到新字段");
+        assert!(ver < CONFIG_VER, "v4 文件会被重写成 v5（键名跟着换）");
     }
 
     /// v2 用户明确关掉了全角标点，升级到 v3 **不能**把它改回 true。

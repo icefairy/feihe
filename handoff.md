@@ -345,7 +345,7 @@ fn candidate_limit(code: &str) -> usize {
 `src/dict.txt`（38573 系统词）+ `src/user_dict.txt`（52522 搜狗导入词）。
 
 **单字必须全收，不能按词频截断。** 早期 `gen_dict.py` 里 `MAX_CHARS = 3500`，
-把 8105 字表按词频砍到前 3500 个。同事姓「仝」，它在表里排 5402 名（词频 796，
+把 8105 字表按词频砍到前 3500 个。某个生僻姓在表里排 5402 名（词频 796，
 第 3500 名的下限是 11418）——直接没了，用户翻页也翻不到。
 现在 `MAX_CHARS = None`（8006 个可编码单字全收，8573 条含 567 个多音字读音）。
 回归测试：`rare_name_chars_are_reachable`（仝佟覃翟邬阚亓郗禚仉）。
@@ -502,8 +502,8 @@ GB2312 是**下限不是上限**：GBK 那两万多字（异形字 / 繁体字 /
 `Ctrl+数字` = 置顶该候选并上屏，对已置顶的那个再按一次 = 取消。
 存在 `%APPDATA%\Feihe\pinned.txt`（`编码<TAB>词`）。
 
-优先级：**置顶 > 一简字 > 动态词频 > 静态词频**。所以 `dict::search` 里的顺序是
-`freq::rank()` → 提一简字 → 提置顶，谁后提谁赢。
+优先级：**置顶 > 一简字 > 自造词 > 动态词频 > 静态词频**。所以 `dict::search` 里的顺序是
+`freq::rank()` → 提自造词 → 提一简字 → 提置顶，谁后提谁赢。
 
 置顶 `insert_missing = true`：词排到第 90 名以外也要钉上来。这是它和动态词频最本质的
 区别——后者排序发生在 `limit` 截断**之后**，只能重排已经在列表里的词。
@@ -515,24 +515,100 @@ GB2312 是**下限不是上限**：GBK 那两万多字（异形字 / 繁体字 /
 - `refresh()` 挂在 `Activate`，按 mtime 判断；文件被删时把内存表也清掉
 - 分词模式下钉的是**当前段**的码，不是整串——否则下次打同一个词对不上
 
-## UILess 模式
+## 自造词（`phrase.rs`）
 
-配置项 `uileless`（`config_ver=4`）。开关做成原子量 `config::uileless()`，
-因为候选窗每次按键都要问一遍。
+用户的原话：「我用 `limkyr` 逐字组成的『李明远』，再次打 `limkyr` 并不能出现我刚组出来的词」。
+
+这是**自动造词**缺失，不是动态词频的 bug。`freq` 只能重排**已经在候选里**的词；
+而「李明远」压根不在词库里——它只在用户那一次分词上屏里存在过，上屏完就没了。
+所以下次敲同样的码，走的还是老路：自动分词 → `[李明]远`。
+
+**触发点**：`commit_segments` 里调 `remember_phrase` → `compose_phrase`（纯函数）。
+四道门（缺一条就开始往表里灌废话）：
+
+1. 至少两段——单字不叫组词，单字的排序 `freq` 已经管了
+2. 每段都真有词——空段是 `merge_segments` 兜底塞的段码，不是用户选的
+3. 段码拼起来 == 用户敲的那串——中途改过编码，码和词已经对不上
+4. 词库里本来就有 → 跳过。自动切分沿用默认候选（用户没动）不该记
+
+**存全拼，不存码。** 这是和 `pin` 最大的区别：置顶存 `编码<TAB>词`，换方案那条就废了
+（用户自己钉的，认了）；自造词是**自动**记的，用户不知道有这回事，换方案后突然不灵
+只会当成 bug。所以存 `词<TAB>全拼`，查询时按当前方案现场编码，小鹤/微软/全拼三套索引
+都对得上。
+
+全拼靠 `dict::pinyin_of(码, 词)` 逐段反查（词库里存的就是全拼）。**必须整码匹配**：
+`li` 这个前缀下还挂着 `limk`（李明）这类更长的条目，只按前扫会把长词的全拼套给
+单字「李」，记下来的词下次打不出来——这种静默失效最难查。任何一段查不到就整体放弃。
+
+**排序位置**：`dict::search` 里在 `freq::rank` **之后**、一简字**之前**。一简字是肌肉
+记忆、置顶是用户显式钉的，两者都该赢过自动学来的东西。`insert_missing = true`
+（自造词本来就不在候选里，必须塞进去）。带辅助码筛选时不参与——辅助码是用户主动
+「再筛一道」，自造词没有可靠的首字辅助码。
+
+`phrases.txt` 里越靠前越新；同一个词再学一次只是挪到最前，不产生重复条目。
+
+## 不弹窗模式
+
+配置项 `no_popup`（`config_ver=5`；v4 及以前叫 `uileless`，`parse` 仍认旧键）。
+开关做成原子量 `config::no_popup()`，因为候选窗每次按键都要问一遍。
+
+**为什么改名。** 这功能原来叫 UILess，但它和 TSF 真正的 UILess（宿主自绘候选）是两件
+完全不同的事，只是都「不弹窗」。真 UILess 落地后必须拆开：现在 `UILess` 专指宿主驱动
+的那条（`src/uielement.rs`），开关叫「不弹窗模式」。`Ctrl+Shift+U` 这个键位留着没动
+（老用户的肌肉记忆），注释里写清了它跟真 UILess 无关。
 
 拦截点在 `candidate::show()` 和 `statusbar::show()`——它们是所有显示路径的**唯一出口**。
 拦在上层（`textservice::show_candidates`）的话，将来加个调用点就漏了。
 
 **候选必须塞进组合串。** 双拼同码字多（`de` 有几十个），只给「空格出第一候选」等于
 盲打。组合串是宿主画在文档里的、不是我们弹的窗口，全屏程序里通常还能显示，
-所以那是 UILess 下唯一能给用户看的通道：`nihc  1.你好 2.拟好 3.你号`。
+所以那是这条路下唯一能给用户看的通道：`nihc  1.你好 2.拟好 3.你号`。
+宿主接管 UILess 时反过来要**关掉**它（`no_popup_hint` 里先判 `ui_less`），否则屏幕上
+会出现两份候选。
 
 **必须有键盘出口。** 浮窗上的「设置」按钮是进设置窗的唯一入口，藏了浮窗就把用户锁在
 外面。所以 `Ctrl+Shift+U` 切回，而且必须拦在「修饰键一律交还应用」那条之前。
 
-边界：完全没接 TSF 的程序（很多独占全屏 DirectX 游戏）里连组合串都没有，
-飞鹤在里面一个字也打不出来。那需要外挂键盘钩子 + `SendInput` 的独立进程，
-要常驻监听全部按键——不在本项目范围内，文档里写清楚了。
+## TSF UILess（宿主自绘候选）
+
+`src/uielement.rs`。触发条件只有一个：宿主用
+`ITfThreadMgrEx::ActivateEx(TF_AE_UIELEMENTENABLEDONLY)` 激活线程管理器，TSF 把同一个
+`dwflags` 透传给我们的 `ITfTextInputProcessorEx::ActivateEx`。**没有任何用户开关。**
+
+链路：`show_candidates` → `Session::update` → 首次 `BeginUIElement(el, &pbShow, &id)`。
+
+- `pbShow == FALSE` = 宿主接管，我们一个窗口都不开，靠 `UpdateUIElement(id)` 推数据；
+- `pbShow == TRUE` = 宿主不接，立刻 `EndUIElement` 收回，本轮激活把 `ui_less` 清掉降级
+  成自绘窗（否则每次按键都要白绕一圈 COM）。
+
+实现上三个必须记住的点：
+
+1. **`UpdateUIElement` 是同步回调**，宿主会立刻回头问 `GetString`。所以数据必须先在
+   锁内改完、放锁、再调 COM。`textservice` 的 `uielement` 字段存 `Rc<Session>` 就是
+   为了「克隆句柄 → 放借用 → 再调用」，否则 `RefCell` 上重入直接 panic（panic 跨 FFI
+   边界就是 abort，输入法直接没了）。
+2. **`GetString` 返回候选词本身**，不带 `1.` 序号——序号是宿主排的。简繁转换在这里做
+   （和 `candidate::label` 一个规矩：存词库原文，显示层才转）。
+3. **每次组合重建元素对象**（`BeginUIElement` 时新建）。复用同一个在部分宿主上会把
+   上一轮的候选带过去。
+
+`GetUpdatedFlags` 一律返回全量六个标志。老实算差集要维护一份快照，收益为零——宿主拿到
+全量只会多读几次 `GetString`，而候选本来就是整页换掉的。
+
+`ITfCandidateListUIElement` 继承 `ITfUIElement`，两个 `_Impl` 要分开写（和
+`ITfTextInputProcessor(Ex)` 的处理方式一样）；`#[implement]` 里两个接口都列上，保证宿主
+QI `ITfUIElement` 也能成功。
+
+`TF_AE_UIELEMENTENABLEDONLY`（`0x1`）在 windows-rs 里**没有导出**（`TF_AE_NONE` 这个名字
+被 `TfActiveSelEnd` 占了），只能自己定义，所以加了个单测钉住它的值——写错了症状是
+「游戏里没候选」，极难看出是常量问题。
+
+`IUISimpleLayout` 没实现：windows-rs 0.62 的 TextServices 里根本没有这个接口，
+而且宿主不用它也能正常翻页（页边界走 `GetPageIndex`）。
+
+边界：程序如果既不走 UILess、也不显示组合串（极少数完全自绘输入框的引擎），飞鹤在里面
+一个字也打不出来。那需要外挂键盘钩子 + `SendInput` + 注入进程画候选，会直接撞反作弊，
+不在本项目范围内，文档里写清楚了。
 
 ## 删除类操作不能走「合并磁盘」
 
@@ -621,13 +697,15 @@ self.refresh();
 if !self.try_segment(&prev) { self.update_composition(); }
 ```
 
-`prev` 是上一轮的 `(段码, 已选词)`，重新分段时**段码没变就沿用**——
+`prev` 是上一轮的 `(段码, 已选词, 是否手动确认过)`，重新分段时**段码没变就沿用**——
 否则用户选完第一段再往下打，选择会被冲掉。
 
 老逻辑是「整体上屏 + 键交给应用」，长句打到一半屏幕上就凭空出现半句话，
 后面那个字母还会被当普通字符插进文档。
 
-标点走 `_ =>` 分支整体上屏，这是主流输入法的通行做法，也是长句的自然结束方式。
+标点走 `_ =>` 分支上屏，这是主流输入法的通行做法，也是长句的自然结束方式。
+但**串里有一段选不出字**（音节不像拼音，多半是在打英文）时改走上屏字母——
+否则 `mmap，` 会变成「面ap，」。
 
 ## 分词模式（长句逐段选词）
 
@@ -639,14 +717,29 @@ if !self.try_segment(&prev) { self.update_composition(); }
 - `composition_text()` 用 `[当前段]` 标光标位置，如 `[张三]李四`
 - `refresh()` 在分词态下只查**当前段**的候选，并把选中项对齐到该段已选的词
 - `←`/`→` 移段（`seg_idx`），`1-9` 换词（`confirm_segment`），空格确认并前移，
-  回车整体上屏（`commit_segments`），退格拆词（见下节）
+  回车原样上屏**字母**（`commit_raw_segments`），退格拆词（见下节）
 - 编码键：**延长编码、重新分段，不上屏**（`prev` 段码未变则保留已选词）
-- 其他键（标点、Tab 等）：整体上屏，键再交给应用
+- 其他键（标点、Tab 等）：上屏（有选不出字的段时上屏字母），键再交给应用
+
+### 回车 = 字母，不是候选
+
+早期分词模式把回车做成「整体上屏所有段的默认候选」，于是**同一个键的意思取决于
+你敲的字母能不能切成音节**：打 `mmap`（`mm`+`ap`）回车出「面ap」，打 `nihao` 回车出
+「你好」。用户没法预判，而 `mmap` 这种英文/代码串又恰好天天要打。
+
+现在两个模式的回车是同一个语义（`commit_raw_segments` / `raw_text`）：
+**上屏你敲的字母**。唯一例外是**手动确认过**的段（空格 / 数字）——那几段保留汉字，
+否则「选好两个字再回车」会连人选的字一起变成字母。
+
+想在分词模式里整句上屏中文：一路按空格确认到底，最后一段会自动整体上屏。
+
+配套一处：`Segment.picked` 记录「用户是否手动确认过这一段」，`confirm_segment` 置位，
+重新分段时随码一起沿用（`prev` 三元组）。
 
 ### 退格拆词（`segment_backspace`）
 
 自动分段的依据只是「词库里能匹配上的最长段」，它不认识用户想要什么。
-用户打 `tsirll`（通传两）时 DP 给出 `通传|两`，可他想要「通」+「传」+「两」——
+用户打 `limkyr`（李明远）时 DP 给出 `李明|远`，可他想要「李」+「明」+「远」——
 这时候必须有一把手能把自动组出来的词拆回去，否则「词库里没有的词」就永远打不出来。
 
 退格分两层，**第一层不丢编码**：
@@ -665,7 +758,7 @@ if !self.try_segment(&prev) { self.update_composition(); }
 > 切不出音节时退一个字符，保证退格永远有反应。
 
 拆段/退音节都是纯函数（`expand_segment` / `pick_expand_target` /
-`drop_last_syllable`），单测直接钉住 `tsirll` 这个真实用例。
+`drop_last_syllable`），单测直接钉住 `limkyr` 这个用例。
 
 ## 手动分隔（`;`）
 
@@ -794,7 +887,8 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 | `ILOT_NOAPPLYTOCURRENTSESSION` | 0x20（只存不生效） |
 | 隐藏杀手 | `HKCU\...\CTF\TIP\{CLSID}\LanguageProfile\...\Enable = 0` 会让条目即使注册成功也不可见 |
 | `Set-ItemProperty` | **没有** `-PropertyType` 参数（只有 `New-ItemProperty` 有）→ 用 `Set-RegValue` helper |
-| 换 DLL 不用注销 | 重命名被占用的旧 DLL → 拷新的 → 新启动的进程自然加载新版；已加载的进程要重启 |
+| 换 DLL 不用注销 | 改名被占用的旧 DLL → 拷新的 → install_tip.ps1 末尾杀 ctfmon（Windows 按需自动重启，中等完整性；从提权进程手动拉会因 UIPI 瘫痪）→ 新 ctfmon 按注册表路径加载新 DLL，点一下输入框即生效 |
+| `.ps1` 无 BOM | PowerShell 5.1 读无 BOM 脚本用系统 ANSI 代码页（简中 = cp936），UTF-8 中文按 GBK 解码会吞掉字符串闭合引号 → 解析失败（`字符串缺少终止符`）。uninstall_tip.ps1 曾中招：头部写着「纯 ASCII」实际含中文，卸载跑过了注册还在。全仓 `.ps1` 现在都带 BOM |
 | `to_interface()` | 只在 `#[implement]` 生成的 `_Impl` 类型上，普通结构体上没有 → impl 块要拆开 |
 | `TF_SELECTION.range` | 是 `ManuallyDrop<Option<ITfRange>>`，数组析构不释放 → 用完要手动 `take()` |
 | 搜狗词库编码 | 明文 **UTF-16LE**，不是 UTF-8；文件头魔数 `SGPU`（usr）/ `SGBG`（usrbg） |
@@ -802,6 +896,12 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 | 搜狗词库位置 | `HKLM\SOFTWARE\WOW6432Node\SogouInput` 默认值 = 安装目录，用户数据在 `<安装>/用户数据/SogouPY.users/<id>/` |
 | 词库合并 | `sort_by` 是稳定排序 → 先插用户词再插基础词，同码时用户词自然在前 |
 | 词库性能 | 首次查询含全量解析约 11.5ms，后续 584ns |
+| **UILess 两套常量** | 宿主传 `TF_TMAE_UIELEMENTENABLEDONLY` = **4**（msctf.h），TIP 收 `TF_AE_UIELEMENTENABLEDONLY` = **1**（tsf.h）。宿主若传 1，实际是 `TF_TMAE_NOACTIVATETIP`：TIP 被推迟激活、flags 丢掉，UILess 永远不生效，**不报错** |
+| **UILess 前置分类** | 宿主以 UILess 方式激活时，MSCTF **只加载**注册了 `{49D2F9CF-1F5E-11D7-A6D3-00065B84435C}`（`GUID_TFCAT_TIPCAP_UIELEMENTENABLED`）的 TIP。缺这条，游戏里的症状不是「候选看不见」而是**输入法整个不出现**，`ActivateEx` 照样返回 S_OK |
+| **TIP 常被提前激活** | user32 的 IMM32 兼容层会在**建窗口 / 拿焦点**时用 `dwflags = 0` 把 TIP 拉起来，宿主的 `ActivateEx` 通常晚一步。所以 TIP 判 UILess 必须用 `ITfThreadMgrEx::GetActiveFlags()` 兜底（实测带 UILess 时为 `0x80000004`） |
+| `ITfDocumentMgr::CreateContext` | windows-rs 0.62 的签名**多一个 `dwFlags`**，和 tsf.h 不一致，但**照它调是对的**（传 0）。自己按 4 参数 transmute 会直接崩 |
+| `ITfUIElementSink::BeginUIElement` | 回调只有 `(dwID, *mut BOOL)`，**没有元素对象**；要拿候选得回头 `ITfUIElementMgr::GetUIElement(id)` 再 QI `ITfCandidateListUIElement` |
+| `ITfUIElementSink` 注册 | 通过 `ITfSource::AdviseSink(IID_ITfUIElementSink, ...)`（`ITfUIElementMgr` 自己没有 Advise 方法）。IID 直接用 `<ITfUIElementSink as Interface>::IID` |
 
 ## 调试手段
 
@@ -816,6 +916,49 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 **排查 TSF 问题的正确顺序**：先确认 sink 到底有没有被调用，再看组合态，最后才看候选窗。
 不要一上来就怀疑 UI。
+
+## UILess 测试宿主（`tools/tsfhost`）
+
+独立的 cargo 包（有自己的 `[workspace]`，不参与主包构建），556 KB，只有 windows-rs 一个依赖。
+它是一个**最小 TSF 宿主**：自己建窗口、建文档、转发按键、在 `BeginUIElement` 里回
+`FALSE`（=「候选我来画」），然后在窗口底部画候选条。UILess 的宿主那一半能测到的，
+这里基本都覆盖了。
+
+```powershell
+cd tools\tsfhost
+cargo build --release --target x86_64-pc-windows-gnullvm
+# 需要 llvm-mingw 在 PATH（同主项目 build.ps1）
+
+tsfhost --selftest      # 自动敲 limkyr，打印结果后退出（0=PASS 2=FAIL）
+tsfhost                 # 手动试：看得到候选条、打字能上屏才算通
+tsfhost --normal        # 对照组：flags=0，TIP 自己弹候选窗
+tsfhost --register      # 给飞鹤补注册 UIELEMENTENABLED 分类（管理员）
+```
+
+判据非常直接：窗口状态行里有 `Begin=` / `Update=` 计数。**只有 TIP 真的走了
+UILess 通道，宿主才会收到 `BeginUIElement`**；走自绘窗时这三个数恒为 0，而屏幕上
+会出现飞鹤自己的候选框。
+
+`--selftest` 用 `keybd_event` 注入真按键（不是 `PostMessage`）——TIP 在按键路径上会读
+`GetKeyState` 判修饰键，伪造消息容易测出「假通过」。
+
+### 踩出来的三个坑（都已修）
+
+1. **宿主常量 4 ≠ TIP 常量 1**。第一次把 `TF_AE_UIELEMENTENABLEDONLY`(1) 当宿主 flags
+   传，`GetActiveFlags` 得到 `0x80000004` 之外的怪值、TIP 永远拿到 0——1 其实是
+   `TF_TMAE_NOACTIVATETIP`。
+2. **`ActivateEx` 常常晚于实际加载**。窗口一建、焦点一给，IMM32 就用 `dwflags = 0`
+   把 TIP 拉起来了；之后再 `ActivateEx(4)` 只改线程管理器的标志，TIP 毫不知情。
+   所以 `textservice.rs` 里改成「`dwflags` 或 `GetActiveFlags` 任一命中就算 UILess」。
+3. **缺 UIELEMENTENABLED 分类 = 输入法不加载**。`--normal` 下一切正常、`--selftest`
+   下连 `feihe.dll` 都进不来，最后靠 `ITfCategoryMgr::EnumItemsInCategory` 才看出来。
+   `install_tip.ps1` 已补上该分类。
+
+### 还没验证的
+
+加分类需要管理员（`tsfhost --register` 非管理员返回 `E_FAIL`）。当前机器上这条注册
+尚未生效，所以 **UILess 端到端仍待真机确认**：提权注册后跑
+`tsfhost --selftest`，期望 `BeginUIElement > 0` 且候选列表非空。
 
 ## 待办
 
@@ -840,7 +983,8 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 - [ ] 设置窗改双拼方案后，**其它已打开的进程**要重新激活才生效（方案缓存在各自的原子变量里；
       `Activate` 里已经会重读 config，所以只是「不即时」，不是「不生效」）
 - [ ] `C:\ProgramData\Feihe\` 下 **4 个** `feihe.dll.old-*`（约 16MB）被运行中的进程占用，
-      重启后可删
+      重启后可删（下次跑安装包也会顺手清掉：ProgramData 清理发生在 install_tip.ps1
+      重启 ctfmon 之后，映射一释放就删得动）
 
 已完成（别再当待办）：
 
@@ -854,7 +998,9 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 - [x] 整码优先（原 `exact_end` 两段查；现已并入 `top_by_rank` 的 `(码长, 行号)` 排序）
 - [x] 一级简码（`brief.rs`，26 键一简字；顺带修好「单键只出一个音节」的老毛病）
 - [x] 手动置顶（`pin.rs` + `Ctrl+数字`，压过一简字和动态词频）
-- [x] UILess 模式（`config::uileless()`，候选塞进组合串 + `Ctrl+Shift+U` 切回）
+- [x] 不弹窗模式（`config::no_popup()`，候选塞进组合串 + `Ctrl+Shift+U` 切回）
+- [x] 自造词（`phrase.rs` + `compose_phrase`，分词上屏时记住用户拼出来的新词）
+- [x] TSF UILess（`src/uielement.rs`，`ITfCandidateListUIElement` + `BeginUIElement` 协商）
 - [x] 分词模式（`maybe_split` + `try_segment` + `segments`，**不自动上屏**）
 - [x] 全拼智能分隔（`split_pinyin` 的 DP + `is_syllable`）
 - [x] `;` 手动分隔（微软双拼改用 `'`）

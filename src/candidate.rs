@@ -1,9 +1,12 @@
 //! 候选窗：自绘 popup 窗口
 //!
-//! 没用 `ITfUIElement` / `ITfCandidateListUIElement`——那套要额外实现
-//! 四五个 COM 接口加一套 UIElementSink 生命周期，代码量翻倍。这里直接开一个
-//! `WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOPMOST` 的窗口用 GDI 画，效果一样，
-//! 而且不会被宿主应用的窗口层级盖住。
+//! 这里**不用** `ITfUIElement` / `ITfCandidateListUIElement`——那套要走宿主的
+//! `ITfUIElementSink` 协商，宿主不接就没有候选。桌面程序全是「输入法自己画」，
+//! 所以主路径就开一个 `WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOPMOST` 的窗口用 GDI 画，
+//! 效果一样，而且不会被宿主应用的窗口层级盖住。
+//!
+//! 那套接口实现放在 `uielement` 模块，只服务一种情况：宿主声明自己是 UI-less 线程
+//! （独占全屏游戏），此时我们的窗口根本画不上屏，候选必须交给宿主自己画。
 //!
 //! ## 鼠标点击
 //!
@@ -339,12 +342,14 @@ pub fn show(items: &[&str], selected: usize, page: usize, x: i32, y: i32) {
         hide();
         return;
     }
-    // UILess 模式：一个 popup 都不许弹。
+    // 不弹窗模式：一个 popup 都不许弹。
     //
     // 拦在这里而不是拦在 `textservice::show_candidates`，是因为这个函数是**所有**
     // 显示路径的唯一出口；拦在上层的话，将来新加一个调用点就会漏。
     // 顺带把可能已经挂着的窗口收掉——用户是刚在设置里打开的开关。
-    if config::uileless() {
+    //
+    // 注意这是**用户**开的开关；宿主驱动的 UILess 走 `uielement`，不经过这里。
+    if config::no_popup() {
         hide();
         return;
     }

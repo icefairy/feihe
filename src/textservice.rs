@@ -21,6 +21,7 @@ use crate::settings;
 use crate::shuangpin::{self, Scheme};
 use crate::softkbd;
 use crate::statusbar;
+use crate::uielement;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -34,6 +35,7 @@ use windows_core::{implement, IUnknownImpl};
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// 一次最多取多少候选（10 页 × 9）。单键 / 两键会按码长衰减，见 `candidate_limit`。
@@ -82,6 +84,11 @@ struct Segment {
     code: String,
     /// 这一段当前选中的词（未确认时是第一个候选）
     word: String,
+    /// 用户是否用空格/数字**手动确认过**这一段。
+    ///
+    /// 回车是「我就要这些字母」，但用户已经逐段选出来的字不能跟着丢掉，
+    /// 所以上屏字母时 `picked` 的段保留汉字，其余段输出原始编码。
+    picked: bool,
 }
 
 #[implement(
@@ -118,6 +125,17 @@ pub struct FeiheTextService {
     segments: RefCell<Vec<Segment>>,
     /// 分词模式下光标落在第几段
     seg_idx: Cell<usize>,
+    /// 宿主是不是 UI-less 线程（独占全屏游戏）。由 `ActivateEx` 的 `dwflags` 决定。
+    ///
+    /// 置位后候选走 `ITfUIElementMgr` 交给宿主画，我们自己一个窗口都不弹。
+    /// 宿主不接（`BeginUIElement` 回 TRUE）就降级回自绘窗，这个位会清掉。
+    ui_less: Cell<bool>,
+    /// UILess 会话。激活时建一次，反激活时销毁。
+    ///
+    /// 存 `Rc` 是为了能用「克隆一份句柄再调用」的方式用：`update` 会同步回调进
+    /// 宿主的 sink，宿主要是再问我们要候选（`GetString`），`RefCell` 上还会多一层
+    /// 借用——万一重入就是 panic。拿句柄、放借用、再调，绕开这个坑。
+    uielement: RefCell<Option<Rc<uielement::Session>>>,
     /// 存活令牌。候选窗的点击回调拿着它的 `Weak`——对象析构后 `upgrade()` 失败，
     /// 回调就不会去碰已经释放的地址。见 `install_click_handler`。
     alive: Arc<()>,
@@ -143,6 +161,8 @@ impl FeiheTextService {
             shift_used: Cell::new(false),
             segments: RefCell::new(Vec::new()),
             seg_idx: Cell::new(0),
+            ui_less: Cell::new(false),
+            uielement: RefCell::new(None),
             alive: Arc::new(()),
         }
     }
@@ -162,7 +182,18 @@ impl FeiheTextService {
         self.selected.set(0);
         self.page.set(0);
         self.pending_op.borrow_mut().take();
+        self.hide_candidates();
+    }
+
+    /// 收掉候选显示。自绘窗和 UILess 元素都要收——只收一边的话，提交后宿主的
+    /// 候选框会一直挂在屏幕上（它不知道我们这边组合已经结束了）。
+    fn hide_candidates(&self) {
         candidate::hide();
+        // 先把句柄克隆出来再调用，别让 RefCell 的借用跨过 COM 回调
+        let sess = self.uielement.borrow().as_ref().cloned();
+        if let Some(s) = sess {
+            s.end();
+        }
     }
 
     fn deactivate_sink(&self) {
@@ -177,6 +208,10 @@ impl FeiheTextService {
         self.context.borrow_mut().take();
         self.composition.borrow_mut().take();
         self.clear_state();
+        // UILess 会话握着 ITfThreadMgr 的派生接口，反激活时必须先放掉，
+        // 否则 MSCTF 会在线程管理器已经失效之后还来问候选数据。
+        self.uielement.borrow_mut().take();
+        self.ui_less.set(false);
         candidate::destroy();
     }
 
@@ -344,11 +379,11 @@ impl FeiheTextService {
         }
     }
 
-    /// 把第 `idx` 段拆成逐音节段（「通传」→「通」+「传」）。
+    /// 把第 `idx` 段拆成逐音节段（「李明」→「李」+「明」）。
     ///
     /// 返回 `false` 表示拆不动——本来就是单音节段。
     ///
-    /// 自动分段是 DP 贪心取最长（`tsirll` → `通传|两`），但那个切法只是**词库里
+    /// 自动分段是 DP 贪心取最长（`limkyr` → `李明|远`），但那个切法只是**词库里
     /// 最长的匹配**，不一定是用户想要的。退格把这一段拆开，用户就能一个字一个字
     /// 自己组。拆出来的每段先给第一个候选当默认值，和首次进入分词时一个口径。
     fn expand_segment(segs: &mut Vec<Segment>, idx: usize) -> bool {
@@ -367,6 +402,7 @@ impl FeiheTextService {
                     .first()
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
+                picked: false,
             })
             .collect();
         segs.splice(idx..=idx, split);
@@ -421,6 +457,23 @@ impl FeiheTextService {
     /// 直接拼 `word` 会把它**静默吞掉**——用户敲了 3 个音节只得到 2 个字，
     /// 而且屏幕上没有任何提示。先按段码再查一次，仍然没有就上屏段码本身
     /// （和 `commit_raw` 一个口径：宁可让用户看见自己敲了什么）。
+    /// 分词模式下「原样上屏」要上屏什么：确认过的段出汉字，其余段出原始编码。
+    ///
+    /// 纯函数，好单测。`mmap` 这种串会被切成 `mm`+`ap`，`ap` 没有候选（`word` 为空），
+    /// 于是整串回落成 `mmap`；用户要是先按空格确认了「面」，那就是 `面ap`——
+    /// 他自己选的字不该被吃掉。
+    fn raw_text(segs: &[Segment]) -> String {
+        let mut s = String::new();
+        for seg in segs {
+            if seg.picked && !seg.word.is_empty() {
+                s.push_str(&seg.word);
+            } else {
+                s.push_str(&seg.code);
+            }
+        }
+        s
+    }
+
     fn merge_segments(segs: &[Segment]) -> String {
         segs.iter()
             .map(|s| {
@@ -433,6 +486,48 @@ impl FeiheTextService {
                     .unwrap_or_else(|| s.code.clone())
             })
             .collect()
+    }
+
+    /// 从一次分词上屏里推导出「该记成自造词的新词」。
+    ///
+    /// 纯函数，`lookup` 是「码 + 词 → 全拼」的反查（生产路径传 `dict::pinyin_of`，
+    /// 测试传假数据）。返回 `None` 表示这次不该记——下面每条都是为了让表里
+    /// 只留「用户真的一个一个字点出来的新词」：
+    ///
+    /// 1. 至少两段：单字不叫组词，单字的排序已经由动态词频管了
+    /// 2. 每段都真有词：空段是 `merge_segments` 兜底时塞的段码，不是用户选的
+    /// 3. 段码拼起来等于用户敲的那串：中途改过编码的话，码和词已经对不上了
+    /// 4. 词库里本来就有：自动切分沿用默认候选时不该记重复数据
+    ///
+    /// 全拼**任何一段查不到就整体放弃**：拿不到可靠的全拼，这个词在换方案、
+    /// 开全拼模式之后就再也打不出来，记了反而更糟（用户以为记下了）。
+    fn compose_phrase(
+        segs: &[Segment],
+        code: &str,
+        lookup: impl Fn(&str, &str) -> Option<String>,
+    ) -> Option<(String, String)> {
+        if segs.len() < 2 {
+            return None;
+        }
+        if segs.iter().any(|s| s.word.is_empty() || s.word.is_ascii()) {
+            return None;
+        }
+        if segs.iter().map(|s| s.code.as_str()).collect::<String>() != code {
+            return None;
+        }
+        let word: String = segs.iter().map(|s| s.word.as_str()).collect();
+        if lookup(code, &word).is_some() {
+            return None;
+        }
+        let mut py = String::new();
+        for s in segs {
+            let p = lookup(&s.code, &s.word)?;
+            if !py.is_empty() {
+                py.push(' ');
+            }
+            py.push_str(&p);
+        }
+        Some((word, py))
     }
 
     /// 把编码切成若干段。纯函数，不碰 `self`——分段策略是长句输入的核心决策，
@@ -692,7 +787,7 @@ impl FeiheTextService {
                     s.push_str(&word);
                 }
             }
-            s.push_str(&self.uiless_hint());
+            s.push_str(&self.no_popup_hint());
             return s;
         }
         let code = self.code.borrow();
@@ -702,20 +797,21 @@ impl FeiheTextService {
         } else {
             format!("{code} {assist}")
         };
-        s.push_str(&self.uiless_hint());
+        s.push_str(&self.no_popup_hint());
         s
     }
 
-    /// UILess 模式下，把当前这一页的候选拼到组合串后面。
+    /// 不弹窗模式下，把当前这一页的候选拼到组合串后面。
     ///
     /// 为什么必须这么做：候选窗不弹了，用户就只剩「空格上屏第一候选」这一条路。
     /// 双拼同码字多（`de` 有几十个），看不见候选等于盲打——那还不如不用。
     /// 组合串是**宿主自己画在文档里的**，全屏游戏里通常仍能显示，所以把候选塞
-    /// 进去是 UILess 下唯一还能给用户看的通道。
+    /// 进去是这条路下唯一还能给用户看的通道。
     ///
-    /// 正常模式下返回空串，组合串还是原来那个干净的编码。
-    fn uiless_hint(&self) -> String {
-        if !config::uileless() {
+    /// 两种情况返回空串：开关没开；或者宿主已经接管了候选绘制（真 UILess）——
+    /// 后者宿主自己会画一份，再塞进组合串就成了两份。
+    fn no_popup_hint(&self) -> String {
+        if self.ui_less.get() || !config::no_popup() {
             return String::new();
         }
         let cands = self.candidates.borrow();
@@ -724,7 +820,7 @@ impl FeiheTextService {
 
     /// 把一页候选拼成 `  1.你好 2.拟好 3.你号` 这样的尾部提示。
     ///
-    /// 抽成纯函数才能单测——`uiless_hint` 要 `&self`，而 `self` 里有 COM 句柄，
+    /// 抽成纯函数才能单测——`no_popup_hint` 要 `&self`，而 `self` 里有 COM 句柄，
     /// 测试进程里造不出来。
     fn format_candidates(cands: &[Cow<'static, str>], page: usize) -> String {
         if cands.is_empty() {
@@ -879,7 +975,7 @@ impl FeiheTextService_Impl {
     ///
     /// `prev` 是上一轮的分段选择：继续敲字重新分段时，如果某一段的码没变，
     /// 就沿用用户已经选过的词。否则「选完第一段再往下打」会把选择冲掉。
-    fn try_segment(&self, prev: &[(String, String)]) -> bool {
+    fn try_segment(&self, prev: &[(String, String, bool)]) -> bool {
         if self.assist_active.get() {
             return false;
         }
@@ -900,16 +996,21 @@ impl FeiheTextService_Impl {
             .iter()
             .enumerate()
             .map(|(i, c)| {
-                let word = match prev.get(i) {
-                    Some((pc, w)) if pc == c => w.clone(),
-                    _ => FeiheTextService::lookup_any(c, 1)
-                        .first()
-                        .map(|s| s.to_string())
-                        .unwrap_or_default(),
+                // 码没变的段沿用上一轮的选择，连同「用户确认过」这个状态一起带过来
+                let (word, picked) = match prev.get(i) {
+                    Some((pc, w, pk)) if pc == c => (w.clone(), *pk),
+                    _ => (
+                        FeiheTextService::lookup_any(c, 1)
+                            .first()
+                            .map(|s| s.to_string())
+                            .unwrap_or_default(),
+                        false,
+                    ),
                 };
                 Segment {
                     code: c.clone(),
                     word,
+                    picked,
                 }
             })
             .collect();
@@ -942,7 +1043,12 @@ impl FeiheTextService_Impl {
                 .map(|s| s.to_string())
         };
         let Some(word) = word else { return };
-        self.segments.borrow_mut()[idx].word = word;
+        {
+            let mut segs = self.segments.borrow_mut();
+            segs[idx].word = word;
+            // 用户按了空格/数字，这一段就是他明确要的字
+            segs[idx].picked = true;
+        }
 
         if idx + 1 < n {
             self.seg_idx.set(idx + 1);
@@ -951,6 +1057,61 @@ impl FeiheTextService_Impl {
         } else {
             self.commit_segments("");
         }
+    }
+
+    /// 把「用户逐段拼出来的词」记成自造词（`phrase` 模块）。
+    ///
+    /// 场景：词库里没有的词（人名、公司名），用户把一长串编码切开、一段一段选字
+    /// 拼出来。这个词只活到这次上屏为止——下一次敲同样的码，词库还是不认识它，
+    /// 用户看到的就是「我刚组出来的词怎么又没了」。
+    ///
+    /// 下面四个判断都是为了**不记垃圾**，缺一个就会开始往表里灌废话：
+    /// 1. 至少两段——单字不叫「组词」，单字的排序已经由动态词频管了
+    /// 2. 每段都真有词——空段是 `merge_segments` 兜底时塞的段码，不是用户选的
+    /// 3. 段码拼起来等于用户敲的那串——中途改过编码的话，码和词已经对不上了
+    /// 4. 词库里本来就有这个词就跳过——自动切分沿用默认候选时不该记重复数据
+    ///
+    /// 全拼从词库反查（词库存的就是全拼），**任何一段查不到就整体放弃**：
+    /// 拿不到可靠的全拼，这个词在换方案、开全拼模式之后就再也打不出来，
+    /// 记了反而更糟（用户以为记下了）。
+    fn remember_phrase(&self) {
+        if !config::get().learn {
+            return;
+        }
+        let code = FeiheTextService::query_code(&self.code.borrow()).into_owned();
+        let mode = config::pinyin_mode();
+        let segs = self.segments.borrow();
+        if let Some((word, py)) =
+            FeiheTextService::compose_phrase(&segs, &code, |c, w| dict::pinyin_of(c, w, mode))
+        {
+            crate::phrase::learn(&word, &py);
+        }
+    }
+
+    /// 回车 / 拼音串末尾跟标点：上屏字母而不是候选（见 `raw_text`）。
+    fn commit_raw_segments(&self, suffix: &str) {
+        let mut text = {
+            let segs = self.segments.borrow();
+            FeiheTextService::raw_text(&segs)
+        };
+        // 确认过的段是用户明确选的词，词频照记；字母部分没有词可记，
+        // 也不该进自造词表——那是一串英文，不是词。
+        {
+            let segs = self.segments.borrow();
+            for s in segs.iter().filter(|s| s.picked && !s.word.is_empty()) {
+                crate::freq::bump(&s.word);
+            }
+        }
+        text.push_str(suffix);
+        self.segments.borrow_mut().clear();
+        self.seg_idx.set(0);
+        if text.is_empty() {
+            self.cancel();
+            return;
+        }
+        self.pending_op.borrow_mut().replace(EditOp::Commit(text));
+        self.request_edit_session();
+        self.clear_state();
     }
 
     /// 分词模式整体上屏：把所有段已选的词拼起来提交。
@@ -967,6 +1128,10 @@ impl FeiheTextService_Impl {
                 crate::freq::bump(&s.word);
             }
         }
+        // 整串记成自造词：下次同样的码打满就直接出这个词，不用再拆一遍。
+        // 放在逐段 bump 之后：`remember_phrase` 要读 segments，不能和上面的
+        // 借用嵌套（它会再借一次 RefCell，同线程重入会 panic）。
+        self.remember_phrase();
         let mut text = FeiheTextService::merge_segments(&self.segments.borrow());
         text.push_str(suffix);
         self.segments.borrow_mut().clear();
@@ -1009,8 +1174,8 @@ impl FeiheTextService_Impl {
     /// 单个字，候选窗立刻变成这一段第一个字的候选，选完自动跳到下一个字——
     /// 于是「词库里没有的词」也能一个字一个字拼出来。
     ///
-    /// 退格永远不丢编码（除非整串退空）：`tsirll` 退一次变 `[通][传]两`，
-    /// 再退才删掉 `ll` 变 `tsir`（通传）。
+    /// 退格永远不丢编码（除非整串退空）：`limkyr` 退一次变 `[李][明]远`，
+    /// 再退才删掉 `yr` 变 `limk`（李明）。
     fn segment_backspace(&self) {
         let idx = {
             let n = self.segments.borrow().len();
@@ -1067,9 +1232,9 @@ impl FeiheTextService_Impl {
                 self.confirm_segment(0);
                 Ok(BOOL::from(true))
             }
-            // 回车：整体上屏
+            // 回车：原样上屏字母，和普通组合态一个语义
             0x0D => {
-                self.commit_segments("");
+                self.commit_raw_segments("");
                 Ok(BOOL::from(true))
             }
             // 1-9：选当前段第 n 个候选
@@ -1101,11 +1266,11 @@ impl FeiheTextService_Impl {
                     return Ok(BOOL::from(true));
                 }
                 // 记下已选的词，重新分段时码没变的段沿用
-                let prev: Vec<(String, String)> = self
+                let prev: Vec<(String, String, bool)> = self
                     .segments
                     .borrow()
                     .iter()
-                    .map(|s| (s.code.clone(), s.word.clone()))
+                    .map(|s| (s.code.clone(), s.word.clone(), s.picked))
                     .collect();
 
                 self.code.borrow_mut().push(ch);
@@ -1123,7 +1288,15 @@ impl FeiheTextService_Impl {
             _ => {
                 if let Some(ch) = FeiheTextService::fullwidth_punct_for(vk) {
                     let mut buf = [0u8; 4];
-                    self.commit_segments(ch.encode_utf8(&mut buf));
+                    let punct = ch.encode_utf8(&mut buf);
+                    // 有段根本选不出字（音节不像拼音，多半是在打英文）→ 整体上屏
+                    // 会拼出「面ap，」这种东西，按字母上屏才对。
+                    let has_letters = self.segments.borrow().iter().any(|s| s.word.is_empty());
+                    if has_letters {
+                        self.commit_raw_segments(punct);
+                    } else {
+                        self.commit_segments(punct);
+                    }
                     return Ok(BOOL::from(true));
                 }
                 self.commit_segments("");
@@ -1318,12 +1491,31 @@ impl FeiheTextService {
     }
 
     fn show_candidates(&self) {
-        // 先克隆一份 Arc 快照，避免借用跨过 candidate::show（它会加锁、发窗口消息）
+        // 先克隆一份快照，避免借用跨过 candidate::show（它会加锁、发窗口消息）
         let snapshot: Vec<Cow<'static, str>> = self.candidates.borrow().clone();
         if snapshot.is_empty() {
-            candidate::hide();
+            self.hide_candidates();
             return;
         }
+
+        // 宿主声明了 UI-less（独占全屏游戏）：先问它接不接。
+        // 接了它自己画，我们一个窗口都不弹——这是「全屏游戏里看得见候选」的通道。
+        if self.ui_less.get() {
+            let items: Vec<String> = snapshot.iter().map(|s| s.to_string()).collect();
+            let (sel, page) = (self.selected.get(), self.page.get());
+            let sess = self.uielement.borrow().as_ref().cloned();
+            let handled = match sess {
+                Some(s) => s.update(items, page * candidate::PAGE_SIZE + sel, page),
+                None => false,
+            };
+            if handled {
+                return;
+            }
+            // 宿主不接，或者拿不到 ITfUIElementMgr：降级回自绘窗，
+            // 本轮激活里不再问它（每次按键都问一遍是纯浪费）。
+            self.ui_less.set(false);
+        }
+
         let items: Vec<&str> = snapshot.iter().map(|s| s.as_ref()).collect();
         candidate::show(
             &items,
@@ -1424,6 +1616,9 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 置顶表同理：在设置窗里清空、或手改了 pinned.txt，别的进程要能看见。
         crate::pin::refresh();
 
+        // 自造词同理：在别的宿主里刚拼出来的词，切过来也要能打。同样按 mtime 判断。
+        crate::phrase::refresh();
+
         // 候选窗鼠标点击：把「点了第几个」路由回本对象。
         // 放在 Activate 里而不是每次 show——闭包要捕获对象地址，只在对象身份
         // 变化时才需要重建，`set_click_handler` 内部按 id 判断。
@@ -1471,9 +1666,69 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
     }
 }
 
+/// 判断宿主是不是要 UILess。两条路都要看，因为**参数不一定到得了**：
+///
+/// 1. 正常情况下 MSCTF 会把宿主的 `TF_TMAE_UIELEMENTENABLEDONLY`(4) 转成
+///    `TF_AE_UIELEMENTENABLEDONLY`(1) 传进 `dwflags`；
+/// 2. 但 TIP 常常不是由宿主的 `ActivateEx` 拉起来的——user32 的 IMM32 兼容层会在
+///    建窗口 / 拿焦点时抢先把它激活一遍，那时 `dwflags` 恒为 0。宿主的意图这时只
+///    留在线程管理器上，`GetActiveFlags` 里读得到（实测为 0x80000004）。
+///
+/// 只认第 1 条的话，真实游戏里永远进不了 UILess，而且一点错都不报。见
+/// `tools/tsfhost` 里的实测记录。
+fn ui_less_requested(tim: &ITfThreadMgr, dwflags: u32) -> bool {
+    if dwflags & uielement::TF_AE_UIELEMENTENABLEDONLY != 0 {
+        return true;
+    }
+    let Ok(ex) = tim.cast::<ITfThreadMgrEx>() else {
+        return false;
+    };
+    unsafe { ex.GetActiveFlags() }
+        .map(|f| f & uielement::TF_TMAE_UIELEMENTENABLEDONLY != 0)
+        .unwrap_or(false)
+}
+
 impl ITfTextInputProcessorEx_Impl for FeiheTextService_Impl {
-    fn ActivateEx(&self, ptim: Ref<'_, ITfThreadMgr>, tid: u32, _dwflags: u32) -> Result<()> {
-        self.Activate(ptim, tid)
+    fn ActivateEx(&self, ptim: Ref<'_, ITfThreadMgr>, tid: u32, dwflags: u32) -> Result<()> {
+        // 先留一份再交给 Activate——`Ref` 不实现 Copy，先 clone 才不会被 move 走
+        let tim: ITfThreadMgr = ptim.ok()?.clone();
+        self.Activate(ptim, tid)?;
+
+        // 宿主把线程管理器按 UI-less 方式激活了（典型：独占全屏游戏）。全屏下 DWM
+        // 被绕开，我们自己开的窗口画了也不上屏，候选只能交给宿主画——见 `uielement`。
+        let ui_less = ui_less_requested(&tim, dwflags);
+        self.ui_less.set(ui_less);
+        if ui_less {
+            self.setup_uielement();
+            // 会话没建起来（拿不到 ITfUIElementMgr）就不算 UILess，浮窗照旧
+            if self.ui_less.get() {
+                // 状态浮窗同理：全屏下它只会变成一个看不见的窗口
+                statusbar::hide();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FeiheTextService_Impl {
+    /// 建 UILess 会话。
+    ///
+    /// 拿不到 `ITfUIElementMgr`（很老的系统，或宿主不是 MSCTF 线程管理器）就退回
+    /// 自绘窗——宁可候选窗看不见，也不能让按键流程因为少个接口就断掉。
+    fn setup_uielement(&self) {
+        let tim = self.thread_mgr.borrow().as_ref().cloned();
+        let Some(tim) = tim else {
+            self.ui_less.set(false);
+            return;
+        };
+        let Ok(mgr) = tim.cast::<ITfUIElementMgr>() else {
+            self.ui_less.set(false);
+            return;
+        };
+        // 元素要报自己的 document manager，宿主可能用它判断候选属于哪个文档
+        let doc = unsafe { tim.GetFocus() }.ok();
+        let sess = uielement::Session::new(mgr, doc);
+        self.uielement.borrow_mut().replace(Rc::new(sess));
     }
 }
 
@@ -1543,21 +1798,24 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             return Ok(BOOL::from(false));
         }
 
-        // ── Ctrl+Shift+U：切 UILess 模式 ────────────────────
+        // ── Ctrl+Shift+U：切「不弹窗模式」 ──────────────────
         //
-        // UILess 会把状态浮窗一起藏起来，而浮窗上的「设置」是进设置窗的**唯一**
-        // 入口。不给个键盘出口的话，用户打开 UILess 就把自己锁在外面了，
+        // 打开后会连状态浮窗一起藏起来，而浮窗上的「设置」是进设置窗的**唯一**
+        // 入口。不给个键盘出口的话，用户打开这个开关就把自己锁在外面了，
         // 只能去手改 config.ini。所以这个组合键必须存在，而且必须在下面那条
         // 「修饰键一律交还应用」之前拦下来。
+        //
+        // 键位沿用 U（这个开关以前叫 UILess，老用户已经记住了）；它和宿主驱动的
+        // 真 UILess 不是一回事——那个没有开关，由 `ActivateEx` 的 dwflags 决定。
         //
         // 必须放在 `is_shift` 判断之后：Shift 按下时那条已经先返回了，
         // 而 `note_shift_combo` 也记下了「Shift 是配合别的键用的」，
         // 抬起时不会误切中英。
         if FeiheTextService::ctrl_only() && FeiheTextService::shift_down() && vk == 0x55 {
-            let next = !config::uileless();
-            config::update(|c| c.uileless = next);
+            let next = !config::no_popup();
+            config::update(|c| c.no_popup = next);
             if next {
-                candidate::hide();
+                self.hide_candidates();
                 statusbar::hide();
             } else {
                 statusbar::show();
@@ -1832,7 +2090,7 @@ impl FeiheTextService_Impl {
                         let _ = comp.EndComposition(ec);
                     } else {
                     }
-                    candidate::hide();
+                    self.hide_candidates();
                 }
                 EditOp::Insert(text) => {
                     // 标点、软键盘符号转换是空操作（它们本来就不在简繁映射里），
@@ -1854,7 +2112,7 @@ impl FeiheTextService_Impl {
                         put_caret(&context, ec, &r);
                         let _ = comp.EndComposition(ec);
                     }
-                    candidate::hide();
+                    self.hide_candidates();
                 }
             }
         }
@@ -1951,9 +2209,9 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    /// UILess 下候选要拼进组合串：没有候选窗，这是用户唯一能看到候选的地方。
+    /// 不弹窗模式下候选要拼进组合串：没有候选窗，这是用户唯一能看到候选的地方。
     #[test]
-    fn uiless_hint_lists_current_page() {
+    fn no_popup_hint_lists_current_page() {
         let cands: Vec<Cow<'static, str>> = ["你好", "拟好", "你号"]
             .iter()
             .map(|s| Cow::Borrowed(*s))
@@ -2191,6 +2449,7 @@ mod tests {
         let seg = |code: &str, word: &str| Segment {
             code: code.to_string(),
             word: word.to_string(),
+            picked: false,
         };
         // 正常段：直接拼已选的词
         assert_eq!(
@@ -2218,6 +2477,101 @@ mod tests {
     fn query_code_strips_separator() {
         assert_eq!(FeiheTextService::query_code("ni'hao").as_ref(), "nihao");
         assert_eq!(FeiheTextService::query_code("vhsj").as_ref(), "vhsj");
+    }
+
+    /// 自造词的准入规则：`li`+`mk`+`yr` → 李明远，四道门全过才记。
+    #[test]
+    fn compose_phrase_learns_new_word() {
+        let seg = |code: &str, word: &str| Segment {
+            code: code.to_string(),
+            word: word.to_string(),
+            picked: false,
+        };
+        let segs = vec![seg("li", "李"), seg("mk", "明"), seg("yr", "远")];
+        // 整串查不到（词库里没有「李明远」），单段能查到全拼
+        let lookup = |code: &str, word: &str| match (code, word) {
+            ("limkyr", _) => None,
+            ("li", "李") => Some("li".to_string()),
+            ("mk", "明") => Some("ming".to_string()),
+            ("yr", "远") => Some("yuan".to_string()),
+            _ => None,
+        };
+        let got = FeiheTextService::compose_phrase(&segs, "limkyr", lookup);
+        assert_eq!(
+            got,
+            Some(("李明远".to_string(), "li ming yuan".to_string()))
+        );
+    }
+
+    /// 回车 = 字母；但用户确认过的段保留汉字，不能连人带字一起丢掉。
+    ///
+    /// 这条是「输入 `mmap` 回车却出「面ap」」的回归测试。
+    #[test]
+    fn raw_text_keeps_only_picked_segments() {
+        let mk = |code: &str, word: &str, picked: bool| Segment {
+            code: code.into(),
+            word: word.into(),
+            picked,
+        };
+        // 一段都没确认：整串原样回落成字母
+        let segs = vec![mk("mm", "面", false), mk("ap", "", false)];
+        assert_eq!(FeiheTextService::raw_text(&segs), "mmap");
+        // 确认过第一段：「面」是他选的，后面的字母照原样
+        let segs = vec![mk("mm", "面", true), mk("ap", "", false)];
+        assert_eq!(FeiheTextService::raw_text(&segs), "面ap");
+        // 确认过但词是空的（理论上不会发生）：退回编码，绝不产出半个空串
+        let segs = vec![mk("mm", "", true)];
+        assert_eq!(FeiheTextService::raw_text(&segs), "mm");
+        // 全部确认过：等价于整体上屏
+        let segs = vec![mk("limk", "李明", true), mk("yr", "远", true)];
+        assert_eq!(FeiheTextService::raw_text(&segs), "李明远");
+    }
+
+    /// 四个「不该记」的条件，逐个验一遍。
+    #[test]
+    fn compose_phrase_rejects_junk() {
+        let seg = |code: &str, word: &str| Segment {
+            code: code.to_string(),
+            word: word.to_string(),
+            picked: false,
+        };
+        let all = |_: &str, _: &str| -> Option<String> { Some("li ming yuan".into()) };
+
+        // 1. 只有一段：单字不叫组词
+        let one = vec![seg("li", "李")];
+        assert_eq!(FeiheTextService::compose_phrase(&one, "li", all), None);
+
+        // 2. 有空段：那段是兜底塞的段码，不是用户选的
+        let empty = vec![seg("li", "李"), seg("mk", ""), seg("yr", "远")];
+        assert_eq!(FeiheTextService::compose_phrase(&empty, "limkyr", all), None);
+
+        // 3. 段码拼起来和用户敲的对不上（编码中途改过）
+        let mismatch = vec![seg("li", "李"), seg("mk", "明")];
+        assert_eq!(
+            FeiheTextService::compose_phrase(&mismatch, "limkyr", all),
+            None
+        );
+
+        // 4. 词库里本来就有：查得到整串就跳过（自动切分沿用默认不该记）
+        let known = vec![seg("li", "李"), seg("mk", "明"), seg("yr", "远")];
+        let in_dict = |_: &str, _: &str| -> Option<String> { Some("li ming yuan".into()) };
+        assert_eq!(
+            FeiheTextService::compose_phrase(&known, "limkyr", in_dict),
+            None
+        );
+
+        // 5. 有一段拿不到全拼：整体放弃，宁可这次不记，也不记个残缺的
+        let segs = vec![seg("li", "李"), seg("mk", "明"), seg("yr", "远")];
+        let partial = |code: &str, word: &str| -> Option<String> {
+            match (code, word) {
+                ("limkyr", _) => None,
+                ("li", "李") => Some("li".into()),
+                ("mk", "明") => None,
+                _ => Some("yuan".into()),
+            }
+        };
+        let got = FeiheTextService::compose_phrase(&segs, "limkyr", partial);
+        assert_eq!(got, None);
     }
 
     #[test]
@@ -2260,20 +2614,20 @@ mod tests {
         config::set_pinyin_mode(false);
     }
 
-    /// 用户实际反馈的串：`tsirll`（通传两）整串无候选时，自动切成 `通传|两`。
+    /// 用户实际反馈的串：`limkyr`（李明远）整串无候选时，自动切成 `李明|远`。
     ///
-    /// 这里用假词典固定切法：真实词库里恰好有「铜川两」这种整串能命中的词，
-    /// 会走「有候选、不分词」的另一条路，测不到分段本身。
+    /// 这里用假词典固定切法，不依赖真实词库里是否恰好有整串能命中的词——
+    /// 那种词会走「有候选、不分词」的另一条路，就测不到分段本身了。
     #[test]
-    fn tsirll_splits_into_word_plus_char() {
+    fn limkyr_splits_into_word_plus_char() {
         let _g = lock();
         config::set_pinyin_mode(false);
-        let units = FeiheTextService::syllables_ds("tsirll");
-        assert_eq!(units, ["ts", "ir", "ll"]);
+        let units = FeiheTextService::syllables_ds("limkyr");
+        assert_eq!(units, ["li", "mk", "yr"]);
         let r = FeiheTextService::split_segments_units(&units, |p| {
-            matches!(p, "ts" | "ir" | "ll" | "tsir")
+            matches!(p, "li" | "mk" | "yr" | "limk")
         });
-        assert_eq!(r, vec!["tsir", "ll"]);
+        assert_eq!(r, vec!["limk", "yr"]);
     }
 
     #[test]
@@ -2283,21 +2637,23 @@ mod tests {
         config::set_pinyin_mode(false);
         let mut segs = vec![
             Segment {
-                code: "tsir".into(),
-                word: "通传".into(),
+                code: "limk".into(),
+                word: "李明".into(),
+                picked: false,
             },
             Segment {
-                code: "ll".into(),
-                word: "两".into(),
+                code: "yr".into(),
+                word: "远".into(),
+                picked: false,
             },
         ];
         assert!(FeiheTextService::expand_segment(&mut segs, 0));
         let codes: Vec<&str> = segs.iter().map(|s| s.code.as_str()).collect();
-        assert_eq!(codes, vec!["ts", "ir", "ll"]);
+        assert_eq!(codes, vec!["li", "mk", "yr"]);
         // 拆出来的每段都要有默认候选，不能是空词
         assert!(segs.iter().all(|s| !s.word.is_empty()), "{segs:?}");
-        // 原来那个「通传」已经被拆掉了，不能残留在第一段
-        assert_ne!(segs[0].word, "通传");
+        // 原来那个「李明」已经被拆掉了，不能残留在第一段
+        assert_ne!(segs[0].word, "李明");
     }
 
     #[test]
@@ -2307,12 +2663,14 @@ mod tests {
         config::set_pinyin_mode(false);
         let mut segs = vec![
             Segment {
-                code: "tsir".into(),
-                word: "通传".into(),
+                code: "limk".into(),
+                word: "李明".into(),
+                picked: false,
             },
             Segment {
-                code: "ll".into(),
-                word: "两".into(),
+                code: "yr".into(),
+                word: "远".into(),
+                picked: false,
             },
         ];
         // 第 1 段本来就是单音节 → 拆不动，调用方应该退而去删音节
@@ -2329,14 +2687,15 @@ mod tests {
         let seg = |code: &str, word: &str| Segment {
             code: code.into(),
             word: word.into(),
+            picked: false,
         };
         // 光标在多音节段上 → 拆它
-        let segs = vec![seg("tsir", "通传"), seg("ll", "两")];
+        let segs = vec![seg("limk", "李明"), seg("yr", "远")];
         assert_eq!(FeiheTextService::pick_expand_target(&segs, 0), Some(0));
         // 光标停在单字上 → 拆最后一个还能拆的段（退格是从右往左）
         assert_eq!(FeiheTextService::pick_expand_target(&segs, 1), Some(0));
         // 全是单字 → 拆不动，交给删音节
-        let segs = vec![seg("ts", "通"), seg("ir", "传"), seg("ll", "两")];
+        let segs = vec![seg("li", "李"), seg("mk", "明"), seg("yr", "远")];
         assert_eq!(FeiheTextService::pick_expand_target(&segs, 2), None);
         // 越界索引不 panic
         assert_eq!(FeiheTextService::pick_expand_target(&segs, 9), None);
@@ -2346,16 +2705,16 @@ mod tests {
     fn drop_last_syllable_goes_by_syllable() {
         let _g = lock();
         config::set_pinyin_mode(false);
-        // 一次退一个音节（2 键），不会停在 `tsirl` 这种半截串上
-        assert_eq!(FeiheTextService::drop_last_syllable("tsirll"), "tsir");
-        assert_eq!(FeiheTextService::drop_last_syllable("tsir"), "ts");
-        assert_eq!(FeiheTextService::drop_last_syllable("ts"), "");
+        // 一次退一个音节（2 键），不会停在 `limky` 这种半截串上
+        assert_eq!(FeiheTextService::drop_last_syllable("limkyr"), "limk");
+        assert_eq!(FeiheTextService::drop_last_syllable("limk"), "li");
+        assert_eq!(FeiheTextService::drop_last_syllable("li"), "");
         // 分隔符先单独退掉，不连音节一起吞
         assert_eq!(FeiheTextService::drop_last_syllable("ni'hc"), "ni");
         assert_eq!(FeiheTextService::drop_last_syllable("ni'"), "ni");
         // 半截音节（还没打完）退一个字符，保证退格永远有反应
-        assert_eq!(FeiheTextService::drop_last_syllable("tsirl"), "tsir");
-        assert_eq!(FeiheTextService::drop_last_syllable("t"), "");
+        assert_eq!(FeiheTextService::drop_last_syllable("limky"), "limk");
+        assert_eq!(FeiheTextService::drop_last_syllable("l"), "");
     }
 
     /// 零声母词的可达性回归。
@@ -2513,9 +2872,9 @@ mod tests {
 
         // 姓名 / 地名里的生僻字。它们词频很低，但**缺了就是打不出来**。
         //
-        // 「仝」是踩过的坑：早期 gen_dict.py 按词频把单字截断到 3500 个，
-        // 「仝」在 8105 字表里排 5402 名（词频 796，第 3500 名的下限是 11418），
-        // 被直接截掉，用户翻页也翻不到。现在单字全收（7896 个），这里钉死。
+        // 这是踩过的坑：早期 gen_dict.py 按词频把单字截断到 3500 个，某个生僻姓
+        // 在 8105 字表里排 5402 名（词频 796，而第 3500 名的下限是 11418），被直接
+        // 截掉，翻页也翻不到。现在单字全收（7896 个），这里钉死。
         const NAMES: &[(&str, &str)] = &[
             ("仝", "tong"),
             ("佟", "tong"),

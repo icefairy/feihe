@@ -354,6 +354,22 @@ fn search(
     // 不值。
     crate::freq::rank(&mut out);
 
+    // 自造词组：用户一段一段拼出来的、词库里本来没有的词（`limkyr`→李明远）。
+    // 码打满就出，并且排在最前面——这是用户刚造的词，他下次敲这个码要的就是它。
+    //
+    // 位置在「一简字」和「置顶」**之前**，也就是它们都还压在上面：一简字是
+    // 打字人的肌肉记忆，置顶是用户显式钉死的，两者都该赢过自动学来的东西。
+    //
+    // 带辅助码时不参与：辅助码是用户主动「再筛一道」，可自造词没有可靠的首字
+    // 辅助码，硬塞进去等于把用户的筛选当没发生。
+    if assist_prefix.is_empty() {
+        // `words_for` 给的是「新学的在前」；倒着 promote（每个都插到 0 号位）
+        // 才能让最新的那个最后落到最前面。
+        for w in crate::phrase::words_for(prefix, pinyin).into_iter().rev() {
+            promote(&mut out, &w, true, limit);
+        }
+    }
+
     // 一简字：单键查询时把「这个键该出的字」提到第一位。
     //
     // 放在 `freq::rank` **之后**，所以一简字赢过动态词频——这是刻意的：
@@ -404,6 +420,58 @@ pub(crate) fn promote_for_test(
     limit: usize,
 ) {
     promote(out, word, insert_missing, limit);
+}
+
+/// 反查「某个编码下的某个词」的全拼。整码匹配，不做前缀。
+///
+/// 只给自动记词组用（`textservice::remember_phrase`）：分词上屏时每一段都知道
+/// 「码 + 选中的词」，要把它记成新词就得知道这个词的全拼，而词库里存的正是全拼。
+///
+/// 为什么必须整码：`li` 这个前缀下还挂着 `limk`（李明）这类更长的条目，只按前缀
+/// 扫会把长词的全拼套到当前这个词上，记下来的词下次就打不出来了（码对不上）。
+pub fn pinyin_of(code: &str, word: &str, pinyin: bool) -> Option<String> {
+    if code.is_empty() || word.is_empty() {
+        return None;
+    }
+    let which = if pinyin {
+        Idx::Flat
+    } else {
+        match scheme() {
+            Scheme::Xiaohe => Idx::Xiaohe,
+            Scheme::Ms => Idx::Ms,
+        }
+    };
+
+    let user = user_source();
+    match &user {
+        UserSrc::Mapped(b) => {
+            let (ps, pe) = b.prefix_range(which, code);
+            for p in ps..pe {
+                if b.rank_key(which, p).0 == code.len() && b.word_at(which, p) == word {
+                    return Some(b.pinyin(b.raw_of(which, p)).to_string());
+                }
+            }
+        }
+        UserSrc::Heap(ov) => {
+            let (ps, pe) = ov.prefix_range(which, code);
+            for p in ps..pe {
+                if ov.rank_key(which, p).0 == code.len() && ov.word_at(which, p) == word {
+                    // entries 是 (词, 全拼)，这里要的是全拼
+                    return Some(ov.entries[ov.table(which)[p].1 as usize].1.to_string());
+                }
+            }
+        }
+        UserSrc::None => {}
+    }
+
+    let bin = dictbin::get();
+    let (ps, pe) = bin.prefix_range(which, code);
+    for p in ps..pe {
+        if bin.rank_key(which, p).0 == code.len() && bin.word_at(which, p) == word {
+            return Some(bin.pinyin(bin.raw_of(which, p)).to_string());
+        }
+    }
+    None
 }
 
 /// 前缀区间里挑出排在最前面的 `limit` 个位置，键是 `(码长, 原始行号)`。
@@ -661,6 +729,27 @@ pub(crate) mod tests {
         let r = lookup("nihc", 10);
         assert!(!r.is_empty(), "nihc should have candidates");
         assert!(r.iter().any(|w| &**w == "你好"), "expected 你好 in {r:?}");
+    }
+
+    /// 自造词必须排第一：用户上次一段一段拼出来的词，这次敲满同样的码就该直接给。
+    /// 这条是「我刚组出来的词怎么又没了」的回归测试。
+    ///
+    /// 用编出来的词而不是真词库里的词：单测不能依赖本地词库里恰好没有哪个词
+    /// （词库一改断言就飘，见项目约定）。
+    #[test]
+    fn self_made_phrase_comes_first() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        let word = "飞鹤自造词试";
+        let py = "fei he zi zao ci shi";
+        let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect("should encode");
+        crate::phrase::learn(word, py);
+
+        let r = lookup(&code, 90);
+        assert_eq!(r.first().map(|s| &**s), Some(word), "got {r:?}");
+        // 存的是全拼不是双拼码，所以换成全拼模式照样打得出来
+        let r = lookup_pinyin("feihezizaocishi", 90);
+        assert_eq!(r.first().map(|s| &**s), Some(word), "got {r:?}");
     }
 
     #[test]
