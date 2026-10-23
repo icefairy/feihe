@@ -2,7 +2,7 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.0** ｜ 安装包 1.38 MB ｜ 装完约 6.0 MB ｜ 单字 8006 ｜ 词条 38024 ｜
+**当前版本 0.2.0** ｜ 安装包 1.39 MB ｜ 装完约 6.0 MB ｜ 单字 8006 ｜ 词条 38024 ｜
 不联网、不弹窗、无账号 ｜ 141 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
@@ -20,7 +20,7 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 | M1 | TSF 骨架：注册为系统输入法、收键、组合态、edit session 上屏 | ✅ |
 | M2 | 小鹤双拼引擎 + 内置词库 + 候选窗（纯 Rust，暂不引 librime，原因见下） | ✅ |
 | M2.5 | 状态浮窗 / 设置窗 / 符号软键盘 / 微软双拼 / 辅助码 / 全角标点 / 简繁 / 全拼模式 | ✅ |
-| M3 | 一级简码、手动置顶、候选点选、候选数衰减、不弹窗、UILess、自造词、回车=字母、Shift+字母 | ✅ |
+| M3 | 一简（首选 + 次选）、二简（370 条两键词）、手动置顶、候选点选、候选数衰减、不弹窗、UILess、自造词、回车=字母、Shift+字母 | ✅ |
 | M3.x | 组合串下划线（`ITfDisplayAttributeProvider`） | **未做** |
 | M5 | 语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关） | 已搁置 |
 
@@ -39,12 +39,13 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 
 | 维度 | 飞鹤 | 搜狗拼音 | 微软拼音 |
 |---|---|---|---|
-| 安装包 | **1.38 MB** | 百 MB 量级 | 随系统预装 |
+| 安装包 | **1.39 MB** | 百 MB 量级 | 随系统预装 |
 | 装完占用 | **约 6.0 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
 | 广告 / 热点推送 | **没有这功能** | 有（可在设置里关） | 无 |
 | 账号 / 联网 | **完全不需要** | 登录后云同步 | 微软账户可选 |
 | 开源 | **是**（Rust，全文可改） | 否 | 否 |
 | 小鹤双拼 | **原生**，不用装方案 | 支持 | 支持 |
+| 一简 / 二简 | **原生**（一简 26 键含次选，二简 370 词） | 随方案 | 无 |
 | 词库规模 | 3.8 万条 | 数百万级云词库 | 系统词库 |
 | 生僻字 | GB2312 + 通用规范汉字表**全收，缺 0** | 全 | 全 |
 | 动态词频 | 本地学习 | 云端 + 本地 | 本地 |
@@ -73,6 +74,8 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 - **双拼是一等公民**。不是「全拼输入法附带一个双拼模式」，键位表本身就是规格，
   单元测试拿官方反查结果钉死（`按钮` = `annq` 这种零声母细节）。
 - **不自动上屏**。长句一定是「你按空格才落字」，不会替你猜一半先写进文档。
+- **简码是一等公民**。一简 26 键（每键还有次选，分号直接取）、二简 370 条两键词，
+  词表就是 `src/brief2.txt` 这样一个纯文本文件，删一行就少一个，不用等发版。
 
 **它明确不如人的地方，也说清楚：**
 
@@ -636,7 +639,9 @@ src/settings.rs       设置窗（原生控件：输入模式 / 方案 / 皮肤 
 src/uielement.rs      TSF UILess：把候选交给宿主自绘（ITfCandidateListUIElement）
 src/freq.rs           动态词频（选词计数 → 稳定重排候选，freq.txt 落盘）
 src/phrase.rs         自造词（用户逐段拼出来的新词，全拼入库，phrases.txt 落盘）
-src/brief.rs          一级简码表（26 键一简字，单键查询时提到第一）
+src/brief.rs          一级简码表（26 键首选字 + 26 条次选，`d;` 取次选）
+src/brief2.rs         二级简码（两键出两字词，懒解析 brief2.txt + 二分）
+src/brief2.txt        二简词表（370 条，gen_brief2.py 生成，可手改）
 src/pin.rs            手动置顶（编码 → 词，pinned.txt 落盘，压过一切默认排序）
 src/zhconv.rs         简繁转换（LCMapStringEx + LCMAP_TRADITIONAL_CHINESE）
 src/theme.rs          皮肤调色板（浅色 / 深色 / 护眼）
@@ -648,6 +653,7 @@ src/assist.txt        辅助码表（3739 字，gen_assist.py 生成，勿手改
 tools/gen_dict.py     基础词库生成器（拉雾凇拼音 rime-ice，按词频取前 N 条）
 tools/import_sogou.py 搜狗词库导入器（解析本机搜狗用户词库 → user_dict.txt）
 tools/gen_assist.py   辅助码表生成器（Unihan 部首 + cjkvi-ids 部件分解）
+tools/gen_brief2.py   二简码表生成器（按 dict.txt 拼音算两键码，--check 只比对）
 tools/smoke_com.py    COM 骨架冒烟测试（ctypes 直调 DllGetClassObject）
 shim/loadtest.c       位数无关的 DLL 冒烟测试（LoadLibrary + DllGetClassObject + CreateInstance）
 installer/install_tip.ps1    注册：COM + HKLM TIP + 用户键盘列表（UTF-8 BOM，含中文名）
@@ -657,7 +663,7 @@ installer/unregister.cmd     卸载入口（管理员）
 build.ps1             一键构建（llvm-mingw，默认 64 + 32 位；-Arch / -Debug / -SkipTest）
 check_env.ps1         环境自检（llvm-mingw / rust target / NSIS 是否就位）
 docs/使用帮助.md       用户手册（随安装包装进安装目录，UTF-8 BOM 便于记事本打开）
-docs/验证清单.md       手工验收步骤（68 条，按里程碑分组，发版前照着跑）
+docs/验证清单.md       手工验收步骤（77 条，按里程碑分组，发版前照着跑）
 handoff.md            开发笔记（实测事实 + 踩过的坑 + 为什么这么设计，不随包分发）
 dist/                 安装包产物（已 gitignore）
 rust-toolchain.toml   固定 gnu toolchain + gnullvm target
@@ -856,6 +862,6 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 ## 验证清单
 
-手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)（68 条）。
+手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)（77 条）。
 不需要全跑——改到哪块就跑哪组，比如动 `textservice.rs` 的按键路径至少要跑 M2 + 分词 +
 回车三组。自动化那部分仍然是 `cargo test` + `tools/smoke_com.py`。

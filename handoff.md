@@ -40,8 +40,8 @@
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
-实测数据：安装包 1.38 MB、装完约 6.0 MB、64 位 DLL 3076 KB、`base.bin` 38024 条 /
-2321 KB、137 项单测。
+实测数据：安装包 1.39 MB、装完约 6.0 MB、64 位 DLL 3086 KB、`base.bin` 38024 条 /
+2321 KB、141 项单测。
 
 
 ## 自绘窗口架构（v2 新增）

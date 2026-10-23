@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.38 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.39 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -234,7 +234,7 @@
     <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.2.0</b></span>
     <h1>一个只有几 MB 的<br><span class="thin">双拼输入法</span></h1>
     <p class="lede">
-      飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼，词库在构建期预编码成
+      飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼（含一简 26 字 + 二简 370 词），词库在构建期预编码成
       二进制嵌进 DLL，由系统 mmap 共享。不联网、不弹窗、不要账号，源码全开。
     </p>
     <div class="cta">
@@ -243,7 +243,7 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n">1.36<small>MB</small></div><div class="k">安装包</div></div>
+      <div class="stat"><div class="n">1.39<small>MB</small></div><div class="k">安装包</div></div>
       <div class="stat"><div class="n">8006</div><div class="k">收录单字</div></div>
       <div class="stat"><div class="n">38024</div><div class="k">词条</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
@@ -268,12 +268,13 @@
           <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
         </thead>
         <tbody>
-          <tr><td>安装包</td><td class="me">1.38 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>安装包</td><td class="me">1.39 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
           <tr><td>装完占用</td><td class="me">约 6.0 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
           <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
           <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
           <tr><td>开源</td><td class="yes">是，Rust 全文可改</td><td class="no">否</td><td class="no">否</td></tr>
           <tr><td>小鹤双拼</td><td class="yes">原生，不用装方案</td><td class="half">支持</td><td class="half">支持</td></tr>
+          <tr><td>一简 / 二简</td><td class="yes">原生 26 + 370 条</td><td class="half">随方案</td><td class="no">无</td></tr>
           <tr><td>词库规模</td><td class="no">3.8 万条</td><td class="yes">数百万级云词库</td><td class="half">系统词库</td></tr>
           <tr><td>生僻字</td><td class="yes">GB2312 + 规范字表全收，缺 0</td><td class="yes">全</td><td class="yes">全</td></tr>
           <tr><td>动态词频</td><td class="yes">本地学习</td><td class="yes">云端 + 本地</td><td class="yes">本地</td></tr>
@@ -323,6 +324,12 @@
         <h3>生僻字不缺</h3>
         <p>《通用规范汉字表》可编码的 7896 字全收，再补 GB2312 独有的 110 字（嬲、欷、榘、
           以及 忄 亻 扌 这类部件）。姓「佟」的人能打出自己的姓。</p>
+      </div>
+      <div class="card">
+        <h3>一简、二简都有</h3>
+        <p>一个键出最常用的字（<code>d</code> → 的），每个键还有次选（<code>d;</code> → 打）；
+          两个键出一个常用词（<code>nd</code> → 难道，370 条按小鹤官方表）。
+          词表是纯文本，删一行就少一个。</p>
       </div>
       <div class="card">
         <h3>动态词频</h3>
@@ -496,7 +503,7 @@ rustup target add i686-pc-windows-gnullvm
     </div>
     <p class="sub" style="margin-top:26px">
       已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词（退格可拆词）、
-      候选窗鼠标点选、一级简码（敲 <code>d</code> 出「的」）、二级简码（<code>nd</code> 出「难道」）、手动置顶（<code>Ctrl</code>+数字）、
+      候选窗鼠标点选、一级简码（<code>d</code> 出「的」，次选 <code>d;</code> 出「打」）、二级简码（<code>nd</code> 出「难道」，370 条两键词）、手动置顶（<code>Ctrl</code>+数字）、
       全屏游戏 UILess（候选交给游戏自绘）、不弹窗模式（远程桌面用）、
       快捷输入（日期 / 时间 / 农历 / 干支四柱 / 下一个节气）、
       全角标点、简繁切换、动态词频、自造词（拼过的词自动记住）、状态浮窗、设置窗、符号软键盘、搜狗个人词库导入、
