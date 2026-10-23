@@ -42,6 +42,7 @@ mod uisink;
 
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Mutex;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -50,7 +51,7 @@ use windows::Win32::System::Com::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     keybd_event, GetKeyboardLayout, GetKeyState, MapVirtualKeyW, SetFocus, HKL, KEYBD_EVENT_FLAGS,
-    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_CONTROL, VK_Q,
+    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_CONTROL, VK_Q, VK_SHIFT,
 };
 use windows::Win32::UI::TextServices::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -84,6 +85,12 @@ static EXIT_CODE: AtomicI32 = AtomicI32::new(0);
 /// 自测敲的键。用「李明远」的编码——顺带把自造词那条路也过一遍。
 const SELFTEST_KEYS: &str = "limkyr";
 
+/// Shift+字母自测：中文态按 Shift+A，文档里应该只有一个大写 `A`。
+const SHIFT_TEST_KEYS: &str = "A";
+
+/// 自测预期上屏的文本。空 = 「只要求收到候选」，非空 = 「文档必须等于它」。
+static EXPECT_DOC: Mutex<Option<String>> = Mutex::new(None);
+
 thread_local! {
     static HOST: RefCell<Option<Host>> = RefCell::new(None);
     /// 上一个 `WM_KEYDOWN` 被 TIP 吃了，紧随其后的 `WM_CHAR` 也要丢掉。
@@ -108,6 +115,7 @@ fn print_help() {
   tsfhost --manual         不经语言栏，自己 CoCreate 飞鹤 TIP 并 ActivateEx(1)
   tsfhost --register       给飞鹤补注册 UIELEMENTENABLED 分类（需管理员）
   tsfhost --selftest       自动敲「limkyr」，打印结果后退出（退出码 0=PASS 2=FAIL）
+  tsfhost --selftest-shift 自动敲 Shift+A，文档里应只有一个大写 A
   tsfhost --help
 
 窗口里 Ctrl+Q 退出。
@@ -121,6 +129,7 @@ fn run() -> Result<()> {
     let mut flags = TF_TMAE_UIELEMENTENABLEDONLY;
     let mut switch = false;
     let mut selftest = false;
+    let mut shift_test = false;
     let mut manual = false;
     let mut register = false;
     for a in std::env::args().skip(1) {
@@ -129,6 +138,11 @@ fn run() -> Result<()> {
             "--normal" => flags = 0,
             "--manual" => manual = true,
             "--register" => register = true,
+            "--selftest-shift" => {
+                shift_test = true;
+                selftest = true;
+                switch = true;
+            }
             "--selftest" => {
                 selftest = true;
                 switch = true; // 自测必须保证确实在用飞鹤，否则测的是别的输入法
@@ -173,6 +187,9 @@ fn run() -> Result<()> {
         attach_document(hwnd, tim, tid, manual)?;
 
         if selftest {
+            if shift_test {
+                *EXPECT_DOC.lock().unwrap() = Some(SHIFT_TEST_KEYS.to_string());
+            }
             let _ = SetForegroundWindow(hwnd);
             // 稍等一下让窗口真正前台，再开始注入按键
             let id = SetTimer(Some(hwnd), 1, 700, None);
@@ -541,7 +558,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             match wparam.0 {
                 1 => {
                     let _ = KillTimer(Some(hwnd), 1);
-                    inject_keys(SELFTEST_KEYS);
+                    if EXPECT_DOC.lock().unwrap().is_some() {
+                        inject_keys(SHIFT_TEST_KEYS);
+                    } else {
+                        inject_keys(SELFTEST_KEYS);
+                    }
                     // 每个键约 95ms，6 个键 ~600ms，再留 1.5s 让 TIP 把候选推过来
                     let id2 = SetTimer(Some(hwnd), 2, 1600, None);
                     eprintln!("[host] second timer id={id2}");
@@ -574,16 +595,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 /// 也会依赖真实的扫描码顺序，伪造消息容易测出「假通过」。
 fn inject_keys(s: &str) {
     for ch in s.chars() {
+        // 大写字母 = 按住 Shift 敲（`keybd_event` 不会自己带修饰键，
+        // 必须把 Shift 也注入进去，否则测的是「不按 Shift」的那条路）。
+        let shifted = ch.is_ascii_uppercase();
         let c = ch.to_ascii_uppercase();
         if !c.is_ascii_uppercase() {
             continue;
         }
         let vk = c as u16;
         let sc = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u8;
+        let shift_sc = unsafe { MapVirtualKeyW(VK_SHIFT.0 as u32, MAPVK_VK_TO_VSC) } as u8;
         unsafe {
+            if shifted {
+                keybd_event(VK_SHIFT.0 as u8, shift_sc, KEYBD_EVENT_FLAGS(0), 0);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             keybd_event(vk as u8, sc, KEYBD_EVENT_FLAGS(0), 0);
             std::thread::sleep(std::time::Duration::from_millis(25));
             keybd_event(vk as u8, sc, KEYEVENTF_KEYUP, 0);
+            if shifted {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                keybd_event(VK_SHIFT.0 as u8, shift_sc, KEYEVENTF_KEYUP, 0);
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(70));
     }
@@ -602,7 +635,12 @@ fn finish_selftest(hwnd: HWND) {
         )
     };
 
-    let ok = begins > 0 && !cands.is_empty();
+    let expect = EXPECT_DOC.lock().unwrap().clone();
+    let ok = match expect.as_deref() {
+        // Shift+字母：不要求候选，要求文档里恰好是那个大写字母
+        Some(want) => doc == *want,
+        None => begins > 0 && !cands.is_empty(),
+    };
     println!("\n===== UILess 自测 =====");
     println!("BeginUIElement  = {begins}");
     println!("UpdateUIElement = {updates}");
@@ -614,10 +652,12 @@ fn finish_selftest(hwnd: HWND) {
     }
     println!(
         "结论     = {}",
-        if ok {
-            "PASS · 候选由宿主绘制，UILess 通道正常"
-        } else {
-            "FAIL · 没收到候选：检查输入法是否切到飞鹤、中英文态是否在中文"
+        match (ok, expect.as_deref()) {
+            (true, Some(want)) => format!("PASS · Shift+字母 直接上屏了 {want:?}"),
+            (false, Some(want)) => format!("FAIL · 期望文档是 {want:?}，实际是 {doc:?}"),
+            (true, None) => "PASS · 候选由宿主绘制，UILess 通道正常".to_string(),
+            (false, None) =>
+                "FAIL · 没收到候选：检查输入法是否切到飞鹤、中英文态是否在中文".to_string(),
         }
     );
 

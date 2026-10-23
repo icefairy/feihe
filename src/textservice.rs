@@ -669,6 +669,18 @@ impl FeiheTextService {
         Self::is_separator_key(vk)
     }
 
+    /// Shift+字母要直接上屏的那个大写字母。
+    ///
+    /// 只认 A–Z。数字和标点键（`Shift+1`→`!`、`Shift+/`→`?`）不认——那些字符
+    /// 由键盘布局决定，我们按 VK 自己映射，换成非 QWERTY 布局就会算错，
+    /// 还是交给应用去换算。
+    fn shifted_letter(vk: u8) -> Option<char> {
+        if vk.is_ascii_uppercase() {
+            return Some(vk as char);
+        }
+        None
+    }
+
     /// 虚拟键 → 编码字符
     fn code_char(vk: u8) -> Option<char> {
         if vk.is_ascii_uppercase() {
@@ -1826,6 +1838,33 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             return Ok(BOOL::from(true));
         }
 
+        // ── Shift + 字母：直接上屏大写 ──────────────────────
+        //
+        // 中文态下 Shift 不进编码，`A` 和 `Shift+A` 都会往组合串里塞一个 `a`，
+        // 于是「按住 Shift 想打大写字母」和直接敲键没区别。用户按住 Shift 想要
+        // 的显然是大写字母本身，所以这里把已有组合串先结掉，再把大写字母直插文档。
+        //
+        // 位置有讲究：必须在 `modifiers_down()` 之前（那里会把键交还应用，大写
+        // 就变成「先切英文再打」），也必须在 `Ctrl+Shift+U` 之后（那个组合同样
+        // 带 Shift，不能被这里抢走）。条件里排除 Ctrl/Alt/Win，`Ctrl+Shift+A`
+        // 这类系统快捷键仍然原样交还。
+        if !FeiheTextService::modifiers_down() && FeiheTextService::shift_down() {
+            if let Some(ch) = FeiheTextService::shifted_letter(vk) {
+                let mut buf = [0u8; 4];
+                let letter = ch.encode_utf8(&mut buf);
+                // 上屏和提交必须合成一个 EditOp（`pending_op` 只有一个槽位），
+                // 两个函数都接受 suffix，正好一起粘上去。
+                if !self.segments.borrow().is_empty() {
+                    self.commit_segments(letter);
+                } else if self.is_composing() {
+                    self.commit_with(letter);
+                } else {
+                    self.insert_direct(letter);
+                }
+                return Ok(BOOL::from(true));
+            }
+        }
+
         // 组合态下按修饰键（Ctrl / Alt / Win）：先把组合串提交，键原样交给应用。
         // 否则 Ctrl+A、Ctrl+C 会被当成字母吃进组合串。
         //
@@ -2260,6 +2299,20 @@ mod tests {
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
         assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
+    }
+
+    #[test]
+    fn shift_letter_is_the_uppercase_letter_itself() {
+        // Shift+字母：上屏的是大写字母本身，不是编码
+        assert_eq!(FeiheTextService::shifted_letter(0x41), Some('A'));
+        assert_eq!(FeiheTextService::shifted_letter(0x5A), Some('Z'));
+        // 编码路径仍然只认小写：两者必须分工，别哪天又合流
+        assert_eq!(FeiheTextService::code_char(0x41), Some('a'));
+        // 数字和标点不认：`Shift+1`→`!`、`Shift+/`→`?` 由键盘布局换算，
+        // 我们自己按 VK 映射会在非 QWERTY 布局上算错
+        for vk in [0x31u8, 0x30, VK_OEM_2.0 as u8, VK_OEM_5.0 as u8, 0x20, 0x0D] {
+            assert_eq!(FeiheTextService::shifted_letter(vk), None, "vk=0x{vk:02x}");
+        }
     }
 
     #[test]

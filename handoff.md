@@ -28,6 +28,7 @@
 | 候选数衰减 | ✅ 1 键 18 / 2 键 45 / 3 键以上 90（`candidate_limit`） |
 | 组合串下划线 | ❌ 未做（`ITfDisplayAttributeProvider`） |
 | Shift 中英切换 | ✅ 单击切（按住期间按过别的键就不算单击） |
+| Shift+字母 | ✅ 直接上屏大写字母（中文态不进编码；已有组合串先按当前候选结掉） |
 | 回车原样上屏 | ✅ 空格选候选、回车把编码原样上屏 |
 | 中英态生效 | ✅ TIP 自己在 `OnKeyDown` 里判定，不依赖宿主 |
 
@@ -457,6 +458,12 @@ GB2312 是**下限不是上限**：GBK 那两万多字（异形字 / 繁体字 /
   「非 Shift 键 + 物理 Shift 按住」就置位，Shift 抬起时没置位才切。
   **不能只在 `OnKeyDown(Shift)` 里标记**——经典宿主里 `OnTestKeyDown` 返回 FALSE 的键
   根本不会派发 `OnKeyDown`，Shift 自己就收不到
+- **Shift+字母 = 直接上屏大写**。以前是「交给应用」，但 `is_code_key` 对 A–Z 先返回
+  true（要先过编码那一关），`modifiers_down()` 又不含 Shift，于是这个键被塞进组合串
+  变成小写 `a`——应用从头到尾没见过 `Shift+A`，大写自然出不来。
+  现在 `OnKeyDown` 里显式处理：有组合串就 `commit_with(letter)`（合成一个 `EditOp`），
+  没有就 `insert_direct`；`Ctrl/Alt/Win` 任一按住则不接管，`Ctrl+Shift+A` 仍原样交还。
+  只认 A–Z，`Shift+1`→`!` 这类字符由键盘布局换算，按 VK 自己映射会在非 QWERTY 上出错。
 
 ## 前缀排序（`dict::top_by_rank`）
 
