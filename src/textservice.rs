@@ -994,6 +994,10 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 读配置并按当前双拼方案准备词库索引（方案变了会重建，约 30ms）
         let cfg = config::load();
         dict::set_scheme(cfg.scheme);
+
+        // 别的进程可能刚重编译了 user.bin（设置窗里点「编译成二进制」、或导入词库）。
+        // 本进程还映射着旧文件，看不到新词；每次激活探一次（两次文件属性查询，可忽略）。
+        dict::refresh_user_bin();
         crate::trace!(
             "Activate: scheme={} assist={} fullwidth={}",
             cfg.scheme.label(),
@@ -1537,7 +1541,6 @@ unsafe fn caret_screen_rect(context: &ITfContext, ec: u32, range: &ITfRange) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     /// 碰 `SCHEME` / `pinyin_mode` 的用例统一拿 dict 模块那把共享锁串行，
     /// 否则和 dict.rs 的测试并行跑会互相篡改（小鹤码在微软方案下查不到）。

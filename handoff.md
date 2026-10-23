@@ -97,7 +97,7 @@
 ### 源数据
 
 `词<TAB>全拼`（音节空格分隔），按词频降序。**不存双拼码**——存码等于把方案焊死。
-`src/dict.txt`（33500 系统词）+ `src/user_dict.txt`（52162 搜狗导入词）。
+`src/dict.txt`（33500 系统词）+ `src/user_dict.txt`（52522 搜狗导入词）。
 
 ### 构建期：`build.rs` → `$OUT_DIR/base.bin`
 
@@ -135,14 +135,40 @@
 
 查询略慢一点但仍是微秒级，换来的是启动开销和每进程内存的双重收益。
 
-### 覆盖层（过渡方案）
+### 用户词库：txt 是源，bin 是产物
 
-`%APPDATA%\Feihe\user_dict.txt` 里运行时导入的词，内存里建同样三张表，
-查询时排在静态部分前面、同名词盖住静态那份。
+`%APPDATA%\Feihe\` 下两个文件，**不要混为一谈**：
 
-**这是阶段一的过渡实现**。阶段二会换成 SQLite 用户库（用系统自带的
-`winsqlite3.dll`，因为 crates.io 在本机不可达，rusqlite 加不进来），
-那时才有「按词增删改 + 词频学习」的能力。
+- `user_dict.txt` —— 人可读的源。导入/导出走它，用户手改也改它。
+- `user.bin` —— 由它编译出来的 FHDB。运行时 `dictbin::map_file` 映射，
+  和 `base.bin` 走同一条零解析二分路径。
+
+实测（5 万条）：
+
+| | 文本覆盖层 | `user.bin` mmap |
+|---|---|---|
+| 每进程首次可用 | 124.6 ms | **0.75 ms** |
+| 内存 | ~6 MB 私有堆 × N 进程 | 共享页缓存，一份 |
+| 一次性编译 | 无 | 139.9 ms（点按钮时付） |
+
+四个实现要点：
+
+1. **编码器只有一份**：`src/dictenc.rs`。`build.rs` 和运行期各自 `#[path]` 引入，
+   格式天然一致。各写一份的话，改布局忘改一边 → 「导入的词静默不生效」，极难查。
+2. **判据是「产物不能比源旧」**。`probe_user_bin()` 比较两者 mtime，txt 更新就退回
+   文本覆盖层。否则用户手改 txt 后看不到效果，会以为坏了。
+3. **映射永不解除**。`map_file` 返回 `&'static Bin`：视图和映射句柄故意不释放，
+   进程退出时内核回收。这样避免引入自引用的所有权结构，代价是每次重编译残留一份
+   共享页（重编译只在点按钮时发生）。
+4. **改名覆盖已映射的文件是可行的**。重编译写 `user.bin.tmp` 再 `fs::rename` 覆盖，
+   Windows 允许（旧映射继续指向旧文件）。`rename_over_mapped_file` 这个测试钉住了
+   这个语义——不钉的话第二次编译会莫名其妙失败。
+
+跨进程生效：别的进程还映射着旧文件，靠 `Activate` 里的 `dict::refresh_user_bin()`
+重新探测 mtime（两次文件属性查询，可忽略）并重映射。
+
+> 阶段二换 SQLite 之后，这个「txt 源 + bin 产物」的结构可以整体替掉；
+> 现在它解决的是「装完还能加词，且不牺牲 bin+mmap」这一件事。
 
 ## 中英切换（`insert::CHINESE` + `textservice` 的 Shift 逻辑）
 
@@ -389,6 +415,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 - [x] `;` 手动分隔（微软双拼改用 `'`）
 - [x] 32 位 DLL（`i686-pc-windows-gnullvm` + Wow6432Node 双份注册）
 - [x] NSIS 安装包（`installer\feihe.nsi` + `build_setup.ps1`，发布模式构建）
+- [x] 用户词库编译成 `user.bin` + mmap（`dictenc` 单一编码器 + 设置窗按钮 + 导入后自动编译）
 
 ## 已知问题
 

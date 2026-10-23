@@ -1,8 +1,14 @@
-//! 词库二进制（`base.bin`）的零解析读取器
+//! 词库二进制（`base.bin` / `user.bin`）的零解析读取器
 //!
-//! 文件由 `build.rs` 生成，通过 `include_bytes!` 嵌进 DLL 的 `.rdata` 段。
-//! 这一段由 PE 加载器 mmap，**多个进程共享同一份物理页**，所以词库的常驻内存
-//! 从「每进程 9.2MB 私有堆」变成「全系统一份只读页，按需调入」。
+//! 同一个 `Bin` 读两种来源：
+//!
+//! - `base.bin`：构建期由 `build.rs` 生成，`include_bytes!` 嵌进 DLL 的 `.rdata`。
+//!   这一段由 PE 加载器 mmap，**多个进程共享同一份物理页**。
+//! - `user.bin`：运行期由 `dict::compile_user_bin` 生成，落在 `%APPDATA%\Feihe\`，
+//!   启动时用 `map_file` 映射进来。同样是**文件映射，多进程共享页缓存**，
+//!   所以用户词库不会退化成「每个进程各建一份堆上的索引」。
+//!
+//! 两者格式完全一致（同一个 `dictenc` 编码器），所以下面的查询代码通吃。
 //!
 //! 布局（全部小端）：
 //!
@@ -21,6 +27,10 @@
 //! 查询 = 在「按码升序排的 raw 下标表」上二分，比较时按需去池里取码。
 //! 没有解析、没有分配、没有排序。
 
+use std::path::Path;
+
+use crate::dictenc::{HEADER_LEN, MAGIC, NSEC, VERSION};
+
 /// 段序号，必须和 `build.rs` 里的常量一致
 const S_WORD_OFF: usize = 0;
 const S_WORD_POOL: usize = 1;
@@ -35,9 +45,6 @@ const S_FLAT_POOL: usize = 9;
 const S_XH_IDX: usize = 10;
 const S_MS_IDX: usize = 11;
 const S_FLAT_IDX: usize = 12;
-
-const NSEC: usize = 13;
-const HEADER_LEN: usize = 128;
 
 static RAW: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/base.bin"));
 
@@ -83,20 +90,27 @@ pub struct Bin {
 }
 
 impl Bin {
-    /// 解析头部。格式不对时返回一个空词库而不是 panic——
+    /// 一个查不到任何东西的词库。格式坏了时用它兜底——
     /// 输入法宁可打不出候选，也不能让宿主应用崩掉。
-    fn parse(data: &'static [u8]) -> Self {
-        let bad = Self {
+    fn empty(data: &'static [u8]) -> Self {
+        Self {
             data,
             count: 0,
             sec: [(0, 0); NSEC],
-        };
-        if data.len() < HEADER_LEN || &data[0..4] != b"FHDB" {
-            return bad;
+        }
+    }
+
+    /// 校验头部并建视图。格式不对返回 `None`。
+    ///
+    /// `user.bin` 是运行期写出来的，可能被手改坏、也可能是旧版本格式，
+    /// 所以调用方必须能区分「空词库」和「坏文件」——前者照用，后者要回退到 txt。
+    fn try_new(data: &'static [u8]) -> Option<Self> {
+        if data.len() < HEADER_LEN || &data[0..4] != MAGIC {
+            return None;
         }
         let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        if version != 1 {
-            return bad;
+        if version != VERSION {
+            return None;
         }
         let count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
         let mut sec = [(0usize, 0usize); NSEC];
@@ -106,11 +120,11 @@ impl Bin {
             let len =
                 u32::from_le_bytes([data[b + 4], data[b + 5], data[b + 6], data[b + 7]]) as usize;
             if off + len > data.len() {
-                return bad;
+                return None;
             }
             *slot = (off, len);
         }
-        Self { data, count, sec }
+        Some(Self { data, count, sec })
     }
 
     fn u32_at(&self, pos: usize) -> u32 {
@@ -230,7 +244,62 @@ impl Bin {
 pub fn get() -> &'static Bin {
     use std::sync::OnceLock;
     static B: OnceLock<Bin> = OnceLock::new();
-    B.get_or_init(|| Bin::parse(RAW))
+    B.get_or_init(|| Bin::try_new(RAW).unwrap_or_else(|| Bin::empty(RAW)))
+}
+
+/// 把磁盘上的 FHDB 文件映射进地址空间。
+///
+/// 为什么是 `CreateFileMapping` 而不是 `fs::read`：
+/// `fs::read` 会把整个文件拷进本进程的私有堆，每个宿主进程各一份，正是
+/// `base.bin` 当初要消灭的东西。文件映射走的是**系统页缓存**，多个进程
+/// 映射同一个文件时共享同一份物理页，第一次访问只付页错误。
+///
+/// 生命周期：视图和映射句柄**故意不释放**。返回的 `&'static Bin` 会被存进
+/// 全局缓存，直到进程退出；进程退出时内核自动回收。这样既拿到了 `'static`
+/// 又不用引入自引用的所有权结构。代价是重新编译 `user.bin` 后旧映射会残留
+/// （每次重编译 +1 份共享页），而重编译只在设置窗里点按钮时才发生，可接受。
+pub fn map_file(path: &Path) -> Option<&'static Bin> {
+    use std::os::windows::io::AsRawHandle;
+
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Memory::{
+        CreateFileMappingW, MapViewOfFile, FILE_MAP_READ, PAGE_READONLY,
+    };
+
+    // std 打开文件时默认带 FILE_SHARE_READ|WRITE|DELETE，
+    // 所以别的进程能把 user.bin 改名替换掉（重编译要用到这个性质）。
+    let file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len() as usize;
+    if len < HEADER_LEN {
+        return None;
+    }
+
+    let mapping = unsafe {
+        CreateFileMappingW(
+            HANDLE(file.as_raw_handle() as _),
+            None,
+            PAGE_READONLY,
+            0,
+            0,
+            windows::core::PCWSTR::null(),
+        )
+    }
+    .ok()?;
+
+    // 映射建立后自己就持有文件引用，可以把 File 关掉
+    drop(file);
+
+    let view = unsafe { MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0) };
+    let ptr = view.Value as *const u8;
+    if ptr.is_null() {
+        return None;
+    }
+
+    // SAFETY: 视图覆盖整个文件（dwNumberOfBytesToMap=0），文件在映射期间不会被
+    // 我们改写；映射永不解除，所以这个切片在进程生命周期内始终有效且只读。
+    let data: &'static [u8] = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let bin = Bin::try_new(data)?;
+    Some(Box::leak(Box::new(bin)))
 }
 
 #[cfg(test)]
@@ -286,5 +355,97 @@ mod tests {
     #[test]
     fn empty_prefix() {
         assert_eq!(get().prefix_range(Idx::Xiaohe, ""), (0, 0));
+    }
+
+    /// 运行期生成的 `user.bin` 走的是「写文件 → mmap → 同一套查询」这条路，
+    /// 和 `base.bin` 的 `include_bytes!` 完全不同，必须单独钉住。
+    #[test]
+    fn map_file_roundtrip() {
+        let entries = crate::dictenc::parse_entries("飞鹤输入法\tfei he shu ru fa\n你好\tni hao\n");
+        let built = crate::dictenc::build(&entries);
+
+        let dir = std::env::temp_dir().join("feihe_map_roundtrip");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("user.bin");
+        std::fs::write(&p, &built.bytes).unwrap();
+
+        let b = map_file(&p).expect("映射应该成功");
+        assert_eq!(b.count(), 2);
+        let (s, e) = b.prefix_range(Idx::Flat, "feihe");
+        assert!(s < e, "全拼 feihe 应该有命中");
+        let hits: Vec<_> = (s..e).map(|i| b.word_at(Idx::Flat, i)).collect();
+        assert!(hits.contains(&"飞鹤输入法"), "got {hits:?}");
+    }
+
+    #[test]
+    fn map_file_rejects_garbage() {
+        let dir = std::env::temp_dir().join("feihe_map_garbage");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("bad.bin");
+        std::fs::write(&p, vec![0u8; 512]).unwrap();
+        assert!(map_file(&p).is_none(), "魔数不对必须返回 None");
+    }
+
+    /// 重编译用户词库时，要把新文件**改名覆盖**一个正被本进程映射的旧文件。
+    /// Windows 上「文件正在使用」通常挡掉删除/覆盖，这条必须钉住，
+    /// 否则 `compile_user_bin` 会在第二次编译时莫名其妙失败。
+    #[test]
+    fn rename_over_mapped_file() {
+        let dir = std::env::temp_dir().join("feihe_rename_mapped");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("user.bin");
+
+        let first = crate::dictenc::build(&crate::dictenc::parse_entries("你好\tni hao\n"));
+        std::fs::write(&p, &first.bytes).unwrap();
+        let old = map_file(&p).expect("首次映射");
+        assert_eq!(old.count(), 1);
+
+        let second = crate::dictenc::build(&crate::dictenc::parse_entries(
+            "你好\tni hao\n飞鹤\tfei he\n",
+        ));
+        let tmp = dir.join("user.bin.tmp");
+        std::fs::write(&tmp, &second.bytes).unwrap();
+        std::fs::rename(&tmp, &p).expect("改名覆盖被映射的文件应该成功");
+
+        let new = map_file(&p).expect("重新映射");
+        assert_eq!(new.count(), 2, "新映射应看到新内容");
+        assert_eq!(old.count(), 1, "旧映射仍指向旧文件（Windows 语义）");
+    }
+
+    /// 对比「5 万条用户词库」的两种加载方式，给「编译成 bin 值不值得」一个实数。
+    ///
+    /// `cargo test --release -- --ignored user_bin_vs_overlay --nocapture`
+    #[test]
+    #[ignore = "手工测量用，依赖 src/user_dict.txt"]
+    fn user_bin_vs_overlay() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/user_dict.txt");
+        let Ok(text) = std::fs::read_to_string(&src) else {
+            return;
+        };
+
+        // ① 一次性：编译（设置窗里点「编译成二进制」时才发生）
+        let t = std::time::Instant::now();
+        let entries = crate::dictenc::parse_entries(&text);
+        let built = crate::dictenc::build(&entries);
+        let compile_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+        let dir = std::env::temp_dir().join("feihe_bench_userbin");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("user.bin");
+        std::fs::write(&p, &built.bytes).unwrap();
+
+        // ② 每进程：映射 + 首次查询（这才是常态开销）
+        let t = std::time::Instant::now();
+        let b = map_file(&p).expect("映射失败");
+        let (s, e) = b.prefix_range(Idx::Xiaohe, "nihc");
+        let n = e - s;
+        let map_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+        println!(
+            "user.bin: {} 条 / {} KB\n  编译（一次性）{compile_ms:.1} ms\n  映射+首查（每进程）{map_ms:.3} ms（命中 {n}）",
+            built.count,
+            built.bytes.len() / 1024
+        );
     }
 }

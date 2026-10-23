@@ -1,21 +1,27 @@
-//! 词库：**静态二进制（零解析）+ 运行时覆盖层**
+//! 词库：**静态二进制 + 运行时用户词库（两种形态）**
 //!
 //! ## 静态部分
 //!
-//! `src/dict.txt` + `src/user_dict.txt` 在构建期被 `build.rs` 编码成 `base.bin`：
-//! 三套码（小鹤 / 微软 / 全拼去空格）各一张按码升序的下标表。运行时通过
+//! `src/dict.txt`（+ 开发机的 `src/user_dict.txt`）在构建期被 `build.rs` 编码成
+//! `base.bin`：三套码（小鹤 / 微软 / 全拼去空格）各一张按码升序的下标表。运行时通过
 //! `include_bytes!` 嵌在 DLL 的 `.rdata` 段里——那一段由 PE 加载器 mmap，
 //! **多个进程共享同一份物理页**，所以词库的常驻内存不再是「每进程 9.2MB 私有堆」。
 //!
 //! 好处是切双拼方案不再需要重建索引（只是换一张表），`Activate` 里那 81ms 归零。
 //!
-//! ## 覆盖层
+//! ## 用户词库：txt 是源，bin 是产物
 //!
-//! `%APPDATA%\Feihe\user_dict.txt` 里运行时导入的词。优先级高于静态部分：
-//! 同码时排在前面，同词时盖住静态那份。
+//! `%APPDATA%\Feihe\user_dict.txt` 是人可读、可手改、可导出的**源文件**；
+//! `%APPDATA%\Feihe\user.bin` 是它编译出来的 FHDB 二进制（`dictenc` 同一个编码器）。
 //!
-//! 覆盖层是阶段一的过渡方案——阶段二会换成 SQLite 用户库，那时才有「按词增删改
-//! 和词频学习」的能力。现在它只解决「导入的词要能立刻用」这一件事。
+//! 运行时优先用 `user.bin`：`dictbin::map_file` 把它映射进地址空间，多进程共享
+//! 页缓存，查询走和 `base.bin` 完全相同的零解析二分。**不会退化成每进程建一份堆索引。**
+//!
+//! 只有在 `user.bin` 不存在、或比 `user_dict.txt` 旧（说明用户手改了 txt 还没重新编译）
+//! 时，才退回「解析 txt 到内存」的覆盖层。那条路要 125ms/5 万条、每进程一份私有堆，
+//! 是过渡形态，不是常态。
+//!
+//! 导入词库、改完 txt 之后都应该重新编译一次（设置窗里有按钮，导入时会自动做）。
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -25,7 +31,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::assist::{self, AssistMode};
 use crate::config;
-use crate::dictbin::{self, Idx};
+use crate::dictbin::{self, Bin, Idx};
+use crate::dictenc;
 use crate::shuangpin::{self, Scheme};
 
 /// 当前双拼方案。缓存在原子变量里，避免每次按键都去抢 `config` 的锁。
@@ -150,6 +157,119 @@ impl Overlay {
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// 用户词库：user.bin（mmap，常态） / user_dict.txt（回退）
+// ─────────────────────────────────────────────────────────────
+
+/// `%APPDATA%\Feihe\user.bin` —— `user_dict.txt` 编译出来的 FHDB
+pub fn user_bin_file() -> PathBuf {
+    config::dir().join("user.bin")
+}
+
+struct BinCache {
+    /// 是否已经探测过（`false` 时 `bin` 无意义）
+    probed: bool,
+    bin: Option<&'static Bin>,
+}
+
+static USER_BIN: RwLock<BinCache> = RwLock::new(BinCache {
+    probed: false,
+    bin: None,
+});
+
+fn mtime(p: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(p).ok()?.modified().ok()
+}
+
+/// 探测并映射 `user.bin`。不该用的时候返回 `None`。
+///
+/// 判据是「产物不能比源旧」：`user_dict.txt` 是源，`user.bin` 是编译产物。
+/// 用户手改了 txt 却没重新编译时，如果还拿 bin 去查，表现就是「改了不生效」，
+/// 这种静默失效最难查。所以宁可退回慢一点的 txt 覆盖层。
+fn probe_user_bin() -> Option<&'static Bin> {
+    let bin = user_bin_file();
+    let txt = user_file();
+
+    let bin_time = mtime(&bin)?;
+    if let Some(txt_time) = mtime(&txt) {
+        if txt_time > bin_time {
+            return None;
+        }
+    }
+    // 文件在但读不出来（格式坏、被截断、版本不对）也退回 txt
+    dictbin::map_file(&bin)
+}
+
+/// 当前生效的 `user.bin`。第一次调用时探测，之后零开销。
+fn user_bin() -> Option<&'static Bin> {
+    if let Ok(g) = USER_BIN.read() {
+        if g.probed {
+            return g.bin;
+        }
+    }
+    refresh_user_bin();
+    USER_BIN.read().ok().and_then(|g| g.bin)
+}
+
+/// 重新探测 `user.bin`。
+///
+/// 别的进程重编译了 `user.bin` 之后，本进程还映射着旧文件（旧映射不会失效，
+/// 但看不到新词）。在 `Activate` 里调一次，代价是两次 `GetFileAttributesEx`。
+pub fn refresh_user_bin() {
+    let loaded = probe_user_bin();
+    if let Ok(mut g) = USER_BIN.write() {
+        g.probed = true;
+        g.bin = loaded;
+    }
+}
+
+/// 当前生效的用户词库来源
+enum UserSrc {
+    /// 没有用户词库
+    None,
+    /// 常态：mmap 进来的 user.bin
+    Mapped(&'static Bin),
+    /// 回退：解析 user_dict.txt 得到的堆索引
+    Heap(Arc<Overlay>),
+}
+
+fn user_source() -> UserSrc {
+    if let Some(b) = user_bin() {
+        return UserSrc::Mapped(b);
+    }
+    let ov = overlay();
+    if ov.entries.is_empty() {
+        UserSrc::None
+    } else {
+        UserSrc::Heap(ov)
+    }
+}
+
+/// 把 `user_dict.txt` 编译成 `user.bin`，然后立刻重新映射。
+///
+/// 返回 `(条目数, 字节数)`。写临时文件再改名，避免编译到一半时别的进程
+/// 映射到半截文件；改名后旧映射仍然指向旧文件（Windows 允许改名已映射的文件）。
+pub fn compile_user_bin() -> Result<(usize, usize), String> {
+    let txt = std::fs::read_to_string(user_file()).map_err(|e| format!("读不到 user_dict.txt：{e}"))?;
+    let entries = dictenc::parse_entries(&txt);
+    if entries.is_empty() {
+        return Err("user_dict.txt 里没有有效条目（格式：每行「词<TAB>全拼」）".into());
+    }
+    let built = dictenc::build(&entries);
+
+    std::fs::create_dir_all(config::dir()).map_err(|e| format!("建目录失败：{e}"))?;
+    let path = user_bin_file();
+    let tmp = path.with_extension("bin.tmp");
+    std::fs::write(&tmp, &built.bytes).map_err(|e| format!("写 user.bin.tmp 失败：{e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("替换 user.bin 失败（可能被别的进程占用）：{e}")
+    })?;
+
+    refresh_user_bin();
+    Ok((built.count, built.bytes.len()))
+}
+
 static OVERLAY: RwLock<Option<Arc<Overlay>>> = RwLock::new(None);
 
 fn overlay() -> Arc<Overlay> {
@@ -244,25 +364,48 @@ fn search(
             || assist::code_of_word(w, mode).is_some_and(|c| c.starts_with(assist_prefix))
     };
 
-    // 1) 覆盖层（运行时导入的词）优先
-    let ov = overlay();
-    {
-        let (ps, pe) = ov.prefix_range(which, prefix);
-        let ee = ov.exact_end(which, prefix).clamp(ps, pe);
-        // 整码匹配先出，再出更长的词
-        for (a, b) in [(ps, ee), (ee, pe)] {
-            for p in a..b {
-                let w = ov.word_at(which, p);
-                if !pass(w) || seen.contains(&w) {
-                    continue;
-                }
-                seen.push(w);
-                out.push(Cow::Owned(w.to_string()));
-                if out.len() >= limit {
-                    return out;
+    // 1) 用户词库优先。常态是 mmap 的 user.bin（和 base.bin 同一条零解析路径，
+    //    多进程共享页缓存）；只有 bin 缺失或比 txt 旧时才退回堆索引。
+    //
+    // `user` 必须在 match 之外绑定：`seen` 借用它的字符串，作用域要比 match 长。
+    let user = user_source();
+    match &user {
+        UserSrc::Mapped(b) => {
+            let (ps, pe) = b.prefix_range(which, prefix);
+            let ee = b.exact_end(which, prefix).clamp(ps, pe);
+            for (a, z) in [(ps, ee), (ee, pe)] {
+                for p in a..z {
+                    let w = b.word_at(which, p);
+                    if !pass(w) || seen.contains(&w) {
+                        continue;
+                    }
+                    seen.push(w);
+                    out.push(Cow::Borrowed(w));
+                    if out.len() >= limit {
+                        return out;
+                    }
                 }
             }
         }
+        UserSrc::Heap(ov) => {
+            let (ps, pe) = ov.prefix_range(which, prefix);
+            let ee = ov.exact_end(which, prefix).clamp(ps, pe);
+            // 整码匹配先出，再出更长的词
+            for (a, b) in [(ps, ee), (ee, pe)] {
+                for p in a..b {
+                    let w = ov.word_at(which, p);
+                    if !pass(w) || seen.contains(&w) {
+                        continue;
+                    }
+                    seen.push(w);
+                    out.push(Cow::Owned(w.to_string()));
+                    if out.len() >= limit {
+                        return out;
+                    }
+                }
+            }
+        }
+        UserSrc::None => {}
     }
 
     // 2) 静态词库
@@ -287,10 +430,14 @@ fn search(
     out
 }
 
-/// 词库概况：(总条目, 运行时导入的条目, 当前方案)
+/// 词库概况：(总条目, 用户词库条目, 当前方案)
 pub fn stats() -> (usize, usize, Scheme) {
-    let ov = overlay();
-    (dictbin::get().count() + ov.entries.len(), ov.entries.len(), scheme())
+    let user = match user_source() {
+        UserSrc::Mapped(b) => b.count(),
+        UserSrc::Heap(o) => o.entries.len(),
+        UserSrc::None => 0,
+    };
+    (dictbin::get().count() + user, user, scheme())
 }
 
 /// 导出全部词库到 `词<TAB>全拼` 文本。返回条目数。
@@ -317,9 +464,11 @@ pub fn export_to(path: &Path) -> Result<usize, String> {
     Ok(bin.count() + ov.entries.len())
 }
 
-/// 从 `词<TAB>全拼` 文本导入，追加到运行时用户词库。
-/// 返回新增条目数（已存在的词会跳过）。
-pub fn import_from(path: &Path) -> Result<usize, String> {
+/// 从 `词<TAB>全拼` 文本导入，追加到运行时用户词库，并立刻编译成 `user.bin`。
+///
+/// 返回 `(新增条目数, Some((bin 条目数, bin 字节数)))`；第二个为 `None`
+/// 表示编译失败、退回文本覆盖层（导入本身是成功的）。
+pub fn import_from(path: &Path) -> Result<(usize, Option<(usize, usize)>), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("读取失败：{e}"))?;
 
     let existing = std::fs::read_to_string(user_file()).unwrap_or_default();
@@ -367,9 +516,18 @@ pub fn import_from(path: &Path) -> Result<usize, String> {
         all.push_str(&appended);
         let _ = std::fs::create_dir_all(config::dir());
         std::fs::write(user_file(), all).map_err(|e| format!("写入失败：{e}"))?;
-        reload_overlay();
+
+        // 导入完立刻编译成 user.bin，让用户词库走 mmap 而不是每进程解析一遍。
+        // 编译失败不算导入失败——txt 已经写好了，退回覆盖层照样能用，只是慢一点。
+        match compile_user_bin() {
+            Ok((n, bytes)) => return Ok((added, Some((n, bytes)))),
+            Err(e) => {
+                crate::trace!("user.bin 编译失败，退回文本覆盖层：{e}");
+                reload_overlay();
+            }
+        }
     }
-    Ok(added)
+    Ok((added, None))
 }
 
 #[cfg(test)]
@@ -502,6 +660,35 @@ pub(crate) mod tests {
         assert_eq!(hits, vec!["你好"]);
         let hits: Vec<_> = ov.prefix(Idx::Flat, "feihe").collect();
         assert_eq!(hits, vec!["飞鹤"]);
+    }
+
+    /// 量一下「把整个个人词库当覆盖层加载」的代价。
+    ///
+    /// 覆盖层是**每进程私有堆**：这 5 万条会被每个加载了飞鹤的进程各解析一遍，
+    /// 和静态部分的「共享只读页」不是一回事。要给出这个数量级的具体数字，
+    /// 光靠猜不行，所以留一个手工跑的口子。
+    ///
+    /// `cargo test --release -- --ignored overlay_cost --nocapture`
+    #[test]
+    #[ignore = "手工测量用，依赖 src/user_dict.txt"]
+    fn overlay_cost() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/user_dict.txt");
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            return;
+        };
+        let t = std::time::Instant::now();
+        let ov = Overlay::parse(&text);
+        let ms = t.elapsed().as_secs_f64() * 1000.0;
+        let payload: usize = ov.entries.iter().map(|(w, py)| w.len() + py.len()).sum();
+        // 三张码表各有一份 Box<str>，真实堆占用 ≈ 净载荷 × 3 + 每条约 32B 的分配头
+        let allocs = ov.entries.len() * 5; // 2 个词面/拼音 + 3 张表
+        println!(
+            "覆盖层：{} 条 / 解析 {:.1} ms / 净载荷 {:.2} MB / 约 {} 次小分配",
+            ov.entries.len(),
+            ms,
+            payload as f64 / 1048576.0,
+            allocs
+        );
     }
 
     #[test]

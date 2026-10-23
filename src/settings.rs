@@ -46,6 +46,7 @@ const ID_NOTE: i32 = 142;
 const ID_IMPORT: i32 = 151;
 const ID_EXPORT: i32 = 152;
 const ID_CLOSE: i32 = 153;
+const ID_COMPILE: i32 = 154;
 
 static WND: AtomicIsize = AtomicIsize::new(0);
 
@@ -259,9 +260,36 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_IMPORT => {
             if let Some(path) = pick_file(h, false) {
                 match dict::import_from(&path) {
-                    Ok(n) => set_text(h, ID_NOTE, &format!("已导入 {n} 条新词。")),
+                    Ok((n, Some((bn, bytes)))) => set_text(
+                        h,
+                        ID_NOTE,
+                        &format!(
+                            "已导入 {n} 条新词，并编译成 user.bin（{bn} 条 / {} KB）。",
+                            bytes / 1024
+                        ),
+                    ),
+                    Ok((n, None)) => set_text(
+                        h,
+                        ID_NOTE,
+                        &format!("已导入 {n} 条新词（user.bin 编译失败，先用文本模式）。"),
+                    ),
                     Err(e) => set_text(h, ID_NOTE, &format!("导入失败：{e}")),
                 }
+            }
+        }
+        ID_COMPILE => {
+            // 手改过 user_dict.txt、或想确认 user.bin 状态时用。
+            // 编译是幂等的：内容没变也会重写一遍，成本只有几十毫秒。
+            match dict::compile_user_bin() {
+                Ok((n, bytes)) => set_text(
+                    h,
+                    ID_NOTE,
+                    &format!(
+                        "已编译 {n} 条到 user.bin（{} KB）。其它程序重新切换一次输入法后生效。",
+                        bytes / 1024
+                    ),
+                ),
+                Err(e) => set_text(h, ID_NOTE, &format!("编译失败：{e}")),
             }
         }
         ID_EXPORT => {
@@ -313,8 +341,9 @@ unsafe fn build(h: HWND) {
     label(h, "", 16, y, 428, ID_STATS);
 
     y += 34;
-    push(h, "导入词库…", 16, y, 110, 28, ID_IMPORT);
-    push(h, "导出词库…", 136, y, 110, 28, ID_EXPORT);
+    push(h, "导入词库…", 16, y, 104, 28, ID_IMPORT);
+    push(h, "导出词库…", 128, y, 104, 28, ID_EXPORT);
+    push(h, "编译成二进制", 240, y, 128, 28, ID_COMPILE);
 
     y += 40;
     label(h, "导入格式：每行「词<TAB>全拼」，例如：你好<TAB>ni hao", 16, y, 428, ID_NOTE);

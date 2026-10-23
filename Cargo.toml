@@ -34,6 +34,11 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemInformation",
     # 设置窗里的词库导入/导出文件选择框
     "Win32_UI_Controls_Dialogs",
+    # 用户词库 user.bin：CreateFileMappingW / MapViewOfFile 做文件映射
+    "Win32_System_Memory",
+    # CreateFileMappingW 的参数里有 SECURITY_ATTRIBUTES，windows-rs 按参数类型
+    # 门控函数导出——不开这个 feature，函数本身就不存在（报 unresolved import）
+    "Win32_Security",
 ] }
 
 # 必须保留：#[implement] 是 windows-core 导出的过程宏，代码里 `use windows_core::...`

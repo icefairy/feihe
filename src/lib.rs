@@ -7,6 +7,7 @@ mod clsid;
 mod config;
 mod dict;
 mod dictbin;
+mod dictenc;
 mod dllcount;
 mod font;
 mod insert;
