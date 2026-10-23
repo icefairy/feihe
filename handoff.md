@@ -111,6 +111,18 @@
 | `-` `=` | `－` `＝` | |
 | `` ` `` | —— | 快捷输入引导符，不是标点 |
 
+### 翻页键
+
+`page_delta(vk)` 把四组键收成一处：`-` / `↑` 上一页，`=` / `↓` 下一页。返回 `Option<isize>`，
+`handle_page_key()` 调它并返回「键是否已吃掉」。
+
+**只在组合态生效**（`handle_page_key` 在 `if !self.is_composing()` 之后才调用），
+非组合态 `-` `=` 还是全角标点 `－` `＝`。组合态下哪怕只有一页也吃掉，行为才可预测——
+否则「按了没反应」和「突然上屏一个＝」会随机出现。
+
+放在 `match vk` **之前**而不是列四条 arm：match 模式里没法写 `VK_OEM_MINUS.0 as u8`
+这种带转换的模式；而且分词模式（`on_segment_key`）要走同一套。
+
 `is_code_key()` 里加了 `if Self::shift_down() { return false; }`，否则 `Shift+\` 会被
 吞进编码，`|` 永远打不出来。字母不受影响——`vk.is_ascii_uppercase()` 那一条在前面就返回了。
 

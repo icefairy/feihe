@@ -805,10 +805,15 @@ impl FeiheTextService_Impl {
         self.backspace();
     }
 
-    /// 分词模式的按键处理。`←`/`→` 移段，数字选词，空格确认，回车上屏，
-    /// 退格退出，编码键延长编码并重新分段，标点等其他键整体上屏后原样交给应用。
+    /// 分词模式的按键处理。`←`/`→` 移段，`↑`/`↓` 和 `-`/`=` 翻页，数字选词，
+    /// 空格确认，回车上屏，退格退出，编码键延长编码并重新分段，
+    /// 标点等其他键整体上屏后原样交给应用。
     fn on_segment_key(&self, vk: u8) -> Result<BOOL> {
         let n = self.segments.borrow().len();
+        // 翻页：分词模式下候选是「当前这一段」的，翻的就是它的页
+        if self.handle_page_key(vk) {
+            return Ok(BOOL::from(true));
+        }
         match vk {
             // 左：光标移到上一段
             0x25 => {
@@ -955,6 +960,34 @@ impl FeiheTextService {
         let next = (self.selected.get() as isize + delta).clamp(0, count - 1);
         self.selected.set(next as usize);
         self.show_candidates();
+    }
+
+    /// 翻页键：`-` / `↑` 上一页，`=` / `↓` 下一页。返回方向，不是翻页键返回 None。
+    ///
+    /// `-` `=` 是搜狗、微软拼音、QQ 输入法的通行键位；`↑` `↓` 保留给习惯方向键的人。
+    /// **只在组合态生效**——非组合态 `-` `=` 还是全角标点 `－` `＝`（见 `fullwidth_punct`）。
+    fn page_delta(vk: u8) -> Option<isize> {
+        match vk {
+            0x26 => Some(-1), // ↑
+            0x28 => Some(1),  // ↓
+            v if v == VK_OEM_MINUS.0 as u8 => Some(-1),
+            v if v == VK_OEM_PLUS.0 as u8 => Some(1),
+            _ => None,
+        }
+    }
+
+    /// 翻页键处理：是翻页键就翻页并返回 true（键已吃掉）。
+    ///
+    /// 哪怕只有一页也吃掉，行为才可预测——否则「按了没反应」和「突然上屏一个＝」
+    /// 会随机出现。想打 `－` `＝` 先按空格把候选上屏再敲。
+    fn handle_page_key(&self, vk: u8) -> bool {
+        match Self::page_delta(vk) {
+            Some(d) => {
+                self.turn_page(d);
+                true
+            }
+            None => false,
+        }
     }
 
     fn turn_page(&self, delta: isize) {
@@ -1264,6 +1297,13 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             return Ok(BOOL::from(false));
         }
 
+        // - / = 和 ↑ / ↓：翻页。放在 match 之前，因为 match 里没法写
+        // `VK_OEM_MINUS.0 as u8` 这种带转换的模式；而且分词模式要走同一套，
+        // 所以抽成 handle_page_key 而不是在 match 里列四条 arm。
+        if self.handle_page_key(vk) {
+            return Ok(BOOL::from(true));
+        }
+
         match vk {
             // 空格：提交选中候选
             0x20 => {
@@ -1299,15 +1339,8 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 self.move_selection(1);
                 Ok(BOOL::from(true))
             }
-            // 上下：翻页
-            0x26 => {
-                self.turn_page(-1);
-                Ok(BOOL::from(true))
-            }
-            0x28 => {
-                self.turn_page(1);
-                Ok(BOOL::from(true))
-            }
+            // 上下：翻页（和 - / = 一起由 handle_page_key 统一处理）
+            // 这里不再单独列 0x26 / 0x28，避免两处逻辑走岔
             // Tab：进入/退出辅助码筛选（辅助码关闭时把 Tab 还给应用）
             0x09 => {
                 let mode = config::get().assist_mode;
@@ -1652,6 +1685,20 @@ mod tests {
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
         assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
+    }
+
+    #[test]
+    fn page_keys_are_minus_equals_and_arrows() {
+        // 中文输入法通行键位：- 上一页 / = 下一页
+        assert_eq!(FeiheTextService::page_delta(VK_OEM_MINUS.0 as u8), Some(-1));
+        assert_eq!(FeiheTextService::page_delta(VK_OEM_PLUS.0 as u8), Some(1));
+        // 方向键保留
+        assert_eq!(FeiheTextService::page_delta(0x26), Some(-1));
+        assert_eq!(FeiheTextService::page_delta(0x28), Some(1));
+        // 字母 / 空格 / 回车 / 左右方向键都不是翻页键
+        for vk in [0x41u8, 0x20, 0x0D, 0x25, 0x27] {
+            assert_eq!(FeiheTextService::page_delta(vk), None, "vk=0x{vk:02x}");
+        }
     }
 
     #[test]
