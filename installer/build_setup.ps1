@@ -85,6 +85,18 @@ if (Test-Path $userDict) {
 if ($userCount -gt 0) {
     $buildLog = Join-Path $repo 'target\build_mode.txt'
     $isRelease = (Test-Path $buildLog) -and ((Get-Content $buildLog -Raw).Trim() -eq 'release')
+    # 标记可能过期：直接 `cargo build` 不会经过 build.ps1，也就不会重写这个文件。
+    # 于是「上一次是发布构建」的旧标记会把这次的普通构建蒙过去，个人词库照样打包
+    # 发出去（自测时就这么中过：标记说 release，DLL 里 86749 条）。
+    # 兜底：DLL 比标记新 = 标记没覆盖这次构建，一律按非发布模式处理。
+    if ($isRelease) {
+        $markerTime = (Get-Item $buildLog).LastWriteTime
+        $stale = @($dll64, $dll32) | Where-Object { (Get-Item $_).LastWriteTime -gt $markerTime }
+        if ($stale) {
+            $isRelease = $false
+            Write-Host "  构建标记已过期（$(Split-Path $stale[0] -Leaf) 比它新）" -ForegroundColor Yellow
+        }
+    }
     Write-Host "  src\user_dict.txt 有 $userCount 条个人词条" -ForegroundColor Yellow
     if (-not $isRelease -and -not $AllowPersonalDict) {
         throw @"

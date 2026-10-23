@@ -1,12 +1,16 @@
-<#
+﻿<#
   Feihe IME - remove from the current user's keyboard list.
 
   input.dll has NO UninstallLayoutOrTip export, but InstallLayoutOrTip takes
   ILOT_UNINSTALL (0x00000001), which is the supported way to remove an entry.
   Registry cleanup is kept as a fallback and as a residue sweep.
 
-  Pure ASCII on purpose (no BOM, no non-ASCII): avoids PowerShell 5.1
-  UTF-8-without-BOM / MBCS mojibake. All output is English.
+  This file is UTF-8 WITH BOM on purpose (same as install_tip.ps1).
+  PowerShell 5.1 reads a BOM-less .ps1 with the ANSI codepage - on Chinese
+  Windows that is cp936, and UTF-8 Chinese bytes then decode as GBK, which
+  can swallow the closing quote of a string and break parsing entirely
+  ("字符串缺少终止符"). Do NOT re-save it as plain UTF-8 or ASCII.
+  All console output is English.
 #>
 $ErrorActionPreference = 'Continue'
 
@@ -141,6 +145,21 @@ foreach ($view in @(
     } else {
         Write-Host "  HKLM CLSID ($($view.Name)-bit) not found (already clean)."
     }
+}
+
+# -- 7. Restart ctfmon so the DLL mappings are dropped ------------------
+# Symmetric to install_tip.ps1 step 5. The DLL is mapped into ctfmon.exe and
+# Windows cannot delete a mapped file, so without this the uninstaller's
+# Delete of feihe.dll / feihe32.dll fails silently and leaves the install
+# directory behind ("removable after sign-out"). Killing ctfmon drops the
+# last mapping; Windows relaunches it on demand at medium integrity.
+# Kill only - never launch ctfmon from an elevated process: it would run at
+# high integrity and UIPI blocks its window messages to normal apps.
+try {
+    Stop-Process -Name ctfmon -Force -ErrorAction Stop
+    Write-Host "  ctfmon restarted (DLL mappings dropped)"
+} catch {
+    Write-Host "  ctfmon not running (skipped)"
 }
 
 Write-Host "[tip] removal done."

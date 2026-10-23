@@ -53,6 +53,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [ok] deployed. ctfmon restarted - the new DLL loads on next keystroke, no sign-out needed.
+
 endlocal
 exit /b 0
 
@@ -68,6 +70,8 @@ move /y %2 %2.old >nul 2>&1
 copy /y %1 %2 >nul 2>&1
 if not exist %2 (
   echo [ERROR] failed to deploy %1 to %2
+  REM 回滚：别把现场留在「只有 .old、没有新 DLL」的状态
+  if exist %2.old move /y %2.old %2 >nul 2>&1
   exit /b 1
 )
 exit /b 0

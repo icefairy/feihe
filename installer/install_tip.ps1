@@ -7,6 +7,7 @@
     2. HKLM CTF TIP definition (Category / Item / LanguageProfile)，32 位视图镜像一份。
     3. Adds Feihe to the CURRENT USER keyboard list via input.dll!InstallLayoutOrTip.
     4. Verifies the result and falls back to a direct registry write if needed.
+    5. Restarts ctfmon so a freshly deployed DLL takes effect without sign-out.
 
   Notes:
     - input.dll has NO UninstallLayoutOrTip export. Removal uses the same entry point
@@ -127,7 +128,14 @@ function Register-TipView {
     # 但一个 OnTestKeyDown 都收不到，表现为「切到输入法后字母直接进输入框」。
     $ImmGuid = '{13A016DF-560B-46CD-947A-4C3AF1E0E35D}'   # GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT
 
-    $categories = @($KbdGuid, $ImmGuid)
+    # UIELEMENTENABLED：宿主用 `ITfThreadMgrEx::ActivateEx(TF_TMAE_UIELEMENTENABLEDONLY)`
+    # 激活 TSF 时（独占全屏游戏就是这么干的），MSCTF **只加载**注册了这个分类的 TIP。
+    # 缺了它，游戏里的症状不是「候选看不见」，而是**输入法整个不出现**：ActivateEx
+    # 照样返回 S_OK，一个错都不报，UILess 那段代码永远没机会跑。
+    # 这条是实测出来的——见 tools/tsfhost。
+    $UiElemGuid = '{49D2F9CF-1F5E-11D7-A6D3-00065B84435C}'  # GUID_TFCAT_TIPCAP_UIELEMENTENABLED
+
+    $categories = @($KbdGuid, $ImmGuid, $UiElemGuid)
     $item = Join-Path $tip "Category\Item\$Clsid"
     New-Item -Path $item -Force | Out-Null
     Set-RegValue -Path $item -ValueName 'Description' -Value $Name
@@ -240,6 +248,39 @@ if ($hasSort) {
     Set-RegValue -Path $leaf -ValueName 'Profile' -Value $Profile
     Set-RegValue -Path $leaf -ValueName 'KeyboardLayout' -Value 0 -Type DWord
     Write-Host "[fix] wrote SortOrder entry $leaf"
+}
+
+# -- 5. 重启 ctfmon，让新 DLL 真正生效 ---------------------------------
+# 为什么需要这一步：安装器 / register.cmd 换 DLL 的手法是「把被占用的旧文件改名成
+# .old，再写新文件」（Windows 允许重命名已映射的文件，不允许直接覆盖）。但改名
+# 只动了磁盘——ctfmon.exe 进程里映射的仍是旧代码，它不会因为磁盘上换了文件就
+# 重新加载。不重启 ctfmon，覆盖安装后新版本要等到下次注销才生效，
+# 「更新不用注销」就落了空。
+#
+# ctfmon 被杀后 Windows 会按需自动重启（点一下任意输入框即拉起，中等完整性，
+# 和登录时一样），重启时重新 CoCreateInstance(CLSID) → 按注册表路径加载新 DLL。
+# 所以只杀、不手动拉：从提权的 PowerShell 里 Start-Process ctfmon 拿到的是高
+# 完整性令牌，UIPI 会挡住它和普通应用之间的窗口消息，输入法直接瘫痪。
+# 宁可让系统自己拉。
+try {
+    Stop-Process -Name ctfmon -Force -ErrorAction Stop
+    Write-Host "[tip] ctfmon 已重启：下次输入时加载新 DLL，不用注销"
+} catch {
+    # 没在跑（或杀不了）都不是错误——系统会在需要时自己拉起
+    Write-Host "[tip] ctfmon 未在运行，跳过重启"
+}
+
+# 顺手清理改名残留：ctfmon 一死就没人映射 .old 了，能删就删；删不掉
+# （用户立刻点了输入框，ctfmon 又起来了）就留给卸载程序。
+Start-Sleep -Milliseconds 500
+$dlls = @($DllPath)
+if ($DllPath32) { $dlls += $DllPath32 }
+foreach ($dll in $dlls) {
+    $old = "$dll.old"
+    if (Test-Path -LiteralPath $old) {
+        Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $old)) { Write-Host "[tip] removed $old" }
+    }
 }
 
 Write-Host ""

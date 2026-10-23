@@ -11,6 +11,10 @@
 ; 3. 覆盖 DLL 时先 Delete 再 Rename 兜底：ctfmon / explorer 常常已经把旧 DLL
 ;    映射进进程，直接 Copy 会失败。Windows 允许**重命名**已映射的文件，
 ;    所以改名成 .old 再拷新文件就行，.old 排到重启删。
+;    但改名只换了磁盘上的文件——ctfmon 进程里映射的仍是旧代码。install_tip.ps1
+;    最后一步会重启 ctfmon（Windows 按需自动拉起，中等完整性；不能从提权进程
+;    手动拉，UIPI 会挡消息），覆盖安装后点一下输入框就加载新 DLL，不用注销。
+;    卸载侧对称：uninstall_tip.ps1 末尾同样重启，之后 Delete 才删得掉被映射的 DLL。
 ;
 ; 编译：makensis /DARCH=x64 feihe.nsi   （或直接跑 build_setup.ps1）
 
@@ -177,6 +181,16 @@ Section "主程序" SecMain
   StrCpy $R9 "$INSTDIR\feihe32.dll"
   Call CopyOrReplace
 
+  ; 兜底校验：CopyOrReplace 的任何失败路径都不许静默——DLL 没落地还继续注册的话，
+  ; 症状是「装完了但输入法不存在」，比当场报错难查得多。失败姿势和 RunPs 一致。
+  ${If} ${FileExists} "$INSTDIR\feihe.dll"
+  ${AndIf} ${FileExists} "$INSTDIR\feihe32.dll"
+  ${Else}
+    MessageBox MB_ICONSTOP|MB_OK "DLL 部署失败：$INSTDIR\feihe.dll 未正确写入。$\r$\n$\r$\n请检查杀毒软件是否锁定了该文件，然后重新运行安装程序。"
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+
   ; 注册脚本一起装上：卸载要用，出问题时也能手工重跑
   File "install_tip.ps1"
   File "uninstall_tip.ps1"
@@ -235,6 +249,8 @@ SectionEnd
 Section "Uninstall"
   ; 先注销，再删文件。顺序反了的话 CLSID 会指向一个不存在的路径，
   ; 切到飞鹤时宿主直接加载失败，而且没地方报错。
+  ; uninstall_tip.ps1 末尾会重启 ctfmon：映射一释放，下面的 Delete 才真正删得掉
+  ; 被占用的 DLL（否则只能留下一堆「重启后可删」的残留，RMDir 也会失败）。
   ${If} ${FileExists} "$INSTDIR\uninstall_tip.ps1"
     DetailPrint "注销 COM / TSF 组件…"
     StrCpy $R7 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\uninstall_tip.ps1"'
@@ -245,8 +261,8 @@ Section "Uninstall"
     ${EndIf}
   ${EndIf}
 
-  Delete "$INSTDIR\feihe.dll"
-  Delete "$INSTDIR\feihe32.dll"
+  Delete /REBOOTOK "$INSTDIR\feihe.dll"
+  Delete /REBOOTOK "$INSTDIR\feihe32.dll"
   Delete "$INSTDIR\install_tip.ps1"
   Delete "$INSTDIR\uninstall_tip.ps1"
   Delete "$INSTDIR\使用帮助.md"
