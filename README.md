@@ -2,7 +2,7 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.1** ｜ 安装包 1.54 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 45796 ｜
+**当前版本 0.2.1** ｜ 安装包 1.56 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
 不联网、不弹窗、无账号 ｜ 156 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
@@ -46,7 +46,7 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 | 开源 | **是**（Rust，全文可改） | 否 | 否 |
 | 小鹤双拼 | **原生**，不用装方案 | 支持 | 支持 |
 | 一简 / 二简 | **原生**（一简 26 键含次选，二简 370 词） | 随方案 | 无 |
-| 词库规模 | 4.6 万条 | 数百万级云词库 | 系统词库 |
+| 词库规模 | 4.7 万条 | 数百万级云词库 | 系统词库 |
 | 生僻字 | GB2312 + 通用规范汉字表**全收，缺 0** | 全 | 全 |
 | 动态词频 | 本地学习 | 云端 + 本地 | 本地 |
 | 简繁切换 | Windows NLS，零体积 | 有 | 有 |
@@ -60,7 +60,7 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 
 - **体积差两个数量级**。词库在构建期预编码成扁平二进制，`include_bytes!` 嵌进 DLL 的
   `.rdata`；PE 加载器 mmap 它，**多个进程共享同一份物理页**。没有运行时解析、没有
-  每进程私有堆，所以 4.6 万条词库只值 2.8 MB。
+  每进程私有堆，所以 4.7 万条词库只值 2.9 MB。
 - **没有联网代码**。整个 DLL 的导入表里没有任何网络 API，这不是「隐私承诺」，是
   「没写这个功能」。实测 18 个导入 DLL 全是 `kernel32` / `user32` / `ole32` / CRT 这一层，
   没有 `wininet` / `winhttp` / `ws2_32` / `urlmon`。自己验：
@@ -79,7 +79,7 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 
 **它明确不如人的地方，也说清楚：**
 
-- **词库差得远**。4.6 万条是「够日常」的量级，不是「什么都有」。专业术语、
+- **词库差得远**。4.7 万条是「够日常」的量级，不是「什么都有」。专业术语、
   网络新词、人名地名基本查不到，得靠用户词库补（支持导入搜狗个人词库，
   见后文）。
 - **没有云**。换电脑不同步，词频学习只在本机。
@@ -623,7 +623,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 | 构建方式 | base.bin | 64 位 DLL |
 | --- | --- | --- |
 | 普通 | 86749 条 / 6.5 MB | 7.0 MB |
-| `-NoUserDict`（发布） | 45796 条 / 2.8 MB | 3.5 MB |
+| `-NoUserDict`（发布） | 46492 条 / 2.9 MB | 3.6 MB |
 
 `build_setup.ps1` 还会读 `src\user_dict.txt` 的条数做二次兜底 —— 万一有人用普通构建的
 产物打包，它直接报错退出；确实想带个人词库得显式加 `-AllowPersonalDict`。
@@ -682,7 +682,7 @@ src/extra_drug.txt    通用药品名（611 条，同上）
 src/extra_tcm_herb.txt   中药名（466 条，同上）
 src/extra_tcm_patent.txt 中成药名 / 方剂（327 条，同上）
 src/user_dict.txt     用户词库（import_sogou.py 生成，可反复重跑；未导入时为空文件）
-tools/wordlists/      上面 6 份词表的源（一行一个词，手工可编辑）
+tools/wordlists/      上面 12 份词表的源（一行一个词，手工可编辑）
 tools/gen_extra.py    词表 → 拼音 → src/extra_*.txt（拼音用 pypinyin，词库读音校验）
 tools/pinyin_overrides.txt  人工校正的多音字 / 地名古音读音
 build.rs              生成 base.bin（预编码三套码）+ 编译图标资源
@@ -793,24 +793,30 @@ rime-ice 是「书面语料」词表，缺一批日常真的会打的词：电�
 
 ### 分类词表：`src/extra_*.txt`（自动生成）
 
-二阶的补充词按类拆成 6 个文件，全部由 `tools/gen_extra.py` 从
+二阶的补充词按类拆成 12 个文件，全部由 `tools/gen_extra.py` 从
 `tools/wordlists/*.txt` 生成（词表是人可读的纯文本，拼音机器算）：
 
 | 文件 | 内容 | 条数 |
 |---|---|---|
-| `src/extra_common.txt` | 日常常用词（2~4 字，按饮食/居住/职场/健康等 43 个主题分批写） | 4892 |
+| `src/extra_common.txt` | 日常常用词（2~4 字，按饮食/居住/职场/健康等 43 个主题分批写） | 4872 |
 | `src/extra_it.txt` | IT 行业词汇（开发、运维、数据、安全） | 353 |
 | `src/extra_place.txt` | 地名（省市区县、山川湖海） | 438 |
 | `src/extra_drug.txt` | 通用药品名（INN 中文名、剂型） | 611 |
 | `src/extra_tcm_herb.txt` | 中药名 | 466 |
 | `src/extra_tcm_patent.txt` | 中成药名 / 经典方剂 | 327 |
+| `src/extra_ganzhi.txt` | 六十甲子、干支纪年、节气、择日、太岁 | 138 |
+| `src/extra_yijing.txt` | 六十四卦（全名 / 简称 / 「X卦」）、易学通名 | 200 |
+| `src/extra_shensha.txt` | 常用神煞名、择日十二神、黄黑道 | 102 |
+| `src/extra_qimen.txt` | 奇门遁甲（九宫、八门、九星、八神、格局） | 94 |
+| `src/extra_liuren.txt` | 大六壬（四课三传、十二天将、六十课体） | 103 |
+| `src/extra_liuyao.txt` | 六爻纳甲（装卦、六亲六神、用神、卦变） | 45 |
 
 一条新词要过四道关才进得去：词库（`dict.txt` + `extra_dict.txt`）里没有、只含汉字、
 长度在分类范围内、拼音能编出双拼码。拼音用 pypinyin 的词级判断（`银行`→`yin hang`），
 生僻字和地名古音它也会错，所以 `tools/pinyin_overrides.txt` 钉了 60 多条人工校正，
 `tools/gen_extra.py` 还会把「pypinyin 读音不在词库登记读音里」的词全部列出来复核。
 
-**这条不能只靠人眼。** `dict::tests::generated_words_are_all_searchable` 把 6 份文件
+**这条不能只靠人眼。** `dict::tests::generated_words_are_all_searchable` 把 12 份文件
 全量跑一遍：按文件里的拼音编码、按码查回来，必须命中它自己。拼音错一个（这个词
 就等于不存在）测试立刻红。
 
@@ -942,7 +948,7 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
    查询时**先查用户词库、再查 `base.bin`**，用户词天然排在前面，不需要合并两张表。
 
 两阶段都走 `dictbin` 的同一套零解析二分。查询成本是两次前缀区间定位，
-和词库大小基本无关——`base.bin` 4.6 万条也好、8.7 万条也好，都是「读两个 u32 数组 + 二分」。
+和词库大小基本无关——`base.bin` 4.7 万条也好、8.7 万条也好，都是「读两个 u32 数组 + 二分」。
 
 > 早期版本是运行时把两份文本解析进堆、合并、稳定排序，5 万条要 125 ms/进程、
 > 每进程多背 6 MB 私有堆。换成「构建期预编码 + 运行期 mmap」之后降到 0.75 ms 且全系统共享一份页。

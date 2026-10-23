@@ -811,15 +811,18 @@ pub(crate) mod tests {
         set_scheme(Scheme::Xiaohe);
         let mut bad = Vec::new();
         let mut total = 0;
-        for f in [
-            "src/extra_common.txt",
-            "src/extra_it.txt",
-            "src/extra_place.txt",
-            "src/extra_drug.txt",
-            "src/extra_tcm_herb.txt",
-            "src/extra_tcm_patent.txt",
-        ] {
-            let text = std::fs::read_to_string(f).unwrap_or_default();
+        // 扫目录而不是写死清单：`tools/gen_extra.py` 加一个分类，这里要能自动跟上，
+        // 否则新分类的词「生成出来了但没人验」，拼音错了也没人发现。
+        let mut files: Vec<_> = std::fs::read_dir("src")
+            .expect("读不到 src/")
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.starts_with("extra_") && n != "extra_dict.txt" && n.ends_with(".txt"))
+            .collect();
+        files.sort();
+        assert!(files.len() >= 10, "分类词表只找到 {} 份", files.len());
+        for name in files {
+            let text = std::fs::read_to_string(format!("src/{name}")).unwrap_or_default();
             for line in text.lines() {
                 let Some((w, py)) = line.split_once('\t') else { continue };
                 let Some(code) = shuangpin::encode_pinyin(Scheme::Xiaohe, py) else {

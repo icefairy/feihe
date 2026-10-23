@@ -1,0 +1,105 @@
+# 自动生成的补充词表（shensha）
+# 由 tools/gen_extra.py 从 tools/wordlists/shensha*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+天乙贵人	tian yi gui ren
+太极贵人	tai ji gui ren
+天德贵人	tian de gui ren
+月德贵人	yue de gui ren
+天德合	tian de he
+月德合	yue de he
+三奇贵人	san qi gui ren
+福星贵人	fu xing gui ren
+文昌贵人	wen chang gui ren
+国印贵人	guo yin gui ren
+天官贵人	tian guan gui ren
+天医贵人	tian yi gui ren
+学堂词馆	xue tang ci guan
+金舆贵人	jin yu gui ren
+禄神	lu shen
+羊刃	yang ren
+阳刃	yang ren
+飞刃	fei ren
+血刃	xue ren
+红艳煞	hong yan sha
+流霞煞	liu xia sha
+劫煞	jie sha
+灾煞	zai sha
+亡神	wang shen
+咸池	xian chi
+桃花煞	tao hua sha
+桃花劫	tao hua jie
+红鸾	hong luan
+天喜	tian xi
+天喜星	tian xi xing
+空亡	kong wang
+孤辰	gu chen
+寡宿	gua su
+元辰	yuan chen
+勾绞煞	gou jiao sha
+童子煞	tong zi sha
+天罗地网	tian luo di wang
+十恶大败	shi e da bai
+阴阳差错	yin yang cha cuo
+魁罡	kui gang
+华盖	hua gai
+将星	jiang xing
+驿马	yi ma
+天赦	tian she
+天德	tian de
+月德	yue de
+天乙	tian yi
+太阴	tai yin
+朱雀	zhu que
+勾陈	gou chen
+腾蛇	teng she
+三合	san he
+三会	san hui
+三刑	san xing
+自刑	zi xing
+相冲	xiang chong
+刑冲	xing chong
+刑害	xing hai
+害太岁	hai tai sui
+冲太岁	chong tai sui
+破太岁	po tai sui
+岁破	sui po
+大耗	da hao
+小耗	xiao hao
+丧门	sang men
+吊客	diao ke
+披麻	pi ma
+病符	bing fu
+官符	guan fu
+死符	si fu
+天哭	tian ku
+天虚	tian xu
+天刑	tian xing
+月刑	yue xing
+月害	yue hai
+月厌	yue yan
+往亡	wang wang
+受死	shou si
+归忌	gui ji
+四废	si fei
+四离	si li
+四绝	si jue
+四离四绝	si li si jue
+杨公忌日	yang gong ji ri
+建除十二神	jian chu shi er shen
+建日	jian ri
+除日	chu ri
+满日	man ri
+定日	ding ri
+执日	zhi ri
+破日	po ri
+危日	wei ri
+成日	cheng ri
+收日	shou ri
+开日	kai ri
+闭日	bi ri
+黄道	huang dao
+黄道日	huang dao ri
+十二神煞	shi er shen sha
+神煞	shen sha
+吉神	ji shen
+凶煞	xiong sha

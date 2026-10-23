@@ -91,3 +91,26 @@
 左炔诺孕酮	zuo que nuo yun tong
 对乙酰氨基酚	dui yi xian an ji fen
 磺胺甲噁唑	huang an jia e zuo
+#
+# 术数：卦名与课体的古读（pypinyin 按现代常用音给，全错）
+# 这些是「按现代音读就对不上」的典型：屯 zhūn 不读 tún、否 pǐ 不读 fǒu、
+# 贲 bì 不读 bēn、畜 xù 不读 chù、解 xiè 不读 jiě、噬嗑 shì hé 不读 shì kē、
+# 重审 zhòng shěn（大六壬课体，不是 chóng）、揲蓍 shé shī（占卜法）。
+水雷屯	shui lei zhun
+屯卦	zhun gua
+天地否	tian di pi
+否卦	pi gua
+风天小畜	feng tian xiao xu
+山天大畜	shan tian da xu
+小畜	xiao xu
+大畜	da xu
+火雷噬嗑	huo lei shi he
+噬嗑	shi he
+山火贲	shan huo bi
+贲卦	bi gua
+雷水解	lei shui xie
+重审课	zhong shen ke
+揲蓍	she shi
+小畜卦	xiao xu gua
+大畜卦	da xu gua
+噬嗑卦	shi he gua

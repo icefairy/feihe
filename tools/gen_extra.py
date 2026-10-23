@@ -49,6 +49,14 @@ CATS = {
     "drug": ("src/extra_drug.txt", 2, 8),
     "place": ("src/extra_place.txt", 2, 6),
     "it": ("src/extra_it.txt", 2, 5),
+    # 术数类。词都不长（最长「旺相休囚死」5 字），但专名多、生僻读音多，
+    # 读音一律在 tools/pinyin_overrides.txt 里钉，别指望 pypinyin 猜对。
+    "ganzhi": ("src/extra_ganzhi.txt", 2, 5),
+    "yijing": ("src/extra_yijing.txt", 2, 5),
+    "shensha": ("src/extra_shensha.txt", 2, 5),
+    "qimen": ("src/extra_qimen.txt", 2, 5),
+    "liuren": ("src/extra_liuren.txt", 2, 5),
+    "liuyao": ("src/extra_liuyao.txt", 2, 5),
     "common": ("src/extra_common.txt", 2, 4),
 }
 

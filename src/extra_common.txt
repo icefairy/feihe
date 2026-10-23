@@ -1176,25 +1176,6 @@
 盛夏	sheng xia
 深秋	shen qiu
 节气	jie qi
-立春	li chun
-惊蛰	jing zhe
-春分	chun fen
-谷雨	gu yu
-立夏	li xia
-小满	xiao man
-芒种	mang zhong
-夏至	xia zhi
-小暑	xiao shu
-大暑	da shu
-立秋	li qiu
-处暑	chu shu
-白露	bai lu
-秋分	qiu fen
-寒露	han lu
-霜降	shuang jiang
-立冬	li dong
-小寒	xiao han
-大寒	da han
 风力	feng li
 降雨量	jiang yu liang
 天气图	tian qi tu
@@ -4016,7 +3997,6 @@
 动心思	dong xin si
 起念头	qi nian tou
 改主意	gai zhu yi
-变卦	bian gua
 反悔	fan hui
 翻脸	fan lian
 翻旧账	fan jiu zhang
@@ -4859,3 +4839,37 @@
 麻烦你了	ma fan ni le
 多亏你	duo kui ni
 感谢配合	gan xie pei he
+早点睡	zao dian shui
+睡个好觉	shui ge hao jue
+别太累	bie tai lei
+注意身体	zhu yi shen ti
+有事联系	you shi lian xi
+保持联系	bao chi lian xi
+常联系	chang lian xi
+随时找我	sui shi zhao wo
+随时说	sui shi shuo
+有需要说	you xu yao shuo
+不用客气	bu yong ke qi
+举手之劳	ju shou zhi lao
+应该的	ying gai de
+辛苦了您	xin ku le nin
+劳驾	lao jia
+借过	jie guo
+打扰了	da rao le
+冒犯了	mao fan le
+失礼了	shi li le
+包涵	bao han
+海涵	hai han
+多多包涵	duo duo bao han
+别介意	bie jie yi
+不要紧的	bu yao jin de
+问题不大	wen ti bu da
+没关系啦	mei guan xi la
+算了算了	suan le suan le
+翻篇了	fan pian le
+不提了	bu ti le
+别说了	bie shuo le
+就这样吧	jiu zhe yang ba
+先这样	xian zhe yang
+回头聊	hui tou liao
+下次再说	xia ci zai shuo

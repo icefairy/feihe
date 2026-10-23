@@ -1,0 +1,48 @@
+# 自动生成的补充词表（liuyao）
+# 由 tools/gen_extra.py 从 tools/wordlists/liuyao*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+纳甲筮法	na jia shi fa
+变爻	bian yao
+伏神	fu shen
+飞神	fei shen
+伏藏	fu cang
+飞伏	fei fu
+用神	yong shen
+忌神	ji shen
+仇神	chou shen
+进神	jin shen
+退神	tui shen
+月建	yue jian
+月破	yue po
+日破	ri po
+暗动	an dong
+日冲	ri chong
+月合	yue he
+三合局	san he ju
+旺相	wang xiang
+休囚	xiu qiu
+旺衰	wang shuai
+旺相休囚死	wang xiang xiu qiu si
+生旺墓绝	sheng wang mu jue
+游魂卦	you hun gua
+归魂卦	gui hun gua
+主卦	zhu gua
+客卦	ke gua
+六神	liu shen
+父母爻	fu mu yao
+兄弟爻	xiong di yao
+子孙爻	zi sun yao
+妻财爻	qi cai yao
+官鬼爻	guan gui yao
+世爻应爻	shi yao ying yao
+金钱卦	jin qian gua
+铜钱起卦	tong qian qi gua
+时间起卦	shi jian qi gua
+数字起卦	shu zi qi gua
+报数起卦	bao shu qi gua
+揲蓍	she shi
+蓍草	shi cao
+体卦	ti gua
+用卦	yong gua
+体用	ti yong
+外应	wai ying

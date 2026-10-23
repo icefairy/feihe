@@ -40,8 +40,8 @@
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
-实测数据：安装包 1.54 MB、装完约 6.5 MB、64 位 DLL 3621 KB、`base.bin` 45796 条 /
-2849 KB、156 项单测。
+实测数据：安装包 1.56 MB、装完约 6.5 MB、64 位 DLL 3667 KB、`base.bin` 46492 条 /
+2895 KB、156 项单测。
 
 
 ## 自绘窗口架构（v2 新增）
@@ -355,10 +355,10 @@ fn candidate_limit(code: &str) -> usize {
    的 `pinyin.txt` 取音，只补「整个字都没收录」的（避免多音字被塞进别的码），词频记 0。
 
 覆盖率自检：8105 表 7896 可编码全中、GB2312 6763 全中、去重 8006，缺 0。补字后
-`base.bin`（发布构建）2849 KB / 45796 条。
+`base.bin`（发布构建）2895 KB / 46492 条。
 GBK 那两万多字（异形字 / 繁体 / 日韩汉字）不收：繁体靠 `zhconv` 实时转，异体字收了
-只会让候选变长。（`dict.txt` 38573 行 + `extra_dict.txt` 183 行 + 6 份 `extra_*.txt`
-共 7087 条，`build.rs` 按「词 + 全拼」去重后剩 45796 条。）
+只会让候选变长。（`dict.txt` 38573 行 + `extra_dict.txt` 183 行 + 12 份 `extra_*.txt`
+共 7749 条，`build.rs` 按「词 + 全拼」去重后剩 46492 条。）
 
 ### 分类词表（`src/extra_*.txt`，自动生成）
 
@@ -368,9 +368,14 @@ GBK 那两万多字（异形字 / 繁体 / 日韩汉字）不收：繁体靠 `zh
   一个分类可以由多个分片组成（`common_01.txt`…`common_43.txt`），分批往里加词。
 - **产物**：`src/extra_<分类>.txt`，`词<TAB>全拼`，由 `tools/gen_extra.py` 整份重写。
 
-六个分类：`common`（4892）`it`（353）`place`（438）`drug`（611）`tcm_herb`（466）
-`tcm_patent`（327）。分类顺序在脚本的 `CATS` 里就是优先级，`common` 排最后捡剩下的，
-同一个词只进一个文件。
+十二个分类：`common`（4872）`it`（353）`place`（438）`drug`（611）`tcm_herb`（466）
+`tcm_patent`（327）`ganzhi`（138）`yijing`（200）`shensha`（102）`qimen`（94）
+`liuren`（103）`liuyao`（45）。分类顺序在脚本的 `CATS` 里就是优先级，`common` 排最后
+捡剩下的，同一个词只进一个文件。
+
+`build.rs` 和全量回归测试都**扫 `src/extra_*.txt`**，不写死清单——加分类只需要动
+`gen_extra.py` 的 `CATS` 和新建词表文件，两处，别的地方不用管。写死清单的坑是
+「词生成出来了但没并进 `base.bin`」，表现和「拼音写错了」一模一样，极难查。
 
 **为什么拼音必须是机器算的。** 词库存全拼，拼音错 → 码错 → 这个词等于不存在，
 而且不会有任何报错。pypinyin 的**词级**判断很准（`银行`→yin hang、`重庆`→chong qing、
@@ -381,14 +386,38 @@ GBK 那两万多字（异形字 / 繁体 / 日韩汉字）不收：繁体靠 `zh
    `_review.txt`，并优先采用词库登记的音（该字只有一个读音时）；
 2. `tools/pinyin_overrides.txt` 人工钉死真错的（`川芎`→chuan xiong、`黄柏`→huang bo、
    `枳壳`→zhi qiao、`桑螵蛸`→sang piao xiao、`六安`→lu an、`单县`→shan xian…）；
-3. **全量回归**：`dict::tests::generated_words_are_all_searchable` 把 6 份文件按拼音
-   编码再按码查回来，必须命中自己。7053 条跑下来 0 异常，这条测试才是真正的验收。
+3. **全量回归**：`dict::tests::generated_words_are_all_searchable` 扫全部 `extra_*.txt`，
+   按拼音编码再按码查回来，必须命中自己。7749 条跑下来 0 异常，这条测试才是真正的验收。
 
 注意「单字只有一个读音就用它」这条兜底是有代价的：它会把 `六安` 从 `lu an` 掰成
 `liu an`（词库里「六」只有 liu）。所以被它改过的词全在 `_review.txt` 里，得人看一眼。
 **这条别删**——它救回来的是 `川芎`、`荠菜` 这类 pypinyin 字级错音，量比地名古音大得多。
 
 未收录的 1 条是 `化癥回生片`（「癥」不在 8006 字表里），会在 `_dropped.txt` 里点名。
+
+### 术数词表：读音是唯一真正的坑（2026-10）
+
+六十甲子、六十四卦、神煞、奇门、大六壬、六爻这六类词，字都在 8006 字表里（`夬 姤 睽
+蹇 彖 嗑` 这些小字一个不缺），所以**没有任何一条被丢弃**。问题全在读音上，而且是最
+阴险的那种：pypinyin 按现代常用音给，错了不报错，词就永远打不出来。
+
+| 词 | pypinyin | 正确 | 说明 |
+|---|---|---|---|
+| 水雷屯 | shui lei tun | shui lei **zhun** | 屯卦的「屯」是 zhūn |
+| 天地否 | tian di fou | tian di **pi** | 否卦的「否」是 pǐ |
+| 山火贲 | shan huo ben | shan huo **bi** | 贲卦的「贲」是 bì |
+| 风天小畜 | … xiao chu | … xiao **xu** | 小畜的「畜」是 xù |
+| 火雷噬嗑 | … shi ke | … shi **he** | 噬嗑读 shì hé |
+| 雷水解 | lei shui jie | lei shui **xie** | 解卦的「解」是 xiè |
+| 重审课 | chong shen ke | **zhong** shen ke | 大六壬课体，不是「重新」 |
+| 揲蓍 | die shi | **she** shi | 揲 shé |
+
+前六条还有个连带问题：`_review.txt` **不会报它们**。因为「单字只有一个读音就用它」
+那条兜底会把 `tun` 直接当成正确读音，静默通过。所以这里的读音只能靠人读一遍词表
+再钉 `overrides`，全量回归测试只能保证「按文件里的拼音打得出来」，保证不了「拼音对」。
+
+顺带：`common` 里那句「六合」被 `shensha` 先占了，`liuren` 里就没有它——同一批词在
+多个分类里重复时，先出现的赢，这在 `CATS` 的顺序里是刻意的。
 
 ### 多音字：去重键是「词 + 拼音」
 

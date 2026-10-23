@@ -93,25 +93,32 @@ fn gen_dict_bin(manifest: &std::path::Path, out: &std::path::Path) {
     let skip_user = std::env::var("FEIHE_NO_USER_DICT").ok().as_deref() == Some("1");
     println!("cargo:rerun-if-env-changed=FEIHE_NO_USER_DICT");
 
-    let mut sources: Vec<&str> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
     if skip_user {
         println!("cargo:warning=FEIHE_NO_USER_DICT=1：已排除 src/user_dict.txt（发布构建）");
     } else {
-        sources.push("src/user_dict.txt");
+        sources.push("src/user_dict.txt".to_string());
     }
-    sources.push("src/dict.txt");
-    sources.push("src/extra_dict.txt");
+    sources.push("src/dict.txt".to_string());
+    sources.push("src/extra_dict.txt".to_string());
     // 按分类自动生成的补充词表（`tools/gen_extra.py` 产出）。
     //
     // 分文件而不是全塞进 `extra_dict.txt`：那份是手工挑的，混进上万行生成内容
     // 之后就没人愿意维护了。顺序在这里无关紧要——去重是先到先得，这些文件都在
     // `dict.txt` 之后，所以不会抢走基础词库里的词。
-    sources.push("src/extra_common.txt");
-    sources.push("src/extra_it.txt");
-    sources.push("src/extra_place.txt");
-    sources.push("src/extra_drug.txt");
-    sources.push("src/extra_tcm_herb.txt");
-    sources.push("src/extra_tcm_patent.txt");
+    //
+    // 这里**扫目录**而不是写死清单：分类还在增加，写死就得在两处同步（`gen_extra.py`
+    // 的 `CATS` 和这里），漏了的表现是「词生成出来了但打不出来」，很难查。
+    // `extra_dict.txt` 是手工表，上面已经 push 过，遍历时排除。
+    let mut generated: Vec<String> = std::fs::read_dir(manifest.join("src"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("extra_") && n != "extra_dict.txt" && n.ends_with(".txt"))
+        .collect();
+    generated.sort();
+    sources.extend(generated.into_iter().map(|n| format!("src/{n}")));
 
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();

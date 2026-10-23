@@ -1,0 +1,106 @@
+# 自动生成的补充词表（liuren）
+# 由 tools/gen_extra.py 从 tools/wordlists/liuren*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+大六壬	da liu ren
+六壬	liu ren
+六壬神课	liu ren shen ke
+四课	si ke
+三传	san chuan
+初传	chu chuan
+中传	zhong chuan
+末传	mo chuan
+四课三传	si ke san chuan
+日支	ri zhi
+日辰	ri chen
+占时	zhan shi
+月将	yue jiang
+十二天将	shi er tian jiang
+天将	tian jiang
+太常	tai chang
+昼夜贵人	zhou ye gui ren
+阳贵人	yang gui ren
+阴贵人	yin gui ren
+贵人顺逆	gui ren shun ni
+十神	shi shen
+六亲	liu qin
+十二长生	shi er chang sheng
+冠带	guan dai
+临官	lin guan
+帝旺	di wang
+年命	nian ming
+行年	xing nian
+本命	ben ming
+课体	ke ti
+课传	ke chuan
+发用	fa yong
+传神	chuan shen
+天地盘	tian di pan
+贼克法	zei ke fa
+比用法	bi yong fa
+涉害法	she hai fa
+遥克法	yao ke fa
+昴星法	mao xing fa
+别责法	bie ze fa
+八专法	ba zhuan fa
+伏吟法	fu yin fa
+返吟法	fan yin fa
+九宗门	jiu zong men
+元首课	yuan shou ke
+重审课	zhong shen ke
+知一课	zhi yi ke
+涉害课	she hai ke
+遥克课	yao ke ke
+昴星课	mao xing ke
+别责课	bie ze ke
+八专课	ba zhuan ke
+伏吟课	fu yin ke
+返吟课	fan yin ke
+三光课	san guang ke
+三阳课	san yang ke
+三奇课	san qi ke
+六仪课	liu yi ke
+轩盖课	xuan gai ke
+铸印课	zhu yin ke
+斫轮课	zhuo lun ke
+引从课	yin cong ke
+亨通课	heng tong ke
+繁昌课	fan chang ke
+荣华课	rong hua ke
+德庆课	de qing ke
+合欢课	he huan ke
+和美课	he mei ke
+斩关课	zhan guan ke
+闭口课	bi kou ke
+游子课	you zi ke
+三交课	san jiao ke
+乱首课	luan shou ke
+赘婿课	zhui xu ke
+冲破课	chong po ke
+芜淫课	wu yin ke
+解离课	jie li ke
+孤寡课	gu gua ke
+度厄课	du e ke
+无禄课	wu lu ke
+绝嗣课	jue si ke
+侵害课	qin hai ke
+刑伤课	xing shang ke
+二烦课	er fan ke
+天祸课	tian huo ke
+天狱课	tian yu ke
+天寇课	tian kou ke
+天网课	tian wang ke
+魄化课	po hua ke
+三阴课	san yin ke
+龙战课	long zhan ke
+死奇课	si qi ke
+灾厄课	zai e ke
+殃咎课	yang jiu ke
+九丑课	jiu chou ke
+鬼墓课	gui mu ke
+励德课	li de ke
+盘珠课	pan zhu ke
+全局课	quan ju ke
+玄胎课	xuan tai ke
+连珠课	lian zhu ke
+间传课	jian chuan ke
+六纯课	liu chun ke

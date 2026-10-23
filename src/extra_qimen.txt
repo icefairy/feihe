@@ -1,0 +1,97 @@
+# 自动生成的补充词表（qimen）
+# 由 tools/gen_extra.py 从 tools/wordlists/qimen*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+奇门遁甲	qi men dun jia
+奇门	qi men
+遁甲	dun jia
+九宫	jiu gong
+九宫格	jiu gong ge
+八宫	ba gong
+中宫	zhong gong
+洛书九宫	luo shu jiu gong
+八门	ba men
+休门	xiu men
+生门	sheng men
+伤门	shang men
+杜门	du men
+景门	jing men
+死门	si men
+惊门	jing men
+八门遁甲	ba men dun jia
+九星	jiu xing
+天蓬星	tian peng xing
+天任星	tian ren xing
+天冲星	tian chong xing
+天辅星	tian fu xing
+天英星	tian ying xing
+天芮星	tian rui xing
+天柱星	tian zhu xing
+天心星	tian xin xing
+天禽星	tian qin xing
+八神	ba shen
+值符	zhi fu
+值使	zhi shi
+九地	jiu di
+三奇	san qi
+乙奇	yi qi
+丙奇	bing qi
+丁奇	ding qi
+六仪	liu yi
+三奇六仪	san qi liu yi
+奇仪	qi yi
+天盘	tian pan
+人盘	ren pan
+神盘	shen pan
+地盘奇仪	di pan qi yi
+天盘奇仪	tian pan qi yi
+阳遁	yang dun
+阴遁	yin dun
+阴阳遁	yin yang dun
+阳局	yang ju
+阴局	yin ju
+局数	ju shu
+起局	qi ju
+排盘	pai pan
+奇门局	qi men ju
+遁甲局	dun jia ju
+阳遁九局	yang dun jiu ju
+阴遁九局	yin dun jiu ju
+拆补法	chai bu fa
+置闰法	zhi run fa
+转盘奇门	zhuan pan qi men
+飞盘奇门	fei pan qi men
+时家奇门	shi jia qi men
+日家奇门	ri jia qi men
+月家奇门	yue jia qi men
+年家奇门	nian jia qi men
+刻家奇门	ke jia qi men
+时干	shi gan
+日干	ri gan
+马星	ma xing
+驿马星	yi ma xing
+击刑	ji xing
+门迫	men po
+入墓	ru mu
+反吟	fan yin
+伏吟	fu yin
+三奇得使	san qi de shi
+玉女守门	yu nv shou men
+五不遇时	wu bu yu shi
+六仪击刑	liu yi ji xing
+天网四张	tian wang si zhang
+青龙回首	qing long hui shou
+飞鸟跌穴	fei niao die xue
+天遁	tian dun
+地遁	di dun
+人遁	ren dun
+风遁	feng dun
+云遁	yun dun
+龙遁	long dun
+虎遁	hu dun
+神遁	shen dun
+鬼遁	gui dun
+九遁	jiu dun
+奇门格局	qi men ge ju
+落宫	luo gong
+临宫	lin gong
+值符值使	zhi fu zhi shi

@@ -1,0 +1,203 @@
+# 自动生成的补充词表（yijing）
+# 由 tools/gen_extra.py 从 tools/wordlists/yijing*.txt 生成，格式：词<TAB>全拼
+# 只收词库里原本没有的词；改词请改 wordlists 里的源文件再重跑，不要手改本文件。
+乾为天	qian wei tian
+坤为地	kun wei di
+水雷屯	shui lei zhun
+山水蒙	shan shui meng
+水天需	shui tian xu
+天水讼	tian shui song
+地水师	di shui shi
+水地比	shui di bi
+风天小畜	feng tian xiao xu
+天泽履	tian ze lv
+地天泰	di tian tai
+天地否	tian di pi
+天火同人	tian huo tong ren
+火天大有	huo tian da you
+地山谦	di shan qian
+雷地豫	lei di yu
+泽雷随	ze lei sui
+山风蛊	shan feng gu
+地泽临	di ze lin
+风地观	feng di guan
+火雷噬嗑	huo lei shi he
+山火贲	shan huo bi
+山地剥	shan di bo
+地雷复	di lei fu
+天雷无妄	tian lei wu wang
+山天大畜	shan tian da xu
+山雷颐	shan lei yi
+泽风大过	ze feng da guo
+坎为水	kan wei shui
+离为火	li wei huo
+泽山咸	ze shan xian
+雷风恒	lei feng heng
+天山遁	tian shan dun
+雷天大壮	lei tian da zhuang
+火地晋	huo di jin
+地火明夷	di huo ming yi
+风火家人	feng huo jia ren
+火泽睽	huo ze kui
+水山蹇	shui shan jian
+雷水解	lei shui xie
+山泽损	shan ze sun
+风雷益	feng lei yi
+泽天夬	ze tian guai
+天风姤	tian feng gou
+泽地萃	ze di cui
+地风升	di feng sheng
+泽水困	ze shui kun
+水风井	shui feng jing
+泽火革	ze huo ge
+火风鼎	huo feng ding
+震为雷	zhen wei lei
+艮为山	gen wei shan
+风山渐	feng shan jian
+雷泽归妹	lei ze gui mei
+雷火丰	lei huo feng
+火山旅	huo shan lv
+巽为风	xun wei feng
+兑为泽	dui wei ze
+风水涣	feng shui huan
+水泽节	shui ze jie
+风泽中孚	feng ze zhong fu
+雷山小过	lei shan xiao guo
+水火既济	shui huo ji ji
+火水未济	huo shui wei ji
+小畜	xiao xu
+大畜	da xu
+无妄	wu wang
+噬嗑	shi he
+大过	da guo
+明夷	ming yi
+大壮	da zhuang
+归妹	gui mei
+中孚	zhong fu
+小过	xiao guo
+既济	ji ji
+未济	wei ji
+六十四卦	liu shi si gua
+先天八卦	xian tian ba gua
+后天八卦	hou tian ba gua
+八纯卦	ba chun gua
+单卦	dan gua
+重卦	zhong gua
+上卦	shang gua
+下卦	xia gua
+内卦	nei gua
+外卦	wai gua
+本卦	ben gua
+变卦	bian gua
+之卦	zhi gua
+互卦	hu gua
+错卦	cuo gua
+综卦	zong gua
+卦辞	gua ci
+爻辞	yao ci
+彖辞	tuan ci
+象辞	xiang ci
+系辞	xi ci
+说卦	shuo gua
+序卦	xu gua
+杂卦	za gua
+十翼	shi yi
+卦象	gua xiang
+爻象	yao xiang
+卦名	gua ming
+卦序	gua xu
+阳爻	yang yao
+阴爻	yin yao
+初爻	chu yao
+上爻	shang yao
+爻位	yao wei
+六爻	liu yao
+动爻	dong yao
+静爻	jing yao
+世爻	shi yao
+应爻	ying yao
+世应	shi ying
+纳甲	na jia
+装卦	zhuang gua
+起卦	qi gua
+断卦	duan gua
+解卦	jie gua
+卦身	gua shen
+卦宫	gua gong
+两仪	liang yi
+四象	si xiang
+生克	sheng ke
+相生	xiang sheng
+相克	xiang ke
+天干	tian gan
+地支	di zhi
+河图	he tu
+洛书	luo shu
+河图洛书	he tu luo shu
+梅花易数	mei hua yi shu
+象数	xiang shu
+义理	yi li
+易传	yi chuan
+乾卦	qian gua
+坤卦	kun gua
+屯卦	zhun gua
+蒙卦	meng gua
+需卦	xu gua
+讼卦	song gua
+师卦	shi gua
+比卦	bi gua
+小畜卦	xiao xu gua
+履卦	lv gua
+泰卦	tai gua
+否卦	pi gua
+同人卦	tong ren gua
+大有卦	da you gua
+谦卦	qian gua
+豫卦	yu gua
+随卦	sui gua
+蛊卦	gu gua
+临卦	lin gua
+观卦	guan gua
+噬嗑卦	shi he gua
+贲卦	bi gua
+剥卦	bo gua
+复卦	fu gua
+无妄卦	wu wang gua
+大畜卦	da xu gua
+颐卦	yi gua
+大过卦	da guo gua
+坎卦	kan gua
+离卦	li gua
+咸卦	xian gua
+恒卦	heng gua
+遁卦	dun gua
+大壮卦	da zhuang gua
+晋卦	jin gua
+明夷卦	ming yi gua
+家人卦	jia ren gua
+睽卦	kui gua
+蹇卦	jian gua
+损卦	sun gua
+益卦	yi gua
+夬卦	guai gua
+姤卦	gou gua
+萃卦	cui gua
+升卦	sheng gua
+困卦	kun gua
+井卦	jing gua
+革卦	ge gua
+鼎卦	ding gua
+震卦	zhen gua
+艮卦	gen gua
+渐卦	jian gua
+归妹卦	gui mei gua
+丰卦	feng gua
+旅卦	lv gua
+巽卦	xun gua
+兑卦	dui gua
+涣卦	huan gua
+节卦	jie gua
+中孚卦	zhong fu gua
+小过卦	xiao guo gua
+既济卦	ji ji gua
+未济卦	wei ji gua
