@@ -55,6 +55,8 @@ pub struct Config {
     pub pinyin_mode: bool,
     /// 输出繁体字（false = 简体）
     pub traditional: bool,
+    /// 动态词频（按用户实际选词重排候选）。见 `freq` 模块。
+    pub learn: bool,
 }
 
 impl Config {
@@ -70,6 +72,8 @@ impl Config {
         bar_y: 0,
         pinyin_mode: false,
         traditional: false,
+        // 默认开：输入法本来就该越用越顺手。不想要的人在设置里关掉即可。
+        learn: true,
     };
 }
 
@@ -104,11 +108,16 @@ fn path() -> PathBuf {
 }
 
 /// 配置版本。老文件没有这个键，据此做一次性迁移。
-const CONFIG_VER: u32 = 2;
+///
+/// **加字段就要想清楚：迁移必须分阶段写，不能只判「ver < 最新」就重放所有历史迁移。**
+/// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
+/// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
+/// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
+const CONFIG_VER: u32 = 3;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
-    let (cfg, ver) = match std::fs::read_to_string(path()) {
+    let (mut cfg, ver) = match std::fs::read_to_string(path()) {
         Ok(text) => parse(&text),
         Err(_) => (Config::DEFAULT, CONFIG_VER), // 没有文件 = 全新安装，不需要迁移
     };
@@ -116,23 +125,19 @@ pub fn load() -> Config {
     // v1 → v2：v1 把 `fullwidth` 默认成 false（当时只是没想清楚），结果是中文输入法
     // 打出来的全是半角标点，连顿号都打不出来。老配置文件里那个 `fullwidth=0`
     // 是默认值写下来的，不是用户的选择，所以一次性改成 true。
-    // 迁移后文件里就有 config_ver=2 了，用户之后再手动关掉不会被反复改回去。
-    let migrate = ver < CONFIG_VER;
-    let cfg = if migrate {
-        Config {
-            fullwidth: true,
-            ..cfg
-        }
-    } else {
-        cfg
-    };
+    if ver < 2 {
+        cfg.fullwidth = true;
+    }
+
+    // v2 → v3：新增 `learn`（动态词频）。`parse` 对缺失的键已经给了默认值 true，
+    // 这里不需要额外动作——只把版本号写进文件，免得下次又走一遍迁移判断。
 
     // 原子镜像必须在锁外同步：`pinyin_mode()` 是热路径，读的是这个原子量
     PINYIN_MODE.store(cfg.pinyin_mode, Ordering::Release);
     if let Ok(mut g) = CFG.lock() {
         *g = cfg;
     }
-    if migrate {
+    if ver < CONFIG_VER {
         save(&cfg);
     }
     cfg
@@ -171,6 +176,7 @@ fn parse(text: &str) -> (Config, u32) {
             "bar_y" => cfg.bar_y = v.parse().unwrap_or(0),
             "pinyin_mode" => cfg.pinyin_mode = parse_bool(v),
             "traditional" => cfg.traditional = parse_bool(v),
+            "learn" => cfg.learn = parse_bool(v),
             _ => {}
         }
     }
@@ -218,7 +224,8 @@ pub fn save(cfg: &Config) {
          bar_x={}\n\
          bar_y={}\n\
          pinyin_mode={}\n\
-         traditional={}\n",
+         traditional={}\n\
+         learn={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -227,7 +234,8 @@ pub fn save(cfg: &Config) {
         cfg.bar_x,
         cfg.bar_y,
         cfg.pinyin_mode as u8,
-        cfg.traditional as u8
+        cfg.traditional as u8,
+        cfg.learn as u8
     );
     // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
     // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程
@@ -269,14 +277,40 @@ mod tests {
         assert!(!cfg.pinyin_mode);
         assert!(!cfg.traditional);
         assert!(cfg.fullwidth, "全新配置默认应该是中文标点");
+        assert!(cfg.learn, "动态词频默认开");
     }
 
     #[test]
     fn parses_new_switches() {
         let (cfg, _) = parse(&format!(
-            "config_ver={CONFIG_VER}\npinyin_mode=1\ntraditional=1\n"
+            "config_ver={CONFIG_VER}\npinyin_mode=1\ntraditional=1\nlearn=0\n"
         ));
         assert!(cfg.pinyin_mode);
+        assert!(cfg.traditional);
+        assert!(!cfg.learn);
+    }
+
+    /// v2 用户明确关掉了全角标点，升级到 v3 **不能**把它改回 true。
+    ///
+    /// 这个用例是给「迁移写成 `if ver < CONFIG_VER { fullwidth = true }`」埋的钉子：
+    /// 那种写法在只有 v1→v2 时看不出问题，一加 v3 就会静默重放 v2 的迁移，
+    /// 用户设置被无声改掉——比崩掉还难查。
+    #[test]
+    fn v2_migration_does_not_touch_fullwidth() {
+        let (cfg, ver) = parse("config_ver=2\nfullwidth=0\nlearn=0\n");
+        assert_eq!(ver, 2);
+        assert!(ver < CONFIG_VER, "v2 文件确实需要升级到 v3");
+        // load() 里的 v1 分支不该命中
+        assert!(ver >= 2, "ver>=2 时不能走 v1 的 fullwidth 迁移");
+        assert!(!cfg.fullwidth);
+        assert!(!cfg.learn);
+    }
+
+    /// 老文件没有 learn 键 → 取默认值 true（而不是 false）
+    #[test]
+    fn missing_learn_key_defaults_on() {
+        let (cfg, _) = parse(&format!("config_ver={CONFIG_VER}\ntraditional=1\n"));
+        assert!(cfg.learn);
         assert!(cfg.traditional);
     }
 }

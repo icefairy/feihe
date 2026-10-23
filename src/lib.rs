@@ -10,6 +10,7 @@ mod dictbin;
 mod dictenc;
 mod dllcount;
 mod font;
+mod freq;
 mod insert;
 mod log;
 mod quick;

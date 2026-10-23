@@ -35,7 +35,7 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 472;
+const CLIENT_H: i32 = 536;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -52,6 +52,9 @@ const ID_HANZI_SIMP: i32 = 171;
 const ID_HANZI_TRAD: i32 = 172;
 const ID_FULLWIDTH: i32 = 131;
 const ID_FOLLOW: i32 = 132;
+const ID_LEARN: i32 = 133;
+const ID_LEARN_RESET: i32 = 134;
+const ID_LEARN_HINT: i32 = 135;
 const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
 const ID_IMPORT: i32 = 151;
@@ -187,6 +190,13 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_HANZI_TRAD, cfg.traditional);
     set_checked(h, ID_FULLWIDTH, cfg.fullwidth);
     set_checked(h, ID_FOLLOW, cfg.bar_follow);
+    set_checked(h, ID_LEARN, cfg.learn);
+    let learned = crate::freq::len();
+    set_text(
+        h,
+        ID_LEARN_HINT,
+        &format!("已记录 {learned} 个词的使用次数（%APPDATA%\\Feihe\\freq.txt）"),
+    );
 
     // 全拼模式下「双拼方案」没有意义，灰掉而不是隐藏——隐藏会让窗口内容跳动
     for id in [ID_SCHEME_XH, ID_SCHEME_MS] {
@@ -283,6 +293,14 @@ unsafe fn on_command(h: HWND, id: i32) {
                 }
             });
         }
+        ID_LEARN => {
+            let on = checked(GetDlgItem(Some(h), ID_LEARN).unwrap_or_default());
+            config::update(|c| c.learn = on);
+        }
+        ID_LEARN_RESET => {
+            let n = crate::freq::clear();
+            set_text(h, ID_LEARN_HINT, &format!("已清空 {n} 条词频记录"));
+        }
         ID_IMPORT => {
             if let Some(path) = pick_file(h, false) {
                 match dict::import_from(&path) {
@@ -372,6 +390,12 @@ unsafe fn build(h: HWND) {
 
     y += 30;
     check(h, "状态浮窗跟随光标（默认固定在屏幕右下角，可拖动）", 16, y - 2, 420, ID_FOLLOW);
+
+    y += 30;
+    check(h, "动态调频（按实际选词调整候选顺序）", 16, y - 2, 300, ID_LEARN);
+    push(h, "重置", 320, y - 5, 70, 26, ID_LEARN_RESET);
+    y += 26;
+    label(h, "", 16, y, 428, ID_LEARN_HINT);
 
     y += 40;
     label(h, "", 16, y, 428, ID_STATS);

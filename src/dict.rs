@@ -343,6 +343,27 @@ fn search(
     mode: AssistMode,
     limit: usize,
 ) -> Vec<Cow<'static, str>> {
+    let mut out = collect(pinyin, prefix, assist_prefix, mode, limit);
+    // 动态词频只在这一层做：双拼/全拼、带不带辅助码的查询全都汇到这里，
+    // 不会出现「某个入口忘了排序」这种只在特定模式下复现的怪事。
+    //
+    // 注意排序发生在**截断之后**：已经按 limit 收满的候选才会被重排。
+    // 所以学习记录只能把「本来就在候选列表里」的词往前挪，不能把排到
+    // 90 名以外的词捞进来。这个限制是刻意的——真去全量扫描会让每次按键
+    // 都多扫几万条，换来的收益是「某个极冷僻词被选过一次就能上第一页」，
+    // 不值。
+    crate::freq::rank(&mut out);
+    out
+}
+
+/// 按「用户词库优先 → 静态词库」的顺序收集候选，不做动态排序。
+fn collect(
+    pinyin: bool,
+    prefix: &str,
+    assist_prefix: &str,
+    mode: AssistMode,
+    limit: usize,
+) -> Vec<Cow<'static, str>> {
     if prefix.is_empty() || limit == 0 {
         return Vec::new();
     }

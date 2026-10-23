@@ -651,9 +651,13 @@ impl FeiheTextService_Impl {
     /// 必须合成**一个** `EditOp`：`pending_op` 只有一个槽位，连着发 `Commit` 和
     /// `Insert` 会把前一个冲掉，结果是字没上屏、只剩标点。
     fn commit_with(&self, suffix: &str) {
-        let mut word = self.current_word();
-        word.push_str(suffix);
-        self.pending_op.borrow_mut().replace(EditOp::Commit(word));
+        let word = self.current_word();
+        // 学的是「拼上标点之前」的那个词。晚一步就会把「你好，」当成一个词记进去，
+        // 而候选里永远不会有带标点的词，这条记录等于白存。
+        crate::freq::bump(&word);
+        let mut text = word;
+        text.push_str(suffix);
+        self.pending_op.borrow_mut().replace(EditOp::Commit(text));
         self.request_edit_session();
         self.clear_state();
     }
@@ -785,6 +789,15 @@ impl FeiheTextService_Impl {
     /// 空段兜底交给 `merge_segments`。`suffix` 用来粘全角标点——必须和正文合成
     /// 一个 `EditOp`，否则标点会把正文那个待处理的 op 冲掉。
     fn commit_segments(&self, suffix: &str) {
+        // 逐段学：分词上屏是「用户一段一段选出来的」，每一段都是明确的选择。
+        // 必须在 merge 之前学——merge 出来的是整串（「指示器」），
+        // 而候选是按段（「指示」+「器」）出来的，学整串没有下次能被命中的机会。
+        {
+            let segs = self.segments.borrow();
+            for s in segs.iter() {
+                crate::freq::bump(&s.word);
+            }
+        }
         let mut text = FeiheTextService::merge_segments(&self.segments.borrow());
         text.push_str(suffix);
         self.segments.borrow_mut().clear();
@@ -1114,6 +1127,11 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 别的进程可能刚重编译了 user.bin（设置窗里点「编译成二进制」、或导入词库）。
         // 本进程还映射着旧文件，看不到新词；每次激活探一次（两次文件属性查询，可忽略）。
         dict::refresh_user_bin();
+
+        // 同理，别的宿主进程可能刚学过词。不拉过来的话，在 Word 里把「诊断」
+        // 选到第一位，切到浏览器里它又沉回去了——用户会觉得这功能时灵时不灵。
+        // `refresh` 内部按 mtime 判断，没变化就只做一次 stat。
+        crate::freq::refresh();
         crate::trace!(
             "Activate: scheme={} assist={} fullwidth={}",
             cfg.scheme.label(),
