@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.39 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.40 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -243,9 +243,9 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n">1.39<small>MB</small></div><div class="k">安装包</div></div>
+      <div class="stat"><div class="n">1.40<small>MB</small></div><div class="k">安装包</div></div>
       <div class="stat"><div class="n">8006</div><div class="k">收录单字</div></div>
-      <div class="stat"><div class="n">38024</div><div class="k">词条</div></div>
+      <div class="stat"><div class="n">38743</div><div class="k">词条</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
     </div>
   </div>
@@ -504,7 +504,7 @@ rustup target add i686-pc-windows-gnullvm
     <p class="sub" style="margin-top:26px">
       已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词（退格可拆词）、
       候选窗鼠标点选、一级简码（<code>d</code> 出「的」，次选 <code>d;</code> 出「打」）、二级简码（<code>nd</code> 出「难道」，370 条两键词）、手动置顶（<code>Ctrl</code>+数字，或右键点候选——多页签程序里 <code>Ctrl+1..9</code> 被抢走时用这个）、
-      全屏游戏 UILess（候选交给游戏自绘）、不弹窗模式（远程桌面用）、
+      全屏游戏 UILess（候选交给游戏自绘）、候选窗有全屏自动检测（游戏 / 演示时自动收起，不用改设置）、
       快捷输入（日期 / 时间 / 农历 / 干支四柱 / 下一个节气）、
       全角标点、简繁切换、动态词频、自造词（拼过的词自动记住）、状态浮窗、设置窗、符号软键盘、搜狗个人词库导入、
       用户词库编译成二进制走 mmap。

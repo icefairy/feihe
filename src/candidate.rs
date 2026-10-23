@@ -402,13 +402,13 @@ pub fn show(items: &[&str], selected: usize, page: usize, x: i32, y: i32) {
         hide();
         return;
     }
-    // 不弹窗模式：一个 popup 都不许弹。
+    // 该收起时一个 popup 都不许弹（「始终不弹」或自动检测到全屏，见 `config::no_popup`）。
     //
     // 拦在这里而不是拦在 `textservice::show_candidates`，是因为这个函数是**所有**
     // 显示路径的唯一出口；拦在上层的话，将来新加一个调用点就会漏。
-    // 顺带把可能已经挂着的窗口收掉——用户是刚在设置里打开的开关。
+    // 顺带把可能已经挂着的窗口收掉——用户可能刚切到全屏，或者刚在设置里改了档。
     //
-    // 注意这是**用户**开的开关；宿主驱动的 UILess 走 `uielement`，不经过这里。
+    // 注意这是**我们这边**的判断；宿主驱动的 UILess 走 `uielement`，不经过这里。
     if config::no_popup() {
         hide();
         return;

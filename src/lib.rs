@@ -13,6 +13,7 @@ mod dictenc;
 mod dllcount;
 mod font;
 mod freq;
+mod fullscreen;
 mod insert;
 mod phrase;
 mod pin;

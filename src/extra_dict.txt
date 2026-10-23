@@ -85,3 +85,99 @@
 李四	li si
 张三李四	zhang san li si
 二维码	er wei ma
+
+# ── 第二轮：现代常用词 ─────────────────────────────────────────
+# 这一批是按「日常真的会打、但 rime 词库没有」挑的：电脑操作（输入框、下拉框、
+# 任务管理器）、网络生活（短视频、评论区、优惠券）、办公（周报、纪要、排期）
+# 各补一块。挑法见 handoff.md，改动时不要随手删——缺一个词，用户就得自己造。
+弹窗	tan chuang
+弹幕	tan mu
+弹窗广告	tan chuang guang gao
+拖拽	tuo zhuai
+下拉框	xia la kuang
+输入框	shu ru kuang
+文本框	wen ben kuang
+状态栏	zhuang tai lan
+菜单栏	cai dan lan
+标题栏	biao ti lan
+标签页	biao qian ye
+断点	duan dian
+闪退	shan tui
+蓝屏	lan ping
+爬虫	pa chong
+网盘	wang pan
+云盘	yun pan
+朋友圈	peng you quan
+点赞	dian zan
+私信	si xin
+小程序	xiao cheng xu
+公众号	gong zhong hao
+直播间	zhi bo jian
+短视频	duan shi pin
+外卖	wai mai
+快递柜	kuai di gui
+打车	da che
+高铁	gao tie
+登机	deng ji
+安检	an jian
+租客	zu ke
+水电费	shui dian fei
+菜市场	cai shi chang
+夜宵	ye xiao
+周报	zhou bao
+月报	yue bao
+例会	li hui
+纪要	ji yao
+排期	pai qi
+回滚	hui gun
+拉通	la tong
+闭环	bi huan
+斜体	xie ti
+加粗	jia cu
+字号	zi hao
+工作表	gong zuo biao
+求和	qiu he
+透视表	tou shi biao
+批注	pi zhu
+页眉	ye mei
+页脚	ye jiao
+脚注	jiao zhu
+回收站	hui shou zhan
+任务管理器	ren wu guan li qi
+设备管理器	she bei guan li qi
+安装包	an zhuang bao
+安装目录	an zhuang mu lu
+开机启动	kai ji qi dong
+指纹解锁	zhi wen jie suo
+人脸识别	ren lian shi bie
+扫码	sao ma
+付款码	fu kuan ma
+收款码	shou kuan ma
+账单	zhang dan
+优惠券	you hui quan
+满减	man jian
+拼团	pin tuan
+秒杀	miao sha
+面单	mian dan
+评论区	ping lun qu
+刷屏	shua ping
+禁言	jin yan
+主播	zhu bo
+热搜	re sou
+爆料	bao liao
+吃瓜	chi gua
+水军	shui jun
+带货	dai huo
+充电宝	chong dian bao
+燃气灶	ran qi zao
+洗衣液	xi yi ye
+洗发水	xi fa shui
+行李箱	xing li xiang
+待办	dai ban
+便签	bian qian
+知识库	zhi shi ku
+发票抬头	fa piao tai tou
+押金条	ya jin tiao
+打卡	da ka
+调休	tiao xiu
+入职	ru zhi

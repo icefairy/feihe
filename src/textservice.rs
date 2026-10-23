@@ -1694,6 +1694,10 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 自造词同理：在别的宿主里刚拼出来的词，切过来也要能打。同样按 mtime 判断。
         crate::phrase::refresh();
 
+        // 自动检测「是不是全屏」的结果也丢掉重问：用户刚从全屏游戏 Alt+Tab 回来，
+        // 不该还要等缓存过期才看得见候选窗。
+        crate::fullscreen::invalidate();
+
         // 候选窗鼠标点击：把「点了第几个」路由回本对象。
         // 放在 Activate 里而不是每次 show——闭包要捕获对象地址，只在对象身份
         // 变化时才需要重建，`set_click_handler` 内部按 id 判断。
@@ -1873,12 +1877,16 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             return Ok(BOOL::from(false));
         }
 
-        // ── Ctrl+Shift+U：切「不弹窗模式」 ──────────────────
+        // ── Ctrl+Shift+U：临时切换「弹不弹窗」 ──────────────
         //
         // 打开后会连状态浮窗一起藏起来，而浮窗上的「设置」是进设置窗的**唯一**
-        // 入口。不给个键盘出口的话，用户打开这个开关就把自己锁在外面了，
+        // 入口。不给个键盘出口的话，用户在「始终不弹」下就把自己锁在外面了，
         // 只能去手改 config.ini。所以这个组合键必须存在，而且必须在下面那条
         // 「修饰键一律交还应用」之前拦下来。
+        //
+        // 它切的是**运行时覆盖**（`config::toggle_popup_override`），不写配置：
+        // 这是「这一会儿先这么着」的应急键，真想要长期行为去设置里改。
+        // 也因此它按一次覆盖、再按一次回到「跟随设置（含自动检测）」。
         //
         // 键位沿用 U（这个开关以前叫 UILess，老用户已经记住了）；它和宿主驱动的
         // 真 UILess 不是一回事——那个没有开关，由 `ActivateEx` 的 dwflags 决定。
@@ -1887,9 +1895,9 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 而 `note_shift_combo` 也记下了「Shift 是配合别的键用的」，
         // 抬起时不会误切中英。
         if FeiheTextService::ctrl_only() && FeiheTextService::shift_down() && vk == 0x55 {
-            let next = !config::no_popup();
-            config::update(|c| c.no_popup = next);
-            if next {
+            config::toggle_popup_override();
+            // 不管切到哪一档，都用「当前的实际结论」决定窗口该显示还是收起
+            if config::no_popup() {
                 self.hide_candidates();
                 statusbar::hide();
             } else {

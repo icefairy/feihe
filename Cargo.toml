@@ -41,6 +41,8 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     # 简繁转换：LCMapStringEx + LCMAP_TRADITIONAL_CHINESE（Windows 自带 NLS 映射表）
     "Win32_Globalization",
+    # 全屏检测：SHQueryUserNotificationState（判断是否全屏游戏 / 演示模式）
+    "Win32_UI_Shell",
 ] }
 
 # 必须保留：#[implement] 是 windows-core 导出的过程宏，代码里 `use windows_core::...`

@@ -24,7 +24,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::assist::AssistMode;
-use crate::config::{self, Skin};
+use crate::config::{self, PopupMode, Skin};
 use crate::dict;
 use crate::font;
 use crate::shuangpin::Scheme;
@@ -55,7 +55,9 @@ const ID_FOLLOW: i32 = 132;
 const ID_LEARN: i32 = 133;
 const ID_LEARN_RESET: i32 = 134;
 const ID_LEARN_HINT: i32 = 135;
-const ID_NO_POPUP: i32 = 136;
+const ID_POPUP_AUTO: i32 = 136;
+const ID_POPUP_ALWAYS: i32 = 137;
+const ID_POPUP_NEVER: i32 = 138;
 const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
 const ID_PIN_HINT: i32 = 143;
@@ -193,7 +195,9 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_HANZI_TRAD, cfg.traditional);
     set_checked(h, ID_FULLWIDTH, cfg.fullwidth);
     set_checked(h, ID_FOLLOW, cfg.bar_follow);
-    set_checked(h, ID_NO_POPUP, cfg.no_popup);
+    set_checked(h, ID_POPUP_AUTO, cfg.popup == PopupMode::Auto);
+    set_checked(h, ID_POPUP_ALWAYS, cfg.popup == PopupMode::Always);
+    set_checked(h, ID_POPUP_NEVER, cfg.popup == PopupMode::Never);
     set_checked(h, ID_LEARN, cfg.learn);
     let learned = crate::freq::len();
     let phrases = crate::phrase::len();
@@ -317,12 +321,16 @@ unsafe fn on_command(h: HWND, id: i32) {
             let on = checked(GetDlgItem(Some(h), ID_LEARN).unwrap_or_default());
             config::update(|c| c.learn = on);
         }
-        ID_NO_POPUP => {
-            let on = checked(GetDlgItem(Some(h), ID_NO_POPUP).unwrap_or_default());
-            config::update(|c| c.no_popup = on);
-            // 打开时立刻把可能挂着的窗口收掉，用户才看得出「生效了」；
-            // 关掉时立刻把浮窗放回来，否则要等下一次切换输入法才出现。
-            if on {
+        ID_POPUP_AUTO | ID_POPUP_ALWAYS | ID_POPUP_NEVER => {
+            let mode = match id {
+                ID_POPUP_ALWAYS => PopupMode::Always,
+                ID_POPUP_NEVER => PopupMode::Never,
+                _ => PopupMode::Auto,
+            };
+            config::set_popup_mode(mode);
+            // 切到「不弹」时立刻把可能挂着的窗口收掉，用户才看得出「生效了」；
+            // 切回来时立刻把浮窗放回来，否则要等下一次切换输入法才出现。
+            if config::no_popup() {
                 crate::candidate::hide();
                 statusbar::hide();
             } else {
@@ -442,11 +450,29 @@ unsafe fn build(h: HWND) {
     check(h, "状态浮窗跟随光标（默认固定在屏幕右下角，可拖动）", 16, y - 2, 420, ID_FOLLOW);
 
     y += 30;
-    check(h, "不弹窗模式：候选写进组合串，不弹候选窗和浮窗（全屏游戏 / 远程桌面）", 16, y - 2, 428, ID_NO_POPUP);
-    label(h, "本模式 Ctrl+Shift+U 可切回（浮窗被藏了，这是唯一的入口）", 16, y + 18, 428, 0);
-    y += 20; // 给上面那行提示留位置
+    label(h, "候选窗", 16, y, 90, 0);
+    radio(h, "自动", 110, y - 2, 70, ID_POPUP_AUTO, true);
+    radio(h, "始终弹出", 190, y - 2, 100, ID_POPUP_ALWAYS, false);
+    radio(h, "始终不弹", 300, y - 2, 100, ID_POPUP_NEVER, false);
+    label(
+        h,
+        "自动：全屏游戏 / 演示 / 全屏应用时，候选写进组合串、不弹自绘窗口",
+        16,
+        y + 18,
+        428,
+        0,
+    );
+    label(
+        h,
+        "「始终不弹」会把浮窗一起收起，此时用 Ctrl+Shift+U 临时切回",
+        16,
+        y + 36,
+        428,
+        0,
+    );
+    y += 38; // 给上面两行提示留位置
 
-    y += 30;
+    y += 12;
     check(h, "动态调频（按实际选词调整候选顺序）", 16, y - 2, 300, ID_LEARN);
     push(h, "重置", 320, y - 5, 70, 26, ID_LEARN_RESET);
     y += 26;

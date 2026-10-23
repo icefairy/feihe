@@ -68,6 +68,16 @@ pub fn parse_entries(text: &str) -> Vec<(String, String)> {
 }
 
 /// 把一份文本的条目并进 `out`，`seen` 跨文件共享以做到全局去重。
+///
+/// ## 去重键是「词 + 拼音」，不是「词」
+///
+/// 这里曾经只按词去重，后果是**多音字只剩第一个读音的码**：词库里
+/// `弹 → dan`、`弹 → tan` 两行，只留下 dan，打 `tj`（tán）永远查不到「弹」，
+/// 于是「弹窗」造不出来（`弹窗` 的码要靠 `弹 = tan`）。同理 `的 de/di`、
+/// `行 xing/hang`、`重 zhong/chong` 全都缺一边。
+///
+/// 同一个词的不同读音是**两条独立条目**：它们编出不同的双拼码，落在不同的
+/// 前缀区间里，查询时不可能同时命中（命中了 `collect` 也有按词去重兜着）。
 pub fn push_entries(text: &str, seen: &mut HashSet<String>, out: &mut Vec<(String, String)>) {
     for line in text.lines() {
         let line = line.trim();
@@ -81,7 +91,7 @@ pub fn push_entries(text: &str, seen: &mut HashSet<String>, out: &mut Vec<(Strin
         if w.is_empty() || py.is_empty() {
             continue;
         }
-        if !seen.insert(w.to_string()) {
+        if !seen.insert(format!("{w}\t{py}")) {
             continue;
         }
         out.push((w.to_string(), py.to_string()));
@@ -228,11 +238,25 @@ mod tests {
         assert_eq!(b.xh, 2, "两个词都该能编出小鹤码");
     }
 
+    /// 完全相同的行（词 + 拼音都一样）才去重，保留先出现的写法。
     #[test]
-    fn dedup_keeps_first() {
-        let entries = parse_entries("你好\tni hao\n你好\tha o\n");
+    fn dedup_keeps_first_of_identical_line() {
+        let entries = parse_entries("你好\tni hao\n你好\tni hao\n");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1, "ni hao");
+    }
+
+    /// 多音字必须两个读音都在，否则打另一个读音永远查不到这个字。
+    ///
+    /// 这是「弹窗造不出来」的根因回归测试：`弹 → dan` 在前，曾经把
+    /// `弹 → tan` 整条吃掉，于是 `tj`（tán）下没有「弹」。
+    #[test]
+    fn polyphone_keeps_every_reading() {
+        let entries = parse_entries("弹\tdan\n弹\ttan\n");
+        assert_eq!(entries.len(), 2, "两个读音都要留着");
+        let b = build(&entries);
+        assert_eq!(b.count, 2);
+        assert_eq!(b.xh, 2, "dan / tan 是两个不同的码，都该进索引");
     }
 
     #[test]

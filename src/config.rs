@@ -5,11 +5,71 @@
 //! 其它进程下次激活时自然生效。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, Ordering};
 use std::sync::Mutex;
 
 use crate::assist::AssistMode;
 use crate::shuangpin::Scheme;
+
+/// 候选窗 / 状态浮窗在什么情况下不弹。
+///
+/// 早期这里是 `no_popup: bool`，默认关——结果就是「打游戏之前先去设置里勾一下，
+/// 打完再回来取消」，谁也不会这么干。现在默认 `Auto`：由 `fullscreen` 模块问
+/// shell「当前是不是全屏」，游戏、演示、全屏 UWP 时自动把候选写进组合串。
+///
+/// 保留 `Always` / `Never` 是因为自动检测不能覆盖所有场合：
+/// - 远程桌面、虚拟机控制台里未必报得出「全屏」，但自绘窗口确实显示不出来
+/// - 反过来，有人用无边框窗口跑游戏，shell 不认为是全屏，候选窗会盖在游戏上
+///
+/// 两种误判都要有手动出口，所以不是「要不要这个开关」的问题，是「默认怎么选」。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PopupMode {
+    /// 全屏时收起（默认）
+    Auto,
+    /// 一律弹（自动检测误判成「全屏」时用）
+    Always,
+    /// 一律不弹（远程桌面 / 自动检测认不出来的独占全屏）
+    Never,
+}
+
+impl PopupMode {
+    pub fn from_key(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "always" | "1" | "true" | "yes" | "on" => PopupMode::Always,
+            "never" | "2" => PopupMode::Never,
+            _ => PopupMode::Auto,
+        }
+    }
+
+    pub fn key(&self) -> &'static str {
+        match self {
+            PopupMode::Auto => "auto",
+            PopupMode::Always => "always",
+            PopupMode::Never => "never",
+        }
+    }
+
+    fn bits(self) -> u8 {
+        match self {
+            PopupMode::Auto => MODE_AUTO,
+            PopupMode::Always => MODE_ALWAYS,
+            PopupMode::Never => MODE_NEVER,
+        }
+    }
+
+    fn from_bits(b: u8) -> Self {
+        match b {
+            MODE_ALWAYS => PopupMode::Always,
+            MODE_NEVER => PopupMode::Never,
+            _ => PopupMode::Auto,
+        }
+    }
+}
+
+const MODE_AUTO: u8 = 0;
+const MODE_ALWAYS: u8 = 1;
+const MODE_NEVER: u8 = 2;
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Skin {
@@ -57,17 +117,8 @@ pub struct Config {
     pub traditional: bool,
     /// 动态词频（按用户实际选词重排候选）。见 `freq` 模块。
     pub learn: bool,
-    /// 不弹窗模式：不弹候选窗、不显示状态浮窗，候选写进组合串跟编码一起显示。
-    ///
-    /// 给「叠在上面的窗口一律看不见」的场合用：远程桌面、部分虚拟机控制台、
-    /// 以及独占全屏但没走 UILess 协商的程序。这些环境下自绘的 popup 要么不显示，
-    /// 要么会把焦点抢走，但**宿主自己的组合串**是画在界面里的，通常还能看见。
-    ///
-    /// 和真 UILess 的区别：那个是**宿主**驱动的（`ActivateEx` 的标志，见 `uielement`
-    /// 模块），候选由宿主自己画，没有开关；这里是**用户**选的，候选变成纯文本。
-    ///
-    /// 代价是没有候选窗可看，只能「空格上屏第一候选 / 数字键盲选」。
-    pub no_popup: bool,
+    /// 候选窗 / 状态浮窗何时不弹，见 `PopupMode`。
+    pub popup: PopupMode,
 }
 
 impl Config {
@@ -85,8 +136,8 @@ impl Config {
         traditional: false,
         // 默认开：输入法本来就该越用越顺手。不想要的人在设置里关掉即可。
         learn: true,
-        // 默认关：正常桌面环境有候选窗才好用，这个开关是给特定场景开的。
-        no_popup: false,
+        // 默认自动：全屏游戏 / 演示时收起候选窗，其余时候正常弹。
+        popup: PopupMode::Auto,
     };
 }
 
@@ -106,26 +157,61 @@ pub fn pinyin_mode() -> bool {
     PINYIN_MODE.load(Ordering::Acquire)
 }
 
-/// **不弹窗开关的原子镜像。**
+/// **弹窗策略的原子镜像。**
 ///
 /// 和 `PINYIN_MODE` 一个道理：候选窗每次按键都要问一遍「该不该弹」，
 /// 状态浮窗在激活时也要问，走 Mutex 不划算。
-static NO_POPUP: AtomicBool = AtomicBool::new(false);
+static POPUP_MODE: AtomicU8 = AtomicU8::new(MODE_AUTO);
 
+/// 运行时的临时覆盖：-1 = 没覆盖，0 = 强制弹，1 = 强制不弹。
+///
+/// 只给 `Ctrl+Shift+U` 用。**不落盘**：这是「这一会儿先这么着」的应急键，
+/// 用户真想要长期行为就去设置里改。分进程各存一份也正好——它管的是当前
+/// 这个宿主窗口，别的程序不受影响。
+static POPUP_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
+
+/// 当前是否该「不弹窗」。
+///
+/// 判断顺序：临时覆盖 → 用户设置 → 自动检测。自动检测每次都问 `fullscreen`，
+/// 那边自带 400ms 缓存，热路径上没有真实开销。
 pub fn no_popup() -> bool {
-    NO_POPUP.load(Ordering::Acquire)
+    match POPUP_OVERRIDE.load(Ordering::Acquire) {
+        v if v >= 0 => v == 1,
+        _ => match PopupMode::from_bits(POPUP_MODE.load(Ordering::Acquire)) {
+            PopupMode::Always => false,
+            PopupMode::Never => true,
+            PopupMode::Auto => crate::fullscreen::active(),
+        },
+    }
+}
+
+pub fn set_popup_mode(m: PopupMode) {
+    // 用户动了设置项，临时覆盖就作废——否则会「改了设置但行为没变」
+    POPUP_OVERRIDE.store(-1, Ordering::Release);
+    update(|c| c.popup = m);
+}
+
+/// 切换「临时强制」，返回切换后的覆盖值（`None` = 已取消覆盖，跟随设置）。
+pub fn toggle_popup_override() -> Option<bool> {
+    let next = if POPUP_OVERRIDE.load(Ordering::Acquire) >= 0 {
+        None
+    } else {
+        Some(!no_popup())
+    };
+    POPUP_OVERRIDE.store(next.map_or(-1, |v| v as i8), Ordering::Release);
+    next
 }
 
 /// 单测专用：直接改镜像，绕开配置文件。候选窗的鼠标测试需要「允许弹窗」。
 #[cfg(test)]
 pub fn set_no_popup_for_test(v: bool) {
-    NO_POPUP.store(v, Ordering::Release);
+    POPUP_OVERRIDE.store(if v { 1 } else { 0 }, Ordering::Release);
 }
 
 /// 把配置里的热路径开关同步到原子镜像。`load` / `update` 各调一次。
 fn sync_mirrors(cfg: &Config) {
     PINYIN_MODE.store(cfg.pinyin_mode, Ordering::Release);
-    NO_POPUP.store(cfg.no_popup, Ordering::Release);
+    POPUP_MODE.store(cfg.popup.bits(), Ordering::Release);
 }
 
 pub fn set_pinyin_mode(on: bool) {
@@ -148,7 +234,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 5;
+const CONFIG_VER: u32 = 6;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -174,6 +260,15 @@ pub fn load() -> Config {
     // `uielement` 模块），这个开关只是「不弹窗、候选拼进组合串」。两件事同名，
     // 代码和文档里会一直有人搞混。`parse` 仍然认旧键，所以老配置不需要额外动作，
     // 下次 `save` 就写成新键名了。
+
+    // v5 → v6：`no_popup: bool` 换成 `popup: auto|always|never`。
+    //
+    // 旧文件里 `no_popup=0` 是**默认值**写下来的，不是用户的选择，所以升级成
+    // `auto`（新默认）而不是 `always`。`no_popup=1` 是用户手工勾过的，保留成
+    // `never`——不能把人家明确要的行为在升级时悄悄改掉。
+    //
+    // 判定放在 `parse` 里（读到旧键就按上面的规则映射），这里不需要额外动作，
+    // 只要 `ver < CONFIG_VER` 时重写一遍文件、把键名换成新的。
 
     // 原子镜像必须在锁外同步：`pinyin_mode()` / `no_popup()` 是热路径，读的是原子量
     sync_mirrors(&cfg);
@@ -220,9 +315,16 @@ fn parse(text: &str) -> (Config, u32) {
             "pinyin_mode" => cfg.pinyin_mode = parse_bool(v),
             "traditional" => cfg.traditional = parse_bool(v),
             "learn" => cfg.learn = parse_bool(v),
-            "no_popup" => cfg.no_popup = parse_bool(v),
-            // v4 及更早的键名，读到就当成新名字（见 `load` 里的 v4→v5 说明）
-            "uileless" => cfg.no_popup = parse_bool(v),
+            "popup" => cfg.popup = PopupMode::from_key(v),
+            // v5 及更早的键名。`no_popup=1` 是用户勾过的 → 保持「一律不弹」；
+            // `0` 是默认值 → 升级到自动检测（见 `load` 里的 v5→v6 说明）。
+            "no_popup" | "uileless" => {
+                cfg.popup = if parse_bool(v) {
+                    PopupMode::Never
+                } else {
+                    PopupMode::Auto
+                }
+            }
             _ => {}
         }
     }
@@ -273,7 +375,7 @@ pub fn save(cfg: &Config) {
          pinyin_mode={}\n\
          traditional={}\n\
          learn={}\n\
-         no_popup={}\n",
+         popup={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -284,7 +386,7 @@ pub fn save(cfg: &Config) {
         cfg.pinyin_mode as u8,
         cfg.traditional as u8,
         cfg.learn as u8,
-        cfg.no_popup as u8
+        cfg.popup.key()
     );
     // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
     // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程
@@ -327,27 +429,57 @@ mod tests {
         assert!(!cfg.traditional);
         assert!(cfg.fullwidth, "全新配置默认应该是中文标点");
         assert!(cfg.learn, "动态词频默认开");
-        assert!(!cfg.no_popup, "不弹窗模式默认关");
+        assert_eq!(cfg.popup, PopupMode::Auto, "弹窗策略默认自动");
     }
 
     #[test]
     fn parses_new_switches() {
         let (cfg, _) = parse(&format!(
-            "config_ver={CONFIG_VER}\npinyin_mode=1\ntraditional=1\nlearn=0\nno_popup=1\n"
+            "config_ver={CONFIG_VER}\npinyin_mode=1\ntraditional=1\nlearn=0\npopup=never\n"
         ));
         assert!(cfg.pinyin_mode);
         assert!(cfg.traditional);
         assert!(!cfg.learn);
-        assert!(cfg.no_popup);
+        assert_eq!(cfg.popup, PopupMode::Never);
     }
 
-    /// v4 的键名 `uileless` 还要认：用户升级后不能把开关悄悄关掉。
+    /// v4 的键名 `uileless` 还要认：用户明确开过的开关不能在升级时丢掉。
     #[test]
     fn legacy_uileless_key_still_reads() {
         let (cfg, ver) = parse("config_ver=4\nuileless=1\n");
         assert_eq!(ver, 4);
-        assert!(cfg.no_popup, "旧键要映射到新字段");
-        assert!(ver < CONFIG_VER, "v4 文件会被重写成 v5（键名跟着换）");
+        assert_eq!(cfg.popup, PopupMode::Never, "旧键 1 = 一律不弹");
+        assert!(ver < CONFIG_VER, "v4 文件会被重写成新版本（键名跟着换）");
+    }
+
+    /// v5 的 `no_popup=0` 是**默认值**写下来的，不是用户的选择，
+    /// 升级后要变成「自动」——否则老用户永远享受不到全屏自动检测。
+    #[test]
+    fn v5_no_popup_zero_becomes_auto() {
+        let (cfg, ver) = parse("config_ver=5\nno_popup=0\n");
+        assert_eq!(ver, 5);
+        assert_eq!(cfg.popup, PopupMode::Auto);
+    }
+
+    /// 反过来，`no_popup=1` 是用户手工勾的，升级后必须还是「不弹」。
+    #[test]
+    fn v5_no_popup_one_becomes_never() {
+        let (cfg, _) = parse("config_ver=5\nno_popup=1\n");
+        assert_eq!(cfg.popup, PopupMode::Never);
+    }
+
+    /// 三态策略的键名/位值互相能转回来。设置窗按位值打勾，配置文件按名字存，
+    /// 两边对不上就是「勾了自动、重启变永远不弹」这种诡异现象。
+    #[test]
+    fn popup_mode_roundtrips() {
+        for m in [PopupMode::Auto, PopupMode::Always, PopupMode::Never] {
+            assert_eq!(PopupMode::from_key(m.key()), m);
+            assert_eq!(PopupMode::from_bits(m.bits()), m);
+        }
+        // 手改配置写成 1/0 也要认
+        assert_eq!(PopupMode::from_key("1"), PopupMode::Always);
+        assert_eq!(PopupMode::from_key("0"), PopupMode::Auto);
+        assert_eq!(PopupMode::from_key("乱写"), PopupMode::Auto);
     }
 
     /// v2 用户明确关掉了全角标点，升级到 v3 **不能**把它改回 true。
