@@ -1,6 +1,7 @@
 // 飞鹤输入法 · DLL 入口与 COM 导出
 // M1：注册用外部 installer（reg 脚本），DLL 只需 DllGetClassObject/DllCanUnloadNow
 mod assist;
+mod brief;
 mod candidate;
 mod classfactory;
 mod clsid;
@@ -12,6 +13,7 @@ mod dllcount;
 mod font;
 mod freq;
 mod insert;
+mod pin;
 mod quick;
 mod settings;
 mod shuangpin;

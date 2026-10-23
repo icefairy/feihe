@@ -186,6 +186,11 @@ unsafe fn create() -> Option<HWND> {
 
 /// 显示状态浮窗（幂等）
 pub fn show() {
+    // UILess 模式下一个窗口都不弹，理由同 `candidate::show`。
+    if config::uileless() {
+        hide();
+        return;
+    }
     let raw = WND.load(Ordering::Acquire);
     let h = if raw != 0 {
         HWND(raw as *mut core::ffi::c_void)
@@ -205,7 +210,7 @@ pub fn show() {
     VISIBLE.store(true, Ordering::Release);
 }
 
-#[allow(dead_code)]
+/// 隐藏状态浮窗（UILess 模式、以及设置窗切换开关时用）
 pub fn hide() {
     let h = hwnd();
     if h.is_invalid() {

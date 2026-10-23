@@ -181,6 +181,14 @@ fn maybe_flush() {
 
 /// 立即写盘。写失败只记日志——学习表是锦上添花，不能因为它影响打字。
 pub fn flush() {
+    flush_inner(true)
+}
+
+/// `merge_disk = false` 时**不把磁盘上的旧内容并回来**。
+///
+/// 只有 `clear()` 需要这样：合并是「同词取大、新词插入」的语义，刚清空的表会被
+/// 磁盘上那份原样灌回来，用户点「重置」就等于没点。
+fn flush_inner(merge_disk: bool) {
     if !DIRTY.swap(false, Ordering::AcqRel) {
         return;
     }
@@ -191,7 +199,11 @@ pub fn flush() {
     // **写之前先把磁盘上的并进来。** 每个宿主进程各有一份内存表，
     // 直接覆盖会让「在记事本里学的词」被「在 Word 里学的词」冲掉——
     // 表现是「我明明用了很多次的词，怎么又沉下去了」，而且完全无法复现。
-    let disk = parse(&std::fs::read_to_string(file()).unwrap_or_default());
+    let disk = if merge_disk {
+        parse(&std::fs::read_to_string(file()).unwrap_or_default())
+    } else {
+        HashMap::new()
+    };
     let text = with_table(|t| {
         merge_into(t, disk);
         let mut v: Vec<(&String, &u32)> = t.iter().collect();
@@ -248,11 +260,17 @@ pub fn refresh() {
         }
         *g = Some(m);
     }
-    let disk = parse(&std::fs::read_to_string(&path).unwrap_or_default());
-    if disk.is_empty() {
+    let Ok(text) = std::fs::read_to_string(&path) else {
         return;
-    }
-    with_table(|t| merge_into(t, disk));
+    };
+    let disk = parse(&text);
+    // **整份替换，不是合并。** 别的进程可能刚点了「重置」，合并会把旧内容留在
+    // 本进程里，清空永远传不过来。本进程未落盘的改动在上面的 `flush()` 里已经
+    // 写进文件了，所以这里替换不会丢东西。
+    with_table(|t| {
+        t.clear();
+        t.extend(disk);
+    });
 }
 
 /// 按学习次数稳定重排候选。次数相同的保持原有相对顺序。
@@ -276,6 +294,10 @@ pub fn rank(words: &mut [std::borrow::Cow<'static, str>]) {
 }
 
 /// 清空学习表（设置窗「重置」用）。返回清掉的条目数。
+///
+/// **必须绕开磁盘合并**：`flush` 默认会把磁盘内容并回内存表（那是为了多进程
+/// 不互相覆盖），但清空恰恰要反过来——不绕的话，刚清空的表立刻被旧内容灌满，
+/// 用户点「重置」什么也不会发生。
 pub fn clear() -> usize {
     let n = with_table(|t| {
         let n = t.len();
@@ -283,7 +305,7 @@ pub fn clear() -> usize {
         n
     });
     DIRTY.store(true, Ordering::Release);
-    flush();
+    flush_inner(false);
     n
 }
 

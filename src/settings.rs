@@ -35,7 +35,7 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 556;
+const CLIENT_H: i32 = 636;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -55,8 +55,11 @@ const ID_FOLLOW: i32 = 132;
 const ID_LEARN: i32 = 133;
 const ID_LEARN_RESET: i32 = 134;
 const ID_LEARN_HINT: i32 = 135;
+const ID_UILESS: i32 = 136;
 const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
+const ID_PIN_HINT: i32 = 143;
+const ID_PIN_RESET: i32 = 144;
 const ID_IMPORT: i32 = 151;
 const ID_EXPORT: i32 = 152;
 const ID_CLOSE: i32 = 153;
@@ -190,6 +193,7 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_HANZI_TRAD, cfg.traditional);
     set_checked(h, ID_FULLWIDTH, cfg.fullwidth);
     set_checked(h, ID_FOLLOW, cfg.bar_follow);
+    set_checked(h, ID_UILESS, cfg.uileless);
     set_checked(h, ID_LEARN, cfg.learn);
     let learned = crate::freq::len();
     set_text(
@@ -197,6 +201,21 @@ unsafe fn sync(h: HWND) {
         ID_LEARN_HINT,
         &format!("已记录 {learned} 个词的使用次数（%APPDATA%\\Feihe\\freq.txt）"),
     );
+    // 条目少的时候直接把「码→词」列出来，用户不用去翻文件
+    let pinned = crate::pin::list();
+    let pin_text = match pinned.len() {
+        0 => "置顶：无 · Ctrl+数字 置顶当前候选".to_string(),
+        n if n <= 2 => format!(
+            "置顶 {} · Ctrl+数字 切换",
+            pinned
+                .iter()
+                .map(|(c, w)| format!("{c}→{w}"))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ),
+        n => format!("置顶 {n} 个编码 · Ctrl+数字 切换"),
+    };
+    set_text(h, ID_PIN_HINT, &pin_text);
 
     // 全拼模式下「双拼方案」没有意义，灰掉而不是隐藏——隐藏会让窗口内容跳动
     for id in [ID_SCHEME_XH, ID_SCHEME_MS] {
@@ -297,9 +316,25 @@ unsafe fn on_command(h: HWND, id: i32) {
             let on = checked(GetDlgItem(Some(h), ID_LEARN).unwrap_or_default());
             config::update(|c| c.learn = on);
         }
+        ID_UILESS => {
+            let on = checked(GetDlgItem(Some(h), ID_UILESS).unwrap_or_default());
+            config::update(|c| c.uileless = on);
+            // 打开时立刻把可能挂着的窗口收掉，用户才看得出「生效了」；
+            // 关掉时立刻把浮窗放回来，否则要等下一次切换输入法才出现。
+            if on {
+                crate::candidate::hide();
+                statusbar::hide();
+            } else {
+                statusbar::show();
+            }
+        }
         ID_LEARN_RESET => {
             let n = crate::freq::clear();
             set_text(h, ID_LEARN_HINT, &format!("已清空 {n} 条词频记录"));
+        }
+        ID_PIN_RESET => {
+            let n = crate::pin::clear();
+            set_text(h, ID_PIN_HINT, &format!("已取消 {n} 个编码的置顶"));
         }
         ID_IMPORT => {
             if let Some(path) = pick_file(h, false) {
@@ -392,10 +427,20 @@ unsafe fn build(h: HWND) {
     check(h, "状态浮窗跟随光标（默认固定在屏幕右下角，可拖动）", 16, y - 2, 420, ID_FOLLOW);
 
     y += 30;
+    check(h, "UILess：不弹候选窗和浮窗，候选显示在组合串里（全屏游戏用）", 16, y - 2, 428, ID_UILESS);
+    label(h, "UILess 下 Ctrl+Shift+U 可切回（浮窗被藏了，这是唯一的入口）", 16, y + 18, 428, 0);
+    y += 20; // 给上面那行提示留位置
+
+    y += 30;
     check(h, "动态调频（按实际选词调整候选顺序）", 16, y - 2, 300, ID_LEARN);
     push(h, "重置", 320, y - 5, 70, 26, ID_LEARN_RESET);
     y += 26;
     label(h, "", 16, y, 428, ID_LEARN_HINT);
+
+    // 置顶：和一简字一样属于「候选顺序」这件事，紧跟在动态调频下面
+    y += 26;
+    label(h, "", 16, y, 300, ID_PIN_HINT);
+    push(h, "清空", 320, y - 5, 70, 26, ID_PIN_RESET);
 
     y += 40;
     label(h, "", 16, y, 428, ID_STATS);

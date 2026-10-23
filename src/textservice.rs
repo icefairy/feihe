@@ -191,6 +191,17 @@ impl FeiheTextService {
         unsafe { (GetKeyState(VK_SHIFT.0 as i32) as u16) & 0x8000 != 0 }
     }
 
+    /// 只按了 Ctrl（不含 Alt / Win）。
+    ///
+    /// `Ctrl+数字` 是「置顶当前候选」，和 `Ctrl+A` 那类系统快捷键不是一回事，
+    /// 所以单独判一次——`modifiers_down` 分不出是哪个修饰键。
+    fn ctrl_only() -> bool {
+        unsafe {
+            let down = |vk: u16| (GetKeyState(vk as i32) as u16) & 0x8000 != 0;
+            down(VK_CONTROL.0) && !down(VK_MENU.0) && !down(VK_LWIN.0) && !down(VK_RWIN.0)
+        }
+    }
+
     /// 手动分隔符。内部统一存成 `'`，组合串里也原样显示。
     const SEP: char = '\'';
 
@@ -671,15 +682,58 @@ impl FeiheTextService {
                     s.push_str(&word);
                 }
             }
+            s.push_str(&self.uiless_hint());
             return s;
         }
         let code = self.code.borrow();
         let assist = self.assist.borrow();
-        if assist.is_empty() {
+        let mut s = if assist.is_empty() {
             code.clone()
         } else {
             format!("{code} {assist}")
+        };
+        s.push_str(&self.uiless_hint());
+        s
+    }
+
+    /// UILess 模式下，把当前这一页的候选拼到组合串后面。
+    ///
+    /// 为什么必须这么做：候选窗不弹了，用户就只剩「空格上屏第一候选」这一条路。
+    /// 双拼同码字多（`de` 有几十个），看不见候选等于盲打——那还不如不用。
+    /// 组合串是**宿主自己画在文档里的**，全屏游戏里通常仍能显示，所以把候选塞
+    /// 进去是 UILess 下唯一还能给用户看的通道。
+    ///
+    /// 正常模式下返回空串，组合串还是原来那个干净的编码。
+    fn uiless_hint(&self) -> String {
+        if !config::uileless() {
+            return String::new();
         }
+        let cands = self.candidates.borrow();
+        FeiheTextService::format_candidates(&cands, self.page.get())
+    }
+
+    /// 把一页候选拼成 `  1.你好 2.拟好 3.你号` 这样的尾部提示。
+    ///
+    /// 抽成纯函数才能单测——`uiless_hint` 要 `&self`，而 `self` 里有 COM 句柄，
+    /// 测试进程里造不出来。
+    fn format_candidates(cands: &[Cow<'static, str>], page: usize) -> String {
+        if cands.is_empty() {
+            return String::new();
+        }
+        let start = page * candidate::PAGE_SIZE;
+        let mut s = String::from("  ");
+        for (i, w) in cands
+            .iter()
+            .skip(start)
+            .take(candidate::PAGE_SIZE)
+            .enumerate()
+        {
+            if i > 0 {
+                s.push(' ');
+            }
+            s.push_str(&format!("{}.{}", i + 1, crate::zhconv::apply(w)));
+        }
+        s
     }
 
         // 当前选中的词；没有候选时退化成原始双拼码（保证空格能原样上屏）
@@ -1104,6 +1158,49 @@ impl FeiheTextService_Impl {
         }
     }
 
+    /// `Ctrl+数字`：把这个候选**钉**到当前编码上，然后照常上屏。
+    ///
+    /// 返回是否真的做了。做不到（没有这个候选、快捷输入态）就返回 false，
+    /// 让按键落回「修饰键组合 → 提交组合串并交还应用」的老路。
+    ///
+    /// 为什么不另开一个「置顶模式」：置顶是「我看到这个候选不对，换一个」的
+    /// 即时动作，最自然的入口就是选词本身——`Ctrl` 表示「这次选词顺便记住」。
+    fn pin_candidate(&self, n: usize) -> bool {
+        // 快捷输入的候选是「2026年10月23日」这种生成出来的串，钉它没有意义
+        if self.code.borrow().starts_with(quick::PREFIX) {
+            return false;
+        }
+        let idx = self.page.get() * candidate::PAGE_SIZE + (n - 1);
+        let Some(word) = self.candidates.borrow().get(idx).map(|s| s.to_string()) else {
+            return false;
+        };
+        // 分词模式下候选属于**当前这一段**，置顶也要钉到那一段的码上，
+        // 钉整串会让下次打同一个词时对不上。
+        let code = if self.segments.borrow().is_empty() {
+            FeiheTextService::query_code(&self.code.borrow()).into_owned()
+        } else {
+            let segs = self.segments.borrow();
+            let i = self.seg_idx.get().min(segs.len() - 1);
+            segs[i].code.clone()
+        };
+        if code.is_empty() {
+            return false;
+        }
+        // 再按一次就取消——「置顶」和「取消置顶」是同一个动作的两面，
+        // 用一个组合键切换，用户不必再记第二个键。
+        match crate::pin::word_for(&code) {
+            Some(cur) if cur.as_ref() == word.as_str() => {
+                crate::pin::remove(&code);
+            }
+            _ => crate::pin::set(&code, &word),
+        }
+
+        self.pending_op.borrow_mut().replace(EditOp::Commit(word));
+        self.request_edit_session();
+        self.clear_state();
+        true
+    }
+
     /// 把候选窗的点击路由回本对象。
     ///
     /// 存裸地址是必要的：windows-rs 的 `#[implement]` 只生成「结构体 → 接口」，
@@ -1308,6 +1405,9 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // `refresh` 内部按 mtime 判断，没变化就只做一次 stat。
         crate::freq::refresh();
 
+        // 置顶表同理：在设置窗里清空、或手改了 pinned.txt，别的进程要能看见。
+        crate::pin::refresh();
+
         // 候选窗鼠标点击：把「点了第几个」路由回本对象。
         // 放在 Activate 里而不是每次 show——闭包要捕获对象地址，只在对象身份
         // 变化时才需要重建，`set_click_handler` 内部按 id 判断。
@@ -1427,8 +1527,43 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             return Ok(BOOL::from(false));
         }
 
+        // ── Ctrl+Shift+U：切 UILess 模式 ────────────────────
+        //
+        // UILess 会把状态浮窗一起藏起来，而浮窗上的「设置」是进设置窗的**唯一**
+        // 入口。不给个键盘出口的话，用户打开 UILess 就把自己锁在外面了，
+        // 只能去手改 config.ini。所以这个组合键必须存在，而且必须在下面那条
+        // 「修饰键一律交还应用」之前拦下来。
+        //
+        // 必须放在 `is_shift` 判断之后：Shift 按下时那条已经先返回了，
+        // 而 `note_shift_combo` 也记下了「Shift 是配合别的键用的」，
+        // 抬起时不会误切中英。
+        if FeiheTextService::ctrl_only() && FeiheTextService::shift_down() && vk == 0x55 {
+            let next = !config::uileless();
+            config::update(|c| c.uileless = next);
+            if next {
+                candidate::hide();
+                statusbar::hide();
+            } else {
+                statusbar::show();
+            }
+            if self.is_composing() {
+                self.commit_current();
+            }
+            return Ok(BOOL::from(true));
+        }
+
         // 组合态下按修饰键（Ctrl / Alt / Win）：先把组合串提交，键原样交给应用。
         // 否则 Ctrl+A、Ctrl+C 会被当成字母吃进组合串。
+        //
+        // 唯一的例外是 Ctrl+数字 = 「置顶当前候选」。它必须在下面那条之前处理，
+        // 否则会被当成普通修饰键组合直接提交掉。组合态下按 Ctrl+1 没人是想切
+        // 浏览器标签页——那会儿用户正盯着候选窗选词。
+        if FeiheTextService::ctrl_only() && (0x31..=0x39).contains(&vk) && self.is_composing() {
+            if self.pin_candidate((vk - 0x30) as usize) {
+                return Ok(BOOL::from(true));
+            }
+        }
+
         if FeiheTextService::modifiers_down() {
             if self.is_composing() {
                 self.commit_current();
@@ -1795,6 +1930,30 @@ mod tests {
         dict::tests::SCHEME_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// UILess 下候选要拼进组合串：没有候选窗，这是用户唯一能看到候选的地方。
+    #[test]
+    fn uiless_hint_lists_current_page() {
+        let cands: Vec<Cow<'static, str>> = ["你好", "拟好", "你号"]
+            .iter()
+            .map(|s| Cow::Borrowed(*s))
+            .collect();
+        // 前缀是两个空格，序号从 1 开始，中间单空格分隔
+        assert_eq!(
+            FeiheTextService::format_candidates(&cands, 0),
+            "  1.你好 2.拟好 3.你号"
+        );
+        // 空候选不产生任何尾部（否则组合串后面会挂两个空格）
+        assert_eq!(FeiheTextService::format_candidates(&[], 0), "");
+        // 翻页后从第 10 条起，序号重新从 1 数——用户按的就是页内序号
+        let many: Vec<Cow<'static, str>> = (1..=12)
+            .map(|i| Cow::Owned(format!("候选{i}")))
+            .collect();
+        assert_eq!(
+            FeiheTextService::format_candidates(&many, 1),
+            "  1.候选10 2.候选11 3.候选12"
+        );
     }
 
     #[test]

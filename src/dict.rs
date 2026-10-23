@@ -140,14 +140,14 @@ impl Overlay {
         (s, e)
     }
 
-    /// 整码区间的上界（同 `Bin::exact_end`）
-    fn exact_end(&self, which: Idx, code: &str) -> usize {
-        let arr = self.table(which);
-        arr.partition_point(|(c, _)| c.as_ref() <= code)
-    }
-
     fn word_at(&self, which: Idx, p: usize) -> &str {
         self.entries[self.table(which)[p].1 as usize].0.as_ref()
+    }
+
+    /// 前缀排序键：`(码长, entries 下标)`。语义同 `Bin::rank_key`。
+    fn rank_key(&self, which: Idx, p: usize) -> (usize, usize) {
+        let (code, i) = &self.table(which)[p];
+        (code.len(), *i as usize)
     }
 
     #[allow(dead_code)]
@@ -353,10 +353,110 @@ fn search(
     // 都多扫几万条，换来的收益是「某个极冷僻词被选过一次就能上第一页」，
     // 不值。
     crate::freq::rank(&mut out);
+
+    // 一简字：单键查询时把「这个键该出的字」提到第一位。
+    //
+    // 放在 `freq::rank` **之后**，所以一简字赢过动态词频——这是刻意的：
+    // 一简字是打字人的肌肉记忆（`d` 后面按空格就该出「的」），不能被
+    // 「我上次选过『大』」这种偶发学习顶掉。真想让别的字排第一，用置顶。
+    //
+    // `insert_missing = false`：候选里没有它就算了。微软双拼的键位和小鹤
+    // 不同，开辅助码筛选时也可能把它筛掉——这两种情况下硬塞一个不相干的字
+    // 比不生效更糟。
+    if let Some(c) = crate::brief::char_for(prefix) {
+        let mut buf = [0u8; 4];
+        promote(&mut out, c.encode_utf8(&mut buf), false, limit);
+    }
+
+    // 手动置顶压在最后，也就是排在最前：用户显式钉的东西必须赢过一切默认值。
+    // 这里 `insert_missing = true`——置顶的全部意义就是「哪怕它不在候选里也要出」。
+    if let Some(w) = crate::pin::word_for(prefix) {
+        promote(&mut out, &w, true, limit);
+    }
     out
 }
 
+/// 把 `word` 提到候选最前面。
+///
+/// - 已经在列表里：原地取出再插到 0 号位（保持其余顺序不变）
+/// - 不在列表里且 `insert_missing`：直接插到最前，并把尾部挤出去，保持长度不变
+fn promote(out: &mut Vec<Cow<'static, str>>, word: &str, insert_missing: bool, limit: usize) {
+    if let Some(i) = out.iter().position(|w| w.as_ref() == word) {
+        if i > 0 {
+            let w = out.remove(i);
+            out.insert(0, w);
+        }
+        return;
+    }
+    if !insert_missing || word.is_empty() {
+        return;
+    }
+    out.insert(0, Cow::Owned(word.to_string()));
+    out.truncate(limit.max(1));
+}
+
+/// 给 `pin` 模块的单测用：验证提权语义，不必真去查词库。
+#[cfg(test)]
+pub(crate) fn promote_for_test(
+    out: &mut Vec<Cow<'static, str>>,
+    word: &str,
+    insert_missing: bool,
+    limit: usize,
+) {
+    promote(out, word, insert_missing, limit);
+}
+
+/// 前缀区间里挑出排在最前面的 `limit` 个位置，键是 `(码长, 原始行号)`。
+///
+/// ## 为什么不能只按码排
+///
+/// 索引表是按**码**升序排的。整码查询（`nihc` → 你好）没问题，但前缀查询会跨
+/// 好几个音节，按码排就等于按字母排——`d` 的 18 个候选会全是 `da` 那一批
+/// （大/打/答/达…），`de` 的「的」永远进不来，单键打字直接废掉。
+///
+/// ## 为什么键里要带码长
+///
+/// 只按行号排也不行：行号是「词库文件里的第几行」，而 `base.bin` 是
+/// 「个人词库 → rime-ice → 补充表」拼起来的，个人词库那一段排在前面，
+/// 于是 `d` 的前 18 名会变成「都是 / 对了 / 都有」这种两字词，单字反而一个不剩。
+///
+/// 码长短 = 码更「完整」：单键 `d` 下的两码条目正好是一个整音节，四码条目是
+/// 两个音节组成的词。先按码长分组、组内再按词频，就同时得到两条正确的语义：
+///
+/// - 打 `d`：只出单字，且按词频排（的/大/到/都…）
+/// - 打 `nihc`：整码的「你好」排在「你好吗」这类更长的词前面
+///
+/// 这正好是原来「整码优先」那套规则的推广——原来用二分找出「码恰好等于前缀」
+/// 的一段，现在变成「码长等于最短那一档」，语义一致且顺带修好了单键。
+///
+/// ## 为什么不整段排序
+///
+/// 区间可能有几千条，而我们只要最前面的十几个。这里维护一个长度 ≤ `limit` 的
+/// 升序小表，绝大多数条目一次比较就被 `continue` 掉，代价是「扫一遍区间」
+/// 而不是「排一遍区间」。
+fn top_by_rank(
+    range: std::ops::Range<usize>,
+    limit: usize,
+    key_of: impl Fn(usize) -> (usize, usize),
+) -> Vec<usize> {
+    let mut best: Vec<((usize, usize), usize)> = Vec::with_capacity(limit.min(64));
+    for p in range {
+        let key = key_of(p);
+        if best.len() >= limit && key >= best[best.len() - 1].0 {
+            continue;
+        }
+        let pos = best.partition_point(|(k, _)| *k < key);
+        best.insert(pos, (key, p));
+        if best.len() > limit {
+            best.pop();
+        }
+    }
+    best.into_iter().map(|(_, p)| p).collect()
+}
+
 /// 按「用户词库优先 → 静态词库」的顺序收集候选，不做动态排序。
+///
+/// 每个来源内部走同一套排序键 `(码长, 词频行号)`，见 `top_by_rank`。
 fn collect(
     pinyin: bool,
     prefix: &str,
@@ -393,36 +493,29 @@ fn collect(
     match &user {
         UserSrc::Mapped(b) => {
             let (ps, pe) = b.prefix_range(which, prefix);
-            let ee = b.exact_end(which, prefix).clamp(ps, pe);
-            for (a, z) in [(ps, ee), (ee, pe)] {
-                for p in a..z {
-                    let w = b.word_at(which, p);
-                    if !pass(w) || seen.contains(&w) {
-                        continue;
-                    }
-                    seen.push(w);
-                    out.push(Cow::Borrowed(w));
-                    if out.len() >= limit {
-                        return out;
-                    }
+            for p in top_by_rank(ps..pe, limit, |p| b.rank_key(which, p)) {
+                let w = b.word_at(which, p);
+                if !pass(w) || seen.contains(&w) {
+                    continue;
+                }
+                seen.push(w);
+                out.push(Cow::Borrowed(w));
+                if out.len() >= limit {
+                    return out;
                 }
             }
         }
         UserSrc::Heap(ov) => {
             let (ps, pe) = ov.prefix_range(which, prefix);
-            let ee = ov.exact_end(which, prefix).clamp(ps, pe);
-            // 整码匹配先出，再出更长的词
-            for (a, b) in [(ps, ee), (ee, pe)] {
-                for p in a..b {
-                    let w = ov.word_at(which, p);
-                    if !pass(w) || seen.contains(&w) {
-                        continue;
-                    }
-                    seen.push(w);
-                    out.push(Cow::Owned(w.to_string()));
-                    if out.len() >= limit {
-                        return out;
-                    }
+            for p in top_by_rank(ps..pe, limit, |p| ov.rank_key(which, p)) {
+                let w = ov.word_at(which, p);
+                if !pass(w) || seen.contains(&w) {
+                    continue;
+                }
+                seen.push(w);
+                out.push(Cow::Owned(w.to_string()));
+                if out.len() >= limit {
+                    return out;
                 }
             }
         }
@@ -433,18 +526,15 @@ fn collect(
     let bin = dictbin::get();
     {
         let (ps, pe) = bin.prefix_range(which, prefix);
-        let ee = bin.exact_end(which, prefix).clamp(ps, pe);
-        for (a, b) in [(ps, ee), (ee, pe)] {
-            for p in a..b {
-                let w = bin.word_at(which, p);
-                if !pass(w) || seen.contains(&w) {
-                    continue;
-                }
-                seen.push(w);
-                out.push(Cow::Borrowed(w));
-                if out.len() >= limit {
-                    return out;
-                }
+        for p in top_by_rank(ps..pe, limit, |p| bin.rank_key(which, p)) {
+            let w = bin.word_at(which, p);
+            if !pass(w) || seen.contains(&w) {
+                continue;
+            }
+            seen.push(w);
+            out.push(Cow::Borrowed(w));
+            if out.len() >= limit {
+                return out;
             }
         }
     }
@@ -588,6 +678,74 @@ pub(crate) mod tests {
     #[test]
     fn lookup_respects_limit() {
         assert!(lookup("a", 3).len() <= 3);
+    }
+
+    /// 一简字必须排第一：`d` 后面按空格出「的」，这是小鹤用户的肌肉记忆。
+    ///
+    /// 26 个键全部要过。这条同时守两个东西：
+    ///
+    /// 1. **提权接上了**——`d` 开头语料里「大」更靠前，不提权就会出「大」
+    /// 2. **单键候选里真的有单字**——提权只做「候选里本来就有它才提前」，
+    ///    如果单键查询退化成「只出两字词」，26 个一简字会集体消失。
+    ///    这一条正是 `top_by_rank` 按码长分组要保证的
+    #[test]
+    fn every_brief_char_ranks_first() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        let mut bad = Vec::new();
+        for (key, want) in crate::brief::TABLE {
+            let r = lookup(&key.to_string(), 18);
+            if r.first().map(|s| &**s) != Some(want.encode_utf8(&mut [0u8; 4])) {
+                bad.push(format!("{key}→{want}: {r:?}"));
+            }
+        }
+        assert!(bad.is_empty(), "这些键的一简字没排第一：\n{}", bad.join("\n"));
+    }
+
+    /// 单键查询的候选：短码（单字）排在长码（多字词）前面。
+    ///
+    /// 用户打 `d` 想要的是「的/大/到」这一批单字，不是「都是 / 对了」。
+    /// 唯一的例外是某些键的单字不够 18 个（`o` 只有「哦/噢/喔」这么几个），
+    /// 那时顺延到两字词是对的——多给几个候选总比空着强。所以这里断言的是
+    /// **顺序**而不是「全部都是单字」：一旦出现多字词，后面不能再冒出单字。
+    #[test]
+    fn single_key_yields_single_chars() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        for key in "abcdefghijklmnopqrstuvwxyz".chars() {
+            let r = lookup(&key.to_string(), 18);
+            assert!(!r.is_empty(), "`{key}` 应该有候选");
+            let mut word_seen = false;
+            for (i, w) in r.iter().enumerate() {
+                if w.chars().count() == 1 {
+                    assert!(
+                        !word_seen,
+                        "`{key}` 第 {} 个是单字「{w}」，却排在了多字词后面：{r:?}",
+                        i + 1
+                    );
+                } else {
+                    word_seen = true;
+                }
+            }
+            assert_eq!(
+                r[0].chars().count(),
+                1,
+                "`{key}` 的第一个候选「{}」应该是单字",
+                r[0]
+            );
+        }
+    }
+
+    /// 两键以上不该有一简字，顺序回到正常排序。
+    #[test]
+    fn brief_does_not_apply_to_longer_codes() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        // `de` 的候选是「的/得/地…」这一批字本身，第一个仍是「的」，
+        // 但那是因为静态词频，不是因为一简字（`de` 没有一简字）。
+        assert!(crate::brief::char_for("de").is_none());
+        let r = lookup("de", 5);
+        assert_eq!(r.first().map(|s| &**s), Some("的"));
     }
 
     #[test]
@@ -754,11 +912,20 @@ pub(crate) mod tests {
         }
         let per = t1.elapsed() / 1000;
 
+        // 单键是**最贵**的一档：区间跨 20 多个音节、几千条，`top_by_rank` 要整段扫。
+        // 必须钉住，否则「按码长分组」这个改动会在慢机器上把打字手感拖垮。
+        let t2 = std::time::Instant::now();
+        for _ in 0..1000 {
+            let _ = lookup("d", 18);
+        }
+        let single = t2.elapsed() / 1000;
+
         println!(
-            "entries={}  first_lookup={:?}  subsequent={:?}",
+            "entries={}  first_lookup={:?}  subsequent={:?}  single_key={:?}",
             stats().0,
             first,
-            per
+            per,
+            single
         );
         assert!(!r.is_empty());
     }

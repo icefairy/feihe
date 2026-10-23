@@ -169,8 +169,13 @@ impl Bin {
         self.sec[which.idx_sec()].1 / 4
     }
 
-    /// 索引表第 p 位对应的 raw 下标
-    fn raw_of(&self, which: Idx, p: usize) -> usize {
+    /// 索引表第 p 位对应的 raw 下标。
+    ///
+    /// raw 下标就是**词库文件里的原始行号**，而 `dict.txt` 是按词频降序排的
+    /// （第一行是「的」），所以它同时也是全局词频排名。前缀查询要跨多个音节，
+    /// 光按码排序会让「按字母序最靠前的那个音节」包场（`d` 全是「大/打/答」），
+    /// 必须拿这个下标把各音节的候选合并起来。
+    pub fn raw_of(&self, which: Idx, p: usize) -> usize {
         let (off, _) = self.sec[which.idx_sec()];
         self.u32_at(off + p * 4) as usize
     }
@@ -208,24 +213,16 @@ impl Bin {
         (start, lo)
     }
 
-    /// 「码恰好等于 `code`」这一段的上界。
+    /// 前缀排序键：`(码长, 原始行号)`。
     ///
-    /// 索引按码升序，所以整码匹配一定是从 `prefix_range().0` 开始的一段连续区间，
-    /// 到 `exact_end` 结束。用它把整码候选排在更长的词前面——
-    /// 否则打 `iuliqi`（处理器）会被 `处理器吧` 这种更长的词抢走第一位。
-    pub fn exact_end(&self, which: Idx, code: &str) -> usize {
-        let n = self.idx_len(which);
-        let code_at = |p: usize| self.code(which, self.raw_of(which, p));
-        let (mut lo, mut hi) = (0usize, n);
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            if code_at(mid) <= code {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+    /// 一次取出，省掉重复读索引表——单键查询要扫几千条，每条少一次随机访问
+    /// 就是实打实的收益（这个键的两部分本来就都来自同一条索引项）。
+    pub fn rank_key(&self, which: Idx, p: usize) -> (usize, usize) {
+        let i = self.raw_of(which, p);
+        let (ooff, _) = self.sec[which.off_sec()];
+        let start = self.u32_at(ooff + i * 4) as usize;
+        let end = self.u32_at(ooff + (i + 1) * 4) as usize;
+        (end.saturating_sub(start), i)
     }
 
     /// 索引表第 p 位对应的词面

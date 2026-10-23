@@ -28,6 +28,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use crate::config;
+
 const CLASS_NAME: PCWSTR = w!("FeiheCandidateWindow");
 
 const PAD: i32 = 10;
@@ -334,6 +336,15 @@ unsafe fn layout(items: &[String]) -> (i32, Vec<(i32, i32)>) {
 /// 显示候选窗。`x` / `y` 是光标左下角的屏幕坐标。
 pub fn show(items: &[&str], selected: usize, page: usize, x: i32, y: i32) {
     if items.is_empty() {
+        hide();
+        return;
+    }
+    // UILess 模式：一个 popup 都不许弹。
+    //
+    // 拦在这里而不是拦在 `textservice::show_candidates`，是因为这个函数是**所有**
+    // 显示路径的唯一出口；拦在上层的话，将来新加一个调用点就会漏。
+    // 顺带把可能已经挂着的窗口收掉——用户是刚在设置里打开的开关。
+    if config::uileless() {
         hide();
         return;
     }
