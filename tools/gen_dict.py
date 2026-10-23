@@ -45,7 +45,16 @@ FINALS = {
     "er": "r",
 }
 
-MAX_CHARS = 3500
+# 单字：**全收，不按词频截断**。
+#
+# 早期这里是 3500（按词频截断），埋了个大坑：同事姓「仝」，「仝」在 8105 字表里
+# 排 5402 名、词频 796，而第 3500 名的词频下限是 11418 —— 直接被截掉，用户翻页
+# 也翻不到，表现成「这个字根本打不出来」。
+#
+# 生僻字在候选列表里只是尾部多一行（排序在最后，不影响常用字），缺了却是硬伤。
+# 姓名、地名、古籍用字都属于这一类，不能靠词频淘汰。
+MAX_CHARS = None  # None = 全部收录
+
 # 词组条数。465k 条可编码词组里按词频取前 N 条：
 #   6500 → 词频下限 17 万（只有极高频词，覆盖太窄）
 #  30000 → 词频下限 3.3 万（约 450KB，常见词基本齐了）
@@ -153,7 +162,7 @@ def main():
     chars.sort(key=lambda x: -x[2])
     kept = 0
     for text, pinyin, weight in chars:
-        if kept >= MAX_CHARS:
+        if MAX_CHARS is not None and kept >= MAX_CHARS:
             break
         if len(text) != 1 or not is_cjk(text):
             continue

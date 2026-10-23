@@ -163,7 +163,14 @@
 ### 源数据
 
 `词<TAB>全拼`（音节空格分隔），按词频降序。**不存双拼码**——存码等于把方案焊死。
-`src/dict.txt`（33500 系统词）+ `src/user_dict.txt`（52522 搜狗导入词）。
+`src/dict.txt`（38463 系统词）+ `src/user_dict.txt`（52522 搜狗导入词）。
+
+**单字必须全收，不能按词频截断。** 早期 `gen_dict.py` 里 `MAX_CHARS = 3500`，
+把 8105 字表按词频砍到前 3500 个。同事姓「仝」，它在表里排 5402 名（词频 796，
+第 3500 名的下限是 11418）——直接没了，用户翻页也翻不到。
+现在 `MAX_CHARS = None`（7896 个可编码单字全收，含 567 个多音字的第二读音），
+代价是 base.bin 从 2120 KB 涨到 2316 KB，非常划算。
+回归测试：`rare_name_chars_are_reachable`（仝佟覃翟邬阚亓郗禚仉）。
 
 ### 构建期：`build.rs` → `$OUT_DIR/base.bin`
 
@@ -414,7 +421,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 2. **装到 `%ProgramFiles%\Feihe`**，不是老的 `%ProgramData%\Feihe`。安装时尽力清理老副本
    （`Delete /REBOOTOK` 处理被占用的）。
 3. **发布模式构建**（`FEIHE_NO_USER_DICT=1`）。`src/user_dict.txt` 是 5 万条个人打字记录，
-   普通构建会并进 `base.bin`（82179 条 → 33454 条，DLL 6.8 MB → 2.6 MB）。
+   普通构建会并进 `base.bin`（86639 条 → 37914 条，DLL 6.8 MB → 2.7 MB）。
 
 五个坑（按踩到的顺序）：
 

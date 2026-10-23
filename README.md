@@ -325,8 +325,8 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 | 构建方式 | base.bin | 64 位 DLL |
 | --- | --- | --- |
-| 普通 | 82179 条 / 5.6 MB | 6.8 MB |
-| `-NoUserDict`（发布） | 33454 条 / 2.1 MB | 2.6 MB |
+| 普通 | 86639 条 / 5.9 MB | 6.8 MB |
+| `-NoUserDict`（发布） | 37914 条 / 2.3 MB | 2.7 MB |
 
 `build_setup.ps1` 还会读 `src\user_dict.txt` 的条数做二次兜底 —— 万一有人用普通构建的
 产物打包，它直接报错退出；确实想带个人词库得显式加 `-AllowPersonalDict`。
@@ -379,7 +379,7 @@ src/textservice.rs    TSF 核心（Activate / 按键 sink / 组合态 / edit ses
 src/shuangpin.rs      小鹤双拼编码（全拼→两键码，带单测当规格）
 src/dict.rs           词库查询（静态二进制 + 运行时覆盖层，二分前缀扫描）
 src/dictbin.rs        词库二进制的零解析读取器（段偏移 + 索引表 + 字节池）
-src/dict.txt          基础词库（33500 条 / 586KB，gen_dict.py 生成，勿手改）
+src/dict.txt          基础词库（38463 条 / 625KB，gen_dict.py 生成，勿手改）
 src/extra_dict.txt    常用词补充表（76 条，手工维护，只放基础词库里缺的词）
 src/user_dict.txt     用户词库（import_sogou.py 生成，可反复重跑；未导入时为空文件）
 build.rs              生成 base.bin（预编码三套码）+ 编译图标资源
@@ -412,7 +412,7 @@ rust-toolchain.toml   固定 gnu toolchain + gnullvm target
 
 数据源是[雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)（带真实整数词频）：
 
-- `cn_dicts/8105.dict.yaml` 单字，取词频前 3500
+- `cn_dicts/8105.dict.yaml` 单字，**全收**（7896 个，不按词频截断）
 - `cn_dicts/base.dict.yaml` 词组，取词频前 30000
 
 ```bash
@@ -423,7 +423,14 @@ python tools/gen_dict.py --no-download # 只用缓存
 输出格式是 `词<TAB>全拼`（音节空格分隔），按词频降序。**不存双拼码**——存码等于把方案
 焊死在数据里，切小鹤/微软就得重新生成整个词库，导入导出也只能同方案流通。
 
-真正的双拼码在**构建期**由 `build.rs` 算好：8.17 万条 × 三套码（小鹤/微软/全拼去空格），
+> **单字为什么全收而不按词频截断？**
+> 早期这里取词频前 3500 个单字，结果同事姓「仝」，「仝」在 8105 字表里排 5402 名
+> （词频 796，而第 3500 名的下限是 11418）——被直接截掉，翻页也翻不到，表现成
+> 「这个字根本打不出来」。生僻字在候选列表里只是尾部多一行，缺了却是硬伤，
+> 姓名、地名、古籍用字都吃这个亏。现在 7896 个可编码单字全收，回归测试
+> `rare_name_chars_are_reachable` 钉死。
+
+真正的双拼码在**构建期**由 `build.rs` 算好：8.66 万条 × 三套码（小鹤/微软/全拼去空格），
 各生成一张按码升序的下标表，连同偏移表和字节池写成一个扁平文件 `base.bin`，用
 `include_bytes!` 嵌进 DLL。运行时只是「读两个 u32 数组 + 二分」，**零解析**。
 

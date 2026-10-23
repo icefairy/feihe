@@ -2081,6 +2081,46 @@ mod tests {
     }
 
     #[test]
+    fn rare_name_chars_are_reachable() {
+        let _g = lock();
+        dict::set_scheme(Scheme::Xiaohe);
+        config::set_pinyin_mode(false);
+
+        // 姓名 / 地名里的生僻字。它们词频很低，但**缺了就是打不出来**。
+        //
+        // 「仝」是踩过的坑：早期 gen_dict.py 按词频把单字截断到 3500 个，
+        // 「仝」在 8105 字表里排 5402 名（词频 796，第 3500 名的下限是 11418），
+        // 被直接截掉，用户翻页也翻不到。现在单字全收（7896 个），这里钉死。
+        const NAMES: &[(&str, &str)] = &[
+            ("仝", "tong"),
+            ("佟", "tong"),
+            ("覃", "qin"),
+            ("翟", "zhai"),
+            ("邬", "wu"),
+            ("阚", "kan"),
+            ("亓", "qi"),
+            ("郗", "xi"),
+            ("禚", "zhuo"),
+            ("仉", "zhang"),
+        ];
+
+        let mut missing = Vec::new();
+        for (word, py) in NAMES {
+            let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect(py);
+            // 用 MAX_CANDIDATES（候选窗能翻到的上限），不是随手取 10
+            let list = dict::lookup(&code, MAX_CANDIDATES);
+            if !list.iter().any(|w| w.as_ref() == *word) {
+                missing.push(format!("{word}({py}) -> {code}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "以下生僻姓名用字查不到（单字不该按词频截断）：\n  {}",
+            missing.join("\n  ")
+        );
+    }
+
+    #[test]
     fn is_shift_recognizes_all_variants() {
         assert!(FeiheTextService::is_shift(0x10));
         assert!(FeiheTextService::is_shift(0xA0));
