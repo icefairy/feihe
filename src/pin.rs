@@ -121,6 +121,42 @@ pub fn remove(code: &str) -> bool {
     mutate(|t| t.remove(&code).is_some())
 }
 
+/// 切换：这个码上已经是 `word` 就取消，否则钉上。返回切换后是否处于置顶状态。
+///
+/// 「置顶」和「取消置顶」是同一个动作的两面（`Ctrl`+数字 和右键点候选都要它），
+/// 用一个入口切换，用户不必再记第二个组合。
+pub fn toggle(code: &str, word: &str) -> bool {
+    let next = decide(word_for(code).as_deref(), word);
+    match next {
+        Toggle::Clear => {
+            remove(code);
+            false
+        }
+        Toggle::Set => {
+            set(code, word);
+            true
+        }
+    }
+}
+
+/// 切换的下一步动作。抽成纯函数：`toggle` 要落盘（碰 `%APPDATA%`），
+/// 判据本身才是容易写错的地方（「同一个词才算取消」）。
+#[derive(Debug, PartialEq, Eq)]
+enum Toggle {
+    Set,
+    Clear,
+}
+
+fn decide(cur: Option<&str>, word: &str) -> Toggle {
+    if word.is_empty() {
+        return Toggle::Clear;
+    }
+    match cur {
+        Some(c) if c == word => Toggle::Clear,
+        _ => Toggle::Set,
+    }
+}
+
 /// 全部置顶，按编码排序（设置窗显示、调试用）。
 pub fn list() -> Vec<(String, String)> {
     with_table(|t| {
@@ -232,6 +268,15 @@ pub fn refresh() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 同一个词再切一次 = 取消；换一个词 = 覆盖。这是 `Ctrl`+数字 和右键共用的判据。
+    #[test]
+    fn toggle_decides_by_current_word() {
+        assert_eq!(decide(None, "成"), Toggle::Set, "本来没钉 → 钉上");
+        assert_eq!(decide(Some("成"), "成"), Toggle::Clear, "同一个词 → 取消");
+        assert_eq!(decide(Some("城"), "成"), Toggle::Set, "换了词 → 覆盖");
+        assert_eq!(decide(Some("成"), ""), Toggle::Clear, "空词不钉");
+    }
 
     #[test]
     fn parses_pairs_and_ignores_junk() {

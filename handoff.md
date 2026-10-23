@@ -40,8 +40,8 @@
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
-实测数据：安装包 1.39 MB、装完约 6.0 MB、64 位 DLL 3088 KB、`base.bin` 38024 条 /
-2321 KB、142 项单测。
+实测数据：安装包 1.39 MB、装完约 6.0 MB、64 位 DLL 3091 KB、`base.bin` 38024 条 /
+2321 KB、145 项单测。
 
 
 ## 自绘窗口架构（v2 新增）
@@ -231,11 +231,16 @@
 > 靠的是调用约定：`commit_with` 传的是选中的候选词，标点只是拼在后面的 suffix。
 > 这点很容易想当然，测试 `ascii_is_not_learned` 里写明了。
 
-**2. 排序必须稳定。** `sort_by_key` 是稳定排序，键是次数降序：
+**2. 排序必须稳定，而且键是 `(码长, 次数)`，不是「次数」。**
 
 ```rust
-words.sort_by_key(|w| std::cmp::Reverse(table.get(w.as_ref()).copied().unwrap_or(0)));
+order.sort_by_key(|&i| (lens[i], std::cmp::Reverse(table.get(words[i]).copied().unwrap_or(0))));
 ```
+
+码长必须排在次数前面，这是踩出来的：`ig` 是「成」的整码（2 键），而「程序」只是
+前缀匹配（4 键）。旧实现只按次数排，用户打过 7 次「程序」之后，敲 `ig` 按空格出来的
+是「程序」——`Ctrl` 置顶都救不了，因为每次按键 `freq::rank` 都会重排一遍。
+`lens` 由 `dict::collect` 和候选一起带出来（`rank_key().0`），不用二次查表。
 
 没学过的词相对顺序**一点都不能变**。要是图快用 `sort_unstable`，所有码的候选顺序
 都会抖，用户第一反应就是「输入法乱套了」。
@@ -530,6 +535,14 @@ GBK 那两万多字（异形字 / 繁体 / 日韩汉字）不收：繁体靠 `zh
 用户背的是小鹤那 370 个，换机器、换词库后如果自动挑，肌肉记忆立刻失效。
 
 ## 手动置顶（`pin.rs`）
+
+两个入口：`Ctrl`+数字（顺带上屏）和**右键点候选**（只切换、不上屏）。右键这条不是
+锦上添花——浏览器 / VS Code / JetBrains 把 `Ctrl+1..9` 抢去切页签，那些窗口里组合键
+根本到不了我们手上，必须留一条纯鼠标路径。实现上候选窗多一个 `set_right_click_handler`
+回调槽（和左键那个 `Handler` 同构），`textservice::toggle_pin_candidate` 切换后调
+`refresh()` + `show_candidates()`——钉上的词跳到第一位就是反馈，不弹提示。
+
+
 
 `Ctrl+数字` = 置顶该候选并上屏，对已置顶的那个再按一次 = 取消。
 存在 `%APPDATA%\Feihe\pinned.txt`（`编码<TAB>词`）。

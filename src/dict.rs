@@ -368,7 +368,7 @@ fn search(
     mode: AssistMode,
     limit: usize,
 ) -> Vec<Cow<'static, str>> {
-    let mut out = collect(pinyin, prefix, assist_prefix, mode, limit);
+    let (mut out, lens) = collect(pinyin, prefix, assist_prefix, mode, limit);
     // 动态词频只在这一层做：双拼/全拼、带不带辅助码的查询全都汇到这里，
     // 不会出现「某个入口忘了排序」这种只在特定模式下复现的怪事。
     //
@@ -377,7 +377,7 @@ fn search(
     // 90 名以外的词捞进来。这个限制是刻意的——真去全量扫描会让每次按键
     // 都多扫几万条，换来的收益是「某个极冷僻词被选过一次就能上第一页」，
     // 不值。
-    crate::freq::rank(&mut out);
+    crate::freq::rank(&mut out, &lens);
 
     // 自造词组：用户一段一段拼出来的、词库里本来没有的词（`limkyr`→李明远）。
     // 码打满就出，并且排在最前面——这是用户刚造的词，他下次敲这个码要的就是它。
@@ -604,9 +604,9 @@ fn collect(
     assist_prefix: &str,
     mode: AssistMode,
     limit: usize,
-) -> Vec<Cow<'static, str>> {
+) -> (Vec<Cow<'static, str>>, Vec<u8>) {
     if prefix.is_empty() || limit == 0 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     let which = if pinyin {
         Idx::Flat
@@ -618,6 +618,9 @@ fn collect(
     };
 
     let mut out: Vec<Cow<'static, str>> = Vec::with_capacity(limit.min(16));
+    // 每个候选的码长，和 `out` 一一对应。动态词频排序要用它守住「短码 = 更完整」，
+    // 否则学过一次「程序」就会把 `ig` 的「成」挤下去（程序只是前缀匹配，4 键）。
+    let mut lens: Vec<u8> = Vec::with_capacity(limit.min(16));
     // 去重用的短列表：候选最多 limit 条，线性扫比建 HashSet 划算（也免了分配）
     let mut seen: Vec<&str> = Vec::with_capacity(limit.min(16));
 
@@ -641,8 +644,9 @@ fn collect(
                 }
                 seen.push(w);
                 out.push(Cow::Borrowed(w));
+                lens.push(b.rank_key(which, p).0.min(u8::MAX as usize) as u8);
                 if out.len() >= limit {
-                    return out;
+                    return (out, lens);
                 }
             }
         }
@@ -655,8 +659,9 @@ fn collect(
                 }
                 seen.push(w);
                 out.push(Cow::Owned(w.to_string()));
+                lens.push(ov.rank_key(which, p).0.min(u8::MAX as usize) as u8);
                 if out.len() >= limit {
-                    return out;
+                    return (out, lens);
                 }
             }
         }
@@ -674,12 +679,13 @@ fn collect(
             }
             seen.push(w);
             out.push(Cow::Borrowed(w));
+            lens.push(bin.rank_key(which, p).0.min(u8::MAX as usize) as u8);
             if out.len() >= limit {
-                return out;
+                return (out, lens);
             }
         }
     }
-    out
+    (out, lens)
 }
 
 /// 词库概况：(总条目, 用户词库条目, 当前方案)

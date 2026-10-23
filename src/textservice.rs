@@ -1392,15 +1392,15 @@ impl FeiheTextService_Impl {
     ///
     /// 为什么不另开一个「置顶模式」：置顶是「我看到这个候选不对，换一个」的
     /// 即时动作，最自然的入口就是选词本身——`Ctrl` 表示「这次选词顺便记住」。
-    fn pin_candidate(&self, n: usize) -> bool {
-        // 快捷输入的候选是「2026年10月23日」这种生成出来的串，钉它没有意义
+    /// 取出「第 idx 个候选」以及它该钉在哪个码上。
+    ///
+    /// idx 是**全表下标**（`page * PAGE_SIZE + 页内序号`）。快捷输入的候选是
+    /// 「2026年10月23日」这种生成出来的串，钉它没有意义，直接返回 None。
+    fn pin_target(&self, idx: usize) -> Option<(String, String)> {
         if self.code.borrow().starts_with(quick::PREFIX) {
-            return false;
+            return None;
         }
-        let idx = self.page.get() * candidate::PAGE_SIZE + (n - 1);
-        let Some(word) = self.candidates.borrow().get(idx).map(|s| s.to_string()) else {
-            return false;
-        };
+        let word = self.candidates.borrow().get(idx)?.to_string();
         // 分词模式下候选属于**当前这一段**，置顶也要钉到那一段的码上，
         // 钉整串会让下次打同一个词时对不上。
         let code = if self.segments.borrow().is_empty() {
@@ -1411,20 +1411,38 @@ impl FeiheTextService_Impl {
             segs[i].code.clone()
         };
         if code.is_empty() {
+            return None;
+        }
+        Some((code, word))
+    }
+
+    fn pin_candidate(&self, n: usize) -> bool {
+        let idx = self.page.get() * candidate::PAGE_SIZE + (n - 1);
+        let Some((code, word)) = self.pin_target(idx) else {
             return false;
-        }
-        // 再按一次就取消——「置顶」和「取消置顶」是同一个动作的两面，
-        // 用一个组合键切换，用户不必再记第二个键。
-        match crate::pin::word_for(&code) {
-            Some(cur) if cur.as_ref() == word.as_str() => {
-                crate::pin::remove(&code);
-            }
-            _ => crate::pin::set(&code, &word),
-        }
+        };
+        crate::pin::toggle(&code, &word);
 
         self.pending_op.borrow_mut().replace(EditOp::Commit(word));
         self.request_edit_session();
         self.clear_state();
+        true
+    }
+
+    /// 右键：切换置顶，**不提交**。
+    ///
+    /// 和 `Ctrl`+数字 的区别就在这里——后者顺带把词上屏（置顶是它的副作用），
+    /// 而多页签程序里 `Ctrl+1..9` 被浏览器抢去切页签，用户需要一个纯鼠标入口。
+    /// 切换后立刻重新查候选：钉上的词跳到第一位、取消的回到原位，这就是反馈，
+    /// 不用再弹任何提示。
+    fn toggle_pin_candidate(&self, page_index: usize) -> bool {
+        let idx = self.page.get() * candidate::PAGE_SIZE + page_index;
+        let Some((code, word)) = self.pin_target(idx) else {
+            return false;
+        };
+        crate::pin::toggle(&code, &word);
+        self.refresh();
+        self.show_candidates();
         true
     }
 
@@ -1441,6 +1459,7 @@ impl FeiheTextService_Impl {
     fn install_click_handler(&self) {
         let addr = self as *const FeiheTextService_Impl as usize;
         let alive = Arc::downgrade(&self.alive);
+        let alive2 = alive.clone();
         crate::candidate::set_click_handler(addr, move || {
             let alive = alive.clone();
             Arc::new(move |index: usize| {
@@ -1452,6 +1471,24 @@ impl FeiheTextService_Impl {
                 this.on_candidate_click(index);
             })
         });
+        crate::candidate::set_right_click_handler(addr, move || {
+            Arc::new(move |index: usize| {
+                let Some(_token) = alive2.upgrade() else {
+                    return;
+                };
+                // SAFETY: 同上——令牌活着说明对象没析构，地址在生命周期内不变
+                let this = unsafe { &*(addr as *const FeiheTextService_Impl) };
+                this.on_candidate_right_click(index);
+            })
+        });
+    }
+
+    /// 右键点候选：切换置顶（不上屏、不打断组合态）。
+    fn on_candidate_right_click(&self, index: usize) {
+        if !self.is_composing() {
+            return;
+        }
+        self.toggle_pin_candidate(index);
     }
 
     /// 候选窗被点了页内第 `index` 项（0 基）。

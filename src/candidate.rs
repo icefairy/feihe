@@ -17,6 +17,10 @@
 //! 判定用「按下 + 抬起落在同一项」：按下时记下命中项并 `SetCapture`，
 //! 抬起时比对，中途移开就取消。这样和普通按钮的手感一致，也避免误触。
 //!
+//! **右键**走另一条回调：`Ctrl`+数字 在很多多页签程序里被浏览器/编辑器抢走
+//! （`Ctrl+1..9` 切页签），所以置顶必须有一个只用鼠标的入口。右键不做菜单，
+//! 直接切换置顶状态——再右击一次就取消，和 `Ctrl`+数字 的语义一致。
+//!
 //! 命中区**必须和绘制用同一份几何**（`layout()`），否则会出现「看着点到了、
 //! 实际没中」这种最难查的偏差。
 
@@ -75,7 +79,10 @@ struct Handler {
     f: ClickFn,
 }
 
+/// 左键：选中该候选（上屏 / 确认分词段）
 static ON_CLICK: Mutex<Option<Handler>> = Mutex::new(None);
+/// 右键：切换该候选的置顶状态（不提交）
+static ON_RIGHT: Mutex<Option<Handler>> = Mutex::new(None);
 
 /// 注册「第 N 个候选被点击」的回调。
 ///
@@ -101,10 +108,41 @@ pub fn clear_click_handler() {
     *g = None;
 }
 
+/// 注册「第 N 个候选被右键」的回调。语义同 `set_click_handler`。
+pub fn set_right_click_handler(id: usize, make: impl FnOnce() -> ClickFn) {
+    let mut g = match ON_RIGHT.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    if g.as_ref().is_some_and(|h| h.id == id) {
+        return;
+    }
+    *g = Some(Handler { id, f: make() });
+}
+
+pub fn clear_right_click_handler() {
+    let mut g = match ON_RIGHT.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    *g = None;
+}
+
 /// 调用回调。**不能持锁调用**：回调会走 edit session，而 edit session 里可能
 /// 又调 `show()` → `set_click_handler()`，持锁就成了自己等自己。
 fn invoke_click(index: usize) {
     let f = match ON_CLICK.lock() {
+        Ok(g) => g.as_ref().map(|h| h.f.clone()),
+        Err(e) => e.into_inner().as_ref().map(|h| h.f.clone()),
+    };
+    if let Some(f) = f {
+        f(index);
+    }
+}
+
+/// 同 `invoke_click`，走右键那个槽位
+fn invoke_right(index: usize) {
+    let f = match ON_RIGHT.lock() {
         Ok(g) => g.as_ref().map(|h| h.f.clone()),
         Err(e) => e.into_inner().as_ref().map(|h| h.f.clone()),
     };
@@ -231,6 +269,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             // 锁已释放，这里才回调
             if let Some(i) = target {
                 invoke_click(i);
+            }
+            LRESULT(0)
+        }
+        // 右键 = 置顶开关。不需要按下/抬起配对：菜单式的误触风险不存在，
+        // 而「按下就动作」在多页签程序里更跟手（右键菜单一次都没弹过）。
+        WM_RBUTTONUP => {
+            let idx = {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = ScreenToClient(hwnd, &mut pt);
+                let st = match STATE.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                hit(&st, pt.x)
+            };
+            if let Some(i) = idx {
+                invoke_right(i);
             }
             LRESULT(0)
         }
@@ -429,6 +485,7 @@ pub fn hide() {
 /// 卸载/反激活时销毁窗口，避免 DLL 被卸载后窗口过程指针失效
 pub fn destroy() {
     clear_click_handler();
+    clear_right_click_handler();
     let raw = WND.swap(0, Ordering::AcqRel);
     if raw == 0 {
         return;

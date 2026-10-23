@@ -18,9 +18,14 @@
 //!
 //! ## 排序规则
 //!
-//! 稳定排序，键是学习次数降序。次数相同就保持词库原有顺序，所以：
+//! 稳定排序，键是 **(码长, 学习次数降序)**。码长必须排在次数前面：
+//! `ig` 是「成」的整码（2 键），而「程序」只是前缀匹配（4 键）；如果让次数
+//! 单独说了算，打过几次「程序」之后，敲 `ig` 按空格出来的就是「程序」。
+//! 码长短 = 更完整，这条不能被学习结果覆盖。
+//!
+//! 同一码长内才是次数降序；次数相同就保持词库原有顺序，所以：
 //! - 没学过的词，相对顺序完全不变（不会因为引入这个功能把候选顺序搞乱）
-//! - 学过的词按次数沉浮，次数一样时仍是「语料词频高的在前」
+//! - 学过的词在**同长度的候选里**沉浮，次数一样时仍是「语料词频高的在前」
 //!
 //! ## 落盘
 //!
@@ -273,8 +278,29 @@ pub fn refresh() {
     });
 }
 
-/// 按学习次数稳定重排候选。次数相同的保持原有相对顺序。
-pub fn rank(words: &mut [std::borrow::Cow<'static, str>]) {
+/// 算出重排后的下标顺序：先比码长，再比学习次数，都相同就保持原序。
+///
+/// 抽成纯函数是为了单测——`rank` 要过 `enabled()` 和全局表，测试里不好摆布。
+fn order_by(
+    words: &[std::borrow::Cow<'static, str>],
+    lens: &[u8],
+    table: &HashMap<String, u32>,
+) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..words.len()).collect();
+    // 稳定排序：`sort_by_key` 保证相等元素保持原顺序，这是「不搞乱语料顺序」的前提
+    order.sort_by_key(|&i| {
+        let len = lens.get(i).copied().unwrap_or(u8::MAX);
+        let n = table.get(words[i].as_ref()).copied().unwrap_or(0);
+        (len, std::cmp::Reverse(n))
+    });
+    order
+}
+
+/// 按「码长 → 学习次数」稳定重排候选。
+///
+/// `lens` 是每个候选的**码长**（音节数 × 2），由 `dict::collect` 一起带过来。
+/// 长度不等长时不 panic，缺的按最大长度算（排到最后），避免一处算错就崩掉宿主。
+pub fn rank(words: &mut [std::borrow::Cow<'static, str>], lens: &[u8]) {
     if words.len() < 2 || !enabled() {
         return;
     }
@@ -289,8 +315,30 @@ pub fn rank(words: &mut [std::borrow::Cow<'static, str>]) {
     if table.is_empty() {
         return;
     }
-    // 稳定排序：`sort_by_key` 保证相等元素保持原顺序，这是「不搞乱语料顺序」的前提
-    words.sort_by_key(|w| std::cmp::Reverse(table.get(w.as_ref()).copied().unwrap_or(0)));
+    let mut perm = order_by(words, lens, table);
+    apply_order(words, &mut perm);
+}
+
+/// 按置换就地重排，逐环交换，不额外分配。
+///
+/// `order[i]` 的语义是「排序后第 `i` 位来自原来的第几个」（`sort_by_key` 给的
+/// 就是这个方向）。逐环交换要求反过来——「第 `i` 个元素该去第几位」，所以先求逆。
+fn apply_order(words: &mut [std::borrow::Cow<'static, str>], order: &mut [usize]) {
+    let n = words.len();
+    if order.len() != n || order.iter().enumerate().all(|(i, &j)| i == j) {
+        return;
+    }
+    let mut dest = vec![0usize; n];
+    for (pos, &src) in order.iter().enumerate() {
+        dest[src] = pos;
+    }
+    for i in 0..n {
+        while dest[i] != i {
+            let j = dest[i];
+            words.swap(i, j);
+            dest.swap(i, j);
+        }
+    }
 }
 
 /// 清空学习表（设置窗「重置」用）。返回清掉的条目数。
@@ -353,22 +401,44 @@ mod tests {
             Cow::Borrowed("丙"),
         ];
         // 表里没有任何词 → 顺序原样
-        rank(&mut v);
+        rank(&mut v, &[2, 2, 2]);
         assert_eq!(v, vec!["甲", "乙", "丙"]);
     }
 
-    /// 直接验证排序语义（不走全局表，避免测试之间互相干扰）
+    /// 同一码长内，学过的排前面（这是「动态词频」本来的意义）
     #[test]
-    fn stable_sort_by_count_moves_learned_to_front() {
+    fn learned_word_wins_inside_same_code_length() {
         let mut table: HashMap<String, u32> = HashMap::new();
         table.insert("丙".into(), 5);
+        let v = [Cow::Borrowed("甲"), Cow::Borrowed("乙"), Cow::Borrowed("丙")];
+        assert_eq!(order_by(&v, &[2, 2, 2], &table), vec![2, 0, 1]);
+    }
+
+    /// **码长优先于学习次数**：`ig` 的「成」(2 键) 不能被学过的「程序」(4 键) 顶掉。
+    /// 这是实际踩到的 bug——打了几次「程序」之后，敲 `ig` 按空格出来的是「程序」。
+    #[test]
+    fn shorter_code_beats_learned_word() {
+        let mut table: HashMap<String, u32> = HashMap::new();
+        table.insert("程序".into(), 99);
+        table.insert("城".into(), 7);
+        let v = [Cow::Borrowed("程序"), Cow::Borrowed("成"), Cow::Borrowed("城")];
+        // 程序码长 4，成/城 码长 2
+        assert_eq!(order_by(&v, &[4, 2, 2], &table), vec![2, 1, 0]);
+    }
+
+    /// 置换重排不能丢词、不能错位（用可验证的一个环来钉）
+    #[test]
+    fn apply_order_permutes_in_place() {
         let mut v = vec![
             Cow::Borrowed("甲"),
             Cow::Borrowed("乙"),
             Cow::Borrowed("丙"),
+            Cow::Borrowed("丁"),
         ];
-        v.sort_by_key(|w| std::cmp::Reverse(table.get(w.as_ref()).copied().unwrap_or(0)));
-        assert_eq!(v, vec!["丙", "甲", "乙"]);
+        // 目标顺序：丙 甲 丁 乙
+        let mut perm = vec![2, 0, 3, 1];
+        apply_order(&mut v, &mut perm);
+        assert_eq!(v, vec!["丙", "甲", "丁", "乙"]);
     }
 
     #[test]
