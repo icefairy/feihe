@@ -8,17 +8,23 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
 > 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
 
+> **读哪里**：只想用 → 「怎么打字」「快捷输入」「标点」「状态浮窗与设置」；想自己编 →
+> 「构建」「测试」「打安装包」；想换词库 → 「词库」「数据源与下载缓存」「导入搜狗词库」。
+> **设计取舍和踩过的坑在 [`handoff.md`](handoff.md)，发版前的验收步骤在
+> [`docs/验证清单.md`](docs/验证清单.md)**——这两份不随安装包分发。
+
 ## 里程碑
 
-- **M1（已完成）**：TSF 骨架——注册为系统输入法、收键、组合态、edit session 上屏
-- **M2（已完成）**：小鹤双拼引擎 + 内置词库 + 候选窗（纯 Rust，暂不引 librime，原因见下）
-- **M2.5（已完成）**：状态浮窗、设置窗（输入模式 / 方案 / 皮肤 / 字形 / 词库管理）、
-  符号软键盘、小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、全角标点、简繁切换
-- **M3（进行中，只剩一项）**：Shift 中英切换 ✅ ／ 候选窗鼠标点击选词 ✅ ／
-  单键候选数按码长衰减 ✅ ／ 一级简码 + 手动置顶 ✅ ／ UILess（候选交给宿主自绘）✅ ／
-  不弹窗模式 ✅ ／ 自造词 ✅ ／ 回车 = 字母 ✅ ／ Shift + 字母直接上屏大写 ✅ ／
-  **组合串下划线 `ITfDisplayAttributeProvider`（未做，M3 唯一剩余项）**
-- **M5（已搁置）**：语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关）。暂无排期
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| M1 | TSF 骨架：注册为系统输入法、收键、组合态、edit session 上屏 | ✅ |
+| M2 | 小鹤双拼引擎 + 内置词库 + 候选窗（纯 Rust，暂不引 librime，原因见下） | ✅ |
+| M2.5 | 状态浮窗 / 设置窗 / 符号软键盘 / 微软双拼 / 辅助码 / 全角标点 / 简繁 / 全拼模式 | ✅ |
+| M3 | 一级简码、手动置顶、候选点选、候选数衰减、不弹窗、UILess、自造词、回车=字母、Shift+字母 | ✅ |
+| M3.x | 组合串下划线（`ITfDisplayAttributeProvider`） | **未做** |
+| M5 | 语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关） | 已搁置 |
+
+逐条的手工验收步骤在 [`docs/验证清单.md`](docs/验证清单.md)。
 
 > 关于 librime：它是 C++17 + CMake，与当前的 llvm-mingw/gnullvm 无 MSVC 路线在 C++ 标准库
 > ABI 上摩擦较大。双拼本质是「两键 → 一个全拼音节」的查表映射，纯 Rust 几百行即可跑通，
@@ -305,7 +311,7 @@ z 在   x 小   c 才   v 这   b 不   n 你   m 没
 | `-` `=` | `－` `＝` |
 | `/` | 不是标点，是快捷输入引导符 |
 
-Shift 组合里**只有字母由飞鹤处理**（直接上屏大写，见上节）。其余一律交给应用自己算：
+Shift 组合里**只有字母由飞鹤处理**（直接上屏大写，见上面「怎么打字」末尾那两段）。其余一律交给应用自己算：
 `Shift+\` 出 `|`、`Shift+/` 出 `?`、`Shift+,` 出 `<`——这些字符由键盘布局决定，
 按 VK 自己映射会在非 QWERTY 布局上算错，所以不去碰。
 
@@ -348,9 +354,9 @@ Shift 组合里**只有字母由飞鹤处理**（直接上屏大写，见上节�
 软键盘符号都不学。排序是**稳定排序**：没学过的词相对顺序完全不变，
 学过的按次数沉浮——不会因为开了这个功能把候选顺序搞乱。
 
-多个宿主进程（记事本 / Word / 浏览器）各有一份内存表，所以写盘前会先把磁盘内容
-合并进来（同词取较大值，不相加），切输入法时再按文件 mtime 拉取别的进程学到的词。
-否则会出现「在 Word 里学到的词，切到浏览器里又沉回去」这种时灵时不灵的症状。
+记事本 / Word / 浏览器各加载一份 DLL，各有内存表，所以写盘前会先合并磁盘内容
+（同词取较大值，不相加），切输入法时再按 mtime 拉取别的进程学到的词。多进程这块
+为什么这么设计、以及删除操作为什么不能走合并，见 `handoff.md`「动态词频」。
 
 配置存在 `%APPDATA%\Feihe\config.ini`，改完立即生效（同一进程内即时，其它已打开
 的应用要重新切一下输入法）。文件里带 `config_ver`；老配置（v1 把全角标点默认成关）
@@ -359,23 +365,16 @@ Shift 组合里**只有字母由飞鹤处理**（直接上屏大写，见上节�
 ### 全屏游戏：TSF UILess（候选交给宿主自己画）
 
 独占全屏的游戏绕开了 DWM，输入法自己开的窗口**画了也不上屏**。TSF 为此留了一条 UILess
-通道：宿主调 `ITfThreadMgrEx::ActivateEx(TF_AE_UIELEMENTENABLEDONLY)`，TSF 再把同一个
-标志透传给 TIP 的 `ActivateEx`。之后候选不再由输入法画：
+通道：宿主以 `ActivateEx(TF_TMAE_UIELEMENTENABLEDONLY)` 激活线程管理器，我们显示候选前
+必须 `ITfUIElementMgr::BeginUIElement` 请示；宿主回 `FALSE`（=「你别画，我来」）就拿走
+`ITfCandidateListUIElement`，用游戏的字体画在自己的界面上。
 
-1. 输入法想显示候选前必须 `ITfUIElementMgr::BeginUIElement` 请示；
-2. 宿主在 `ITfUIElementSink::BeginUIElement` 里返回 `FALSE` =「你别画，我来」；
-3. 输入法于是不建任何窗口，只在数据变化时 `UpdateUIElement(id)`；宿主自己 QI
-   `ITfCandidateListUIElement` 取候选、用自己的字体画进游戏界面。
+**这是「全屏游戏里能打中文」的真正机制**——不是输入法有黑科技，是游戏在画候选框。
+LOL / 原神 / 魔兽世界 / CS2 这些主流引擎都做了宿主侧。宿主不接（回 `TRUE`）或拿不到
+`ITfUIElementMgr` 时，本轮激活自动降级回自绘候选窗——宁可候选窗看不见，也不能让按键
+流程因为少个接口就断掉。
 
-实现在 `src/uielement.rs`。**这是「全屏游戏里能打中文」的真正机制**——不是输入法有黑科技，
-是游戏在画候选框。LOL / 原神 / 魔兽世界 / CS2 这些主流引擎都做了宿主侧。
-
-宿主不接（回 `TRUE`）或拿不到 `ITfUIElementMgr` 时，本轮激活自动降级回自绘候选窗——
-宁可候选窗看不见，也不能让按键流程因为少个接口就断掉（`ui_less` 位清掉，后续按键不再问）。
-
-两个坑：`UpdateUIElement` 会**同步**回调进元素的 `GetString`，所以改候选数据必须先放锁
-再调（`Rc<Session>` 句柄克隆就是为绕开这个）；`GetString` 返回的是候选词本身，不能带
-`1.` 序号——序号由宿主自己排。
+实现在 `src/uielement.rs`，实现侧的两个坑见 `handoff.md`「TSF UILess」。
 
 ### 不弹窗模式（远程桌面 / 没走 UILess 的全屏程序）
 
@@ -510,16 +509,8 @@ unregister.cmd    :: 全部移除
 安装后到 `设置 → 时间和语言 → 语言和区域 → 中文(简体) → 语言选项 → 键盘` 里应出现「飞鹤拼音」，
 用 `Win+Space` 或 `Ctrl+Shift` 切换。**若列表未刷新，注销重登一次**（输入法列表由 shell 缓存）。
 
-### 关键实现要点（踩过的坑）
-
-- DLL 必须部署到**稳定路径**（`%ProgramData%\Feihe\`）。早先直接注册 `target\...\release\feihe.dll`，
-  一次 `cargo clean` 输入法就变砖。
-- 用户键盘列表的真实位置是 `HKCU\Control Panel\International\User Profile\zh-Hans-CN`，
-  值是 `0804:{CLSID}{PROFILE}` = 顺序号(DWORD)，**不是** `SortOrder`。两处都要有。
-- `input.dll` **没有** `UninstallLayoutOrTip` 导出；卸载要用 `InstallLayoutOrTip(psz, ILOT_UNINSTALL=0x1)`。
-  `InstallLayoutOrTipUserReg` 虽然存在但实测返回 FALSE，不要用。
-- 历史遗留的 `HKCU\SOFTWARE\Microsoft\CTF\TIP\{CLSID}\LanguageProfile\...\Enable = 0` 会让条目
-  即使注册成功也不可见，安装前要先清掉。
+注册链路上踩过的坑（DLL 部署到稳定路径、User Profile 不是 `SortOrder`、`input.dll` 没有
+`UninstallLayoutOrTip`、隐藏的 `Enable = 0`）都记在 `handoff.md`「关键事实」里。
 
 ## 打安装包（NSIS）
 
@@ -570,37 +561,22 @@ uninstall_tip.ps1  注销脚本
 
 ### 打包踩过的坑
 
-- **`.nsi` 必须带 UTF-8 BOM**。NSIS 只在文件开头有 BOM 时才按 UTF-8 解析，否则按系统
-  ACP（简中 = GBK）读。脚本里有中文注释，丢了 BOM 就报
-  `Bad text encoding: feihe.nsi:1` / `Error in script "feihe.nsi" on line 1` ——
-  这个报错完全指不到真因，极难查。`build_setup.ps1` 现在每次编译前自动补 BOM。
-- **DLL 必须用 `File` 内嵌**，不能用 `CopyFiles`。`CopyFiles` 是**运行时**拷贝，
-  源路径写的是构建机上的 `target\...`，用户机器上根本没有，打出来的包只有 192 KB 空壳。
-  现在的做法是先 `File` 解到 `$PLUGINSDIR\ime`，再从那儿 `CopyFiles` 到 `$INSTDIR`。
-- **覆盖被占用的 DLL 只能「改名再拷」**。ctfmon / explorer 常常已经把旧 DLL 映射进进程，
-  直接 `CopyFiles` 覆盖会失败；Windows 允许**重命名**已映射的文件，所以改名成 `.old`
-  再拷新的，`.old` 排到重启删（`Delete /REBOOTOK`）。
-- **改名不等于生效，还得重启 ctfmon**。改名只换了磁盘上的文件——ctfmon 进程里映射的
-  仍是旧代码，不会因为文件换了就重新加载。所以 `install_tip.ps1` 最后一步杀掉 ctfmon：
-  Windows 会按需自动重启它（中等完整性，和登录时一样），重启时按注册表路径加载新 DLL，
-  覆盖安装后点一下输入框即生效，不用注销。**只杀不拉**——从提权进程手动启动 ctfmon 会
-  拿到高完整性令牌，UIPI 挡掉它和普通应用之间的窗口消息，输入法直接瘫痪。卸载侧对称：
-  `uninstall_tip.ps1` 末尾同样杀一次，之后 `Delete` 才删得掉被映射的 DLL。
-- **`.ps1` 必须带 UTF-8 BOM**。`uninstall_tip.ps1` 曾是全仓唯一不带 BOM 的脚本，而它含
-  中文；PowerShell 5.1 读无 BOM 的 `.ps1` 用系统 ANSI 代码页（简中 = cp936），UTF-8 中文
-  按 GBK 解码会吞掉字符串的闭合引号，整个脚本解析失败（`字符串缺少终止符`）——症状是
-  「卸载跑过了但注册还在」。仓里现在每个 `.ps1` 都有 BOM，别改回去。
-- **NSIS 是 32 位程序**，它启动的 PowerShell 也是 32 位。32 位进程里写
-  `Wow6432Node\...` 会二次重定向成 `Wow6432Node\Wow6432Node\...`，所以
-  `install_tip.ps1` 开头会检测到 32 位实例就切 `Sysnative` 重跑。
-- NSIS 3.13 **没有内置 `$PROGRAMDATA` 常量**，要 `ReadEnvStr $R0 "ProgramData"`。
-- `makensis` 的 `/D` 选项：`/` 和 `D` 之间不能有空格，值不要带尾反斜杠。
-  在 bash 里传 `-DOUTDIR=D:\...` 会被 shell 吃成 `D://...`，要么走 PowerShell，
-  要么用正斜杠。
+完整清单在 `handoff.md`「安装包（NSIS）」，这里只留最容易重复踩的三条：
+
+- **`.nsi` 和每个 `.ps1` 都必须带 UTF-8 BOM**。NSIS 只在有 BOM 时按 UTF-8 解析 `.nsi`；
+  PowerShell 5.1 读无 BOM 的 `.ps1` 用系统 ANSI 代码页（简中 = cp936），UTF-8 中文按 GBK
+  解码会吞掉字符串的闭合引号，整个脚本解析失败。两边的报错都完全指不到真因。
+- **DLL 必须用 `File` 内嵌**，不能 `CopyFiles`。后者是**运行时**拷贝，源路径写的是构建机上的
+  `target\...`，用户机器上根本没有，打出来的包只有 192 KB 空壳。现在是先 `File` 解到
+  `$PLUGINSDIR\ime`，再从那儿 `CopyFiles` 到 `$INSTDIR`。
+- **覆盖被占用的 DLL 只能「改名再拷」**。ctfmon / explorer 已经把旧 DLL 映射进进程，
+  直接覆盖会失败；Windows 允许**重命名**已映射的文件。改名之后还得重启 ctfmon 才生效
+  ——`install_tip.ps1` 末尾杀一次，系统会按需自动拉起。**只杀不拉**：从提权进程手动启动
+  ctfmon 会拿到高完整性令牌，UIPI 挡掉它和普通应用之间的窗口消息，输入法直接瘫痪。
 
 安装包**未签名**，首次运行会撞 SmartScreen「已保护你的电脑」提示，点「更多信息 → 仍要运行」。
 
-## 目录
+## 仓库结构
 
 ```
 index.html            项目主页（GitHub Pages 用，单文件零依赖，内嵌全部 CSS）
@@ -645,6 +621,8 @@ installer/unregister.cmd     卸载入口（管理员）
 build.ps1             一键构建（llvm-mingw，默认 64 + 32 位；-Arch / -Debug / -SkipTest）
 check_env.ps1         环境自检（llvm-mingw / rust target / NSIS 是否就位）
 docs/使用帮助.md       用户手册（随安装包装进安装目录，UTF-8 BOM 便于记事本打开）
+docs/验证清单.md       手工验收步骤（68 条，按里程碑分组，发版前照着跑）
+handoff.md            开发笔记（实测事实 + 踩过的坑 + 为什么这么设计，不随包分发）
 dist/                 安装包产物（已 gitignore）
 rust-toolchain.toml   固定 gnu toolchain + gnullvm target
 .cargo/config.toml    固定构建 target 与 linker（含 i686 的 linker）
@@ -787,13 +765,10 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 ### 格式怎么破的
 
-搜狗没有公开文档，但实测词条是**明文 UTF-16LE**，只是外面套了私有二进制头：
-
-- `sgim_gd_usrbg.bin` 的记录是 `[u16 字节长][UTF-16LE 文本][u16 字节长+6]`。
-  最后那个字段等于「字节长 + 6」，正好当校验和用——能把字节错位产生的假词
-  （`吐嚕`、`吀崀` 这类）全部滤掉，实测 5.3 万条命中、几乎无噪声。
-- `sgim_gd_usr.bin` 尾部字段不是 `len+6`，退回「长度前缀 + 全 CJK」的宽松规则，
-  噪声靠后面的「必须能注音」过滤。
+搜狗没有公开文档，但实测词条是**明文 UTF-16LE**，只是外面套了私有二进制头。
+`sgim_gd_usrbg.bin` 的记录尾部有个「字节长 + 6」字段，正好当校验和用，能把字节错位
+产生的假词（`吐嚕`）全滤掉；`sgim_gd_usr.bin` 没这个字段，退回宽松规则 + 注音过滤。
+细节见 `handoff.md`「关键事实」里的搜狗三行。
 
 ### 注音策略（多音字为什么是准的）
 
@@ -845,119 +820,6 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 ## 验证清单
 
-**M1（骨架）**
-
-1. `build.ps1` 成功，生成 `feihe.dll`，且 `objdump -p` 的导入表里**没有** `libunwind.dll`
-2. `register.cmd` 后 `HKCU\Control Panel\International\User Profile\zh-Hans-CN` 出现 `0804:{70CB823D...}{DA6B9170...}`
-3. 键盘列表出现「飞鹤拼音」（列表由 shell 缓存，必要时注销重登）
-4. 切到飞鹤后，`Ctrl+C` / `Alt+Tab` / `Win+Space` 等快捷键仍然正常（不被吞）
-5. `unregister.cmd` 卸载干净，无残留
-
-**M2（输入）**
-
-6. 任意输入框敲 `nihc` → 组合串显示 `nihc`，光标下方弹出候选窗，第一个是「你好」
-7. 空格上屏「你好」；敲 `vsgo` + 空格 → 「中国」；敲 `ui` → 候选里第一项「是」
-8. 敲 `de` → 候选窗第一页是 的/地/得/德…，按 `3` 上屏「得」
-9. 敲 `nih` 后连按 `=`（或 `↓`）能翻页，`-`（或 `↑`）回上一页，`←/→` 能改选中项
-10. 敲 `nihc` 后 `Esc` → 组合串消失，文档无残留
-11. 敲 `ni` 后退格两次 → 组合态结束，文档无残留
-12. 敲到一半按 `Ctrl+C` → 组合串先提交，再执行复制
-
-**用户词库（搜狗导入）**
-
-13. `python tools/import_sogou.py` 输出「最终写入：约 5 万条」，`src/user_dict.txt` 约 1.1MB
-14. 敲你平时常用、但基础词库里没有的短语（比如常打的短句），候选窗里能出
-15. 用户词排在基础词前面：敲 `de`，如果搜狗词库里有以 `de` 开头的常用词，它应排在「的」之前
-16. 反复执行 `import_sogou.py` 两次，`user_dict.txt` 内容一致（幂等）
-17. 把 `src/user_dict.txt` 清空后重新构建，发布 DLL 回到 3.0 MB、`base.bin` 38024 条，
-    说明没导入时不影响基础功能
-
-**M3（32 位支持 / 长句分隔）**
-
-18. `build.ps1` 默认产出两份 DLL，PE 头分别是 `Machine=0x8664` 和 `0x014c`，
-    且两次 `[test] xx : PASS`（LoadLibrary + DllGetClassObject + CreateInstance）
-19. `objdump -p` 里两份 DLL 的导入表都**没有** `libunwind.dll`
-20. `register.cmd` 后 `HKLM\SOFTWARE\Classes\Wow6432Node\CLSID\{70CB823D...}\InprocServer32`
-    指向 `%ProgramData%\Feihe\feihe32.dll`，且 `HKLM\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\{70CB823D...}`
-    有完整的 Category / LanguageProfile
-21. 在 32 位宿主里（例如 32 位 Office、`C:\Windows\SysWOW64\notepad.exe`）能用飞鹤打字
-22. 打 `vhsjlisi` 时若词库无「张三李四」→ 进分词模式，`←/→` 能移段、数字能换词
-23. 全拼模式下打 `nihaoshijie` → 切成 `[你好]世界` 两段（不再是整串挂字母）
-24. `xi'an` 能强制切成 `xi`+`an`；`ni'hao` 的分隔符不会出现在上屏文本里
-25. 微软双拼下 `;` 仍然出 `ing`，分隔用 `'`
-
-**M3.5（交互打磨）**
-
-26. 鼠标点候选窗里的词 → 直接上屏该项；按下后拖到窗外再松开 → 不上屏（防误触）
-27. 点候选窗不会让输入框失焦，点完继续按键仍然进组合态（`WM_MOUSEACTIVATE → MA_NOACTIVATE`）
-28. 敲单键 `n` → 候选窗只有 18 项（2 页）；敲 `ni` → 45 项（5 页）；三键及以上满 90
-29. 设置窗勾掉「动态调频」→ 选词后候选顺序不再变化；点「重置」提示清空的条数
-30. 打完一轮字后 `%TEMP%` 下**没有** `feihe-trace.log`（诊断日志已移除）
-31. 打 `limkyr` 进分词显示 `[李明]远`，按退格 → `[李]明远`（候选变成「李」的字候选），
-    再按退格 → 编码退回 `limk`、候选出现「李明」（拆词那一步不丢编码）
-
-**M3.6（农历 / 干支 / 节气 + 用户手册）**
-
-32. 敲 `/nl` → 第一项形如「农历丙午年九月十四」，和手机日历对得上；
-    闰月那一年（如 2023 闰二月）会显示「闰二月」
-33. 敲 `/gz` → 四柱形如「丙午年 戊戌月 庚午日 壬午时」；立春前后各试一天，年柱会变
-    （春节前后试则不变——年柱按立春换，不按春节换）
-34. 敲 `/jq` → 给出下一个节气（如「2026年11月7日 立冬」）；当天正好是节气日则给当天
-35. 只敲一个 `/` → 8 个命令的当前值预览都能出来，`/nl`/`/gz`/`/jq` 在内
-36. 安装目录下有 `使用帮助.md`，用记事本打开中文不乱码（UTF-8 BOM），卸载后一起消失
-
-**M3.7（一级简码 / 手动置顶 / 不弹窗模式）**
-
-37. 敲单键 `d` → 第一个候选是「的」；`u`→是、`v`→这、`i`→出、`f`→非（26 键逐个试）
-38. 敲单键 `d` → 候选**全是单字**（不再出现「都是 / 对了」这类两字词）
-39. 敲 `de` → 第一个仍是「的」，但这时是词频在起作用，不是一简字
-40. 打 `d`，按 `Ctrl+2` 选「大」→ 上屏「大」，且以后 `d` 的第一个变成「大」
-41. 再打 `d`，对已经是第一的「大」按 `Ctrl+1` → 取消置顶，`d` 回到「的」
-42. `%APPDATA%\Feihe\pinned.txt` 里能看到 `d<TAB>大`；手改成别的词、切一次输入法后生效
-43. 设置窗显示「置顶 d→大 · Ctrl+数字 切换」，点「清空」后提示取消的条数
-44. 敲 `d` 后立刻按 `Ctrl+C` → 组合串先提交，不误触发置顶
-45. 设置窗勾上「不弹窗模式」→ 候选窗和状态浮窗都消失，组合串变成 `nihc  1.你好 2.拟好 …`
-46. 不弹窗下空格出第一候选、数字键照样选、`-`/`=` 照样翻页
-47. 不弹窗下按 `Ctrl+Shift+U` → 恢复候选窗和浮窗（这是唯一的键盘出口）
-48. 关闭后 `config.ini` 里 `no_popup=0`，`config_ver=5`
-
-**M3.8（TSF UILess）**
-
-49. 在一个按 UILess 启动的宿主里（或临时把 TIP 的 `ActivateEx` 打日志确认 `dwflags`
-    带 `0x1`）：打字时候选由**宿主**画出来，飞鹤的候选窗不出现
-50. 同一宿主里 `%APPDATA%\Feihe\config.ini` 的 `no_popup=1` 时，候选**不再**往组合串里
-    塞一份（宿主已经画了，两份会重复）
-51. 宿主返回「你自己画」（普通记事本）时行为不变，候选窗照常弹出
-
-**快捷输入（引导符 `/`）**
-
-52. 中文态敲 `/` → 组合串里出现 `/`，候选是八个命令的当前值预览
-53. 敲 `/rq` → 第一个候选是今天的日期；`/r` 效果一样
-54. 只敲 `/` 再按回车 → 上屏 `/`（开全角标点则上屏 `／`）
-55. 中文态敲 `\` → 上屏顿号 `、`（不再有第二个键出顿号）
-56. 敲 `/` 后按数字键 → 选的是候选（八个命令），数字不会被塞进组合串
-57. 英文态敲 `/` → 正常出半角斜杠，不弹候选窗
-
-**M3.9（自造词）**
-
-58. 打 `limkyr` 进分词（`[李明]远`），退格拆成单字、选「李」「明」「远」上屏「李明远」
-59. 再打 `limkyr` → **第一个候选就是「李明远」**，不用再拆词（`%APPDATA%\Feihe\phrases.txt`
-    里出现 `李明远<TAB>li ming yuan`）
-60. 切到全拼模式打 `limingyuan` → 同样能出「李明远」（存的是全拼，不是双拼码）
-61. 设置窗「动态调频」一栏显示自造词条数；点「重置」→ 提示清空了几个自造词，再打 `limkyr`
-    又回到自动分词（`phrases.txt` 只剩表头）
-
-**M3.10（回车 = 字母）**
-
-62. 中文态打 `mmap` → 组合串切成 `[面]ap`（`ap` 没有候选，只能当字母），按**回车** →
-    文档里是 `mmap`，**不是**「面ap」
-63. 打 `mmap` 再按 `，` → 上屏 `mmap，`（同样不走「面ap，」）
-64. 打 `nihao` 按回车 → 上屏 `nihao`；打 `nihao` 按空格 → 上屏「你好」
-65. 分词模式里先空格确认一段、再按回车 → 那一段保留汉字，其余段出字母
-
-**M3.11（Shift + 字母）**
-
-66. 中文态按住 Shift 敲 `A` → 文档里直接是 `A`，组合串里没有 `a`，候选窗不弹；
-    单独单击 Shift 仍然切中英文（没按别的键）
-67. 打 `ni` 再按 `Shift+A` → 上屏「你好A」（组合串先按当前候选结掉，大写粘在后面）
-68. `Ctrl+Shift+A`、`Shift+1`（`!`）、`Shift+/`（`?`）仍然原样交给应用，飞鹤不插手
+手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)（68 条）。
+不需要全跑——改到哪块就跑哪组，比如动 `textservice.rs` 的按键路径至少要跑 M2 + 分词 +
+回车三组。自动化那部分仍然是 `cargo test` + `tools/smoke_com.py`。
