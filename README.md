@@ -2,8 +2,8 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.1** ｜ 安装包 1.56 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
-不联网、不弹窗、无账号 ｜ 156 项单元测试
+**当前版本 0.2.2** ｜ 安装包 1.58 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
+不联网、不弹窗、无账号 ｜ 161 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
 > 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
@@ -261,6 +261,30 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 > 早期版本做过「边打边上屏」：整串没候选时把左边能匹配的部分直接上屏、剩下的开新一轮。
 > 实际用起来是灾难——打 `viuiq` 想输入「指示器」，屏幕上凭空出现「只是」，
 > 后面的 `qi` 又变成一个新的单字组合。已删除。
+
+### 易错词的读音提示（按错读音也能打出来）
+
+多音字词的读音，词库每条只存一个。`重庆` 挂在 `chong qing` 下，按 `zhong qing` 打
+永远出不来——用户并不知道自己读错了，只会以为词库里没收这个词。所以候选窗做了两件事：
+
+```text
+1.重庆 chóng qìng   2.弹窗 tán chuāng   3.你好   4.银行 yín háng
+        └── 小一号灰字，只在易错词后面出现
+```
+
+- **标注读音**：易错词后面跟一串带调的拼音，就在候选里，不用去查；
+- **错音容错**：按**默认读音**打也能出，追加在该码正常候选的**末尾**。打 `zhongqing`
+  先出「钟情」（它本来就是这个词），翻到最后还有「重庆」。
+
+「易错」的判定是逐字比较：词库读音 ≠ 这个字的默认读音、且该字是多音字。全库 4.6 万条
+里只有 **753 条**（`重庆`、`弹窗`、`川芎`、`六安`、`水雷屯`…），表在 `src/hint.txt`，
+26 KB，随 DLL 发布。其余词的读音没有歧义，不标注也不占宽度。
+
+设置里可以关掉标注（`reading=0`），候选窗宽度回到旧样子；错音容错不受这个开关影响
+——它多给一个候选，不多占一个像素。
+
+代价是 26 KB 的表：安装包 1.56 → 1.58 MB、64 位 DLL 3667 → 3706 KB。换来的是 753 个
+易错词既能标对读音、又能按错读音打出来；不引任何依赖（pypinyin 只在生成期跑）。
 
 ### 长句：智能分隔 + 分词选择
 
@@ -562,7 +586,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶，共 148 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示，共 161 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -602,7 +626,7 @@ unregister.cmd    :: 全部移除
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.2.1.exe
+# 产物：dist\Feihe-Setup-0.2.2.exe
 ```
 
 `build_setup.ps1` 做四件事：
@@ -681,12 +705,15 @@ src/extra_place.txt   地名（438 条，同上）
 src/extra_drug.txt    通用药品名（611 条，同上）
 src/extra_tcm_herb.txt   中药名（466 条，同上）
 src/extra_tcm_patent.txt 中成药名 / 方剂（327 条，同上）
+src/hint.txt          易错词读音表（753 条，gen_hint.py 生成，勿手改）
 src/user_dict.txt     用户词库（import_sogou.py 生成，可反复重跑；未导入时为空文件）
 tools/wordlists/      上面 12 份词表的源（一行一个词，手工可编辑）
 tools/gen_extra.py    词表 → 拼音 → src/extra_*.txt（拼音用 pypinyin，词库读音校验）
+tools/gen_hint.py     易错词 → 带调读音 + 错音码 → src/hint.txt
 tools/pinyin_overrides.txt  人工校正的多音字 / 地名古音读音
 build.rs              生成 base.bin（预编码三套码）+ 编译图标资源
 src/candidate.rs      候选窗（自绘 WS_POPUP + GDI，不抢焦点，支持鼠标点选）
+src/hint.rs           易错词读音提示 + 错音容错（hint.txt 的三套前缀索引）
 src/statusbar.rs      状态浮窗（中/英、全/半、符号、设置；可拖动 + 前台判定）
 src/softkbd.rs        特殊符号软键盘（9×5 自绘网格）
 src/settings.rs       设置窗（原生控件：输入模式 / 方案 / 皮肤 / 字形 / 全角 / 不弹窗 / 调频 / 置顶 / 词库）
@@ -977,6 +1004,6 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 ## 验证清单
 
-手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)（86 条）。
+手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)（125 条）。
 不需要全跑——改到哪块就跑哪组，比如动 `textservice.rs` 的按键路径至少要跑 M2 + 分词 +
 回车三组。自动化那部分仍然是 `cargo test` + `tools/smoke_com.py`。

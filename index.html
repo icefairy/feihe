@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.56 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.58 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -231,7 +231,7 @@
 
 <header>
   <div class="wrap hero">
-    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.2.1</b></span>
+    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.2.2</b></span>
     <h1>一个只有几 MB 的<br><span class="thin">双拼输入法</span></h1>
     <p class="lede">
       飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼（含一简 26 字 + 二简 370 词），词库在构建期预编码成
@@ -268,17 +268,19 @@
           <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
         </thead>
         <tbody>
-          <tr><td>安装包</td><td class="me">1.39 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
-          <tr><td>装完占用</td><td class="me">约 6.0 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
+          <tr><td>安装包</td><td class="me">1.58 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>装完占用</td><td class="me">约 6.5 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
           <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
           <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
           <tr><td>开源</td><td class="yes">是，Rust 全文可改</td><td class="no">否</td><td class="no">否</td></tr>
           <tr><td>小鹤双拼</td><td class="yes">原生，不用装方案</td><td class="half">支持</td><td class="half">支持</td></tr>
           <tr><td>一简 / 二简</td><td class="yes">原生 26 + 370 条</td><td class="half">随方案</td><td class="no">无</td></tr>
-          <tr><td>词库规模</td><td class="no">3.8 万条</td><td class="yes">数百万级云词库</td><td class="half">系统词库</td></tr>
+          <tr><td>词库规模</td><td class="no">4.6 万条</td><td class="yes">数百万级云词库</td><td class="half">系统词库</td></tr>
           <tr><td>生僻字</td><td class="yes">GB2312 + 规范字表全收，缺 0</td><td class="yes">全</td><td class="yes">全</td></tr>
           <tr><td>动态词频</td><td class="yes">本地学习</td><td class="yes">云端 + 本地</td><td class="yes">本地</td></tr>
           <tr><td>简繁切换</td><td class="yes">Windows NLS，零体积</td><td class="yes">有</td><td class="yes">有</td></tr>
+          <tr><td>多音字错音容错</td><td class="yes">753 个易错词，按错读音也能出</td><td class="half">有拼音纠错</td><td class="half">有</td></tr>
+          <tr><td>易错词读音标注</td><td class="yes">候选里直接带调（重庆 chóng qìng）</td><td class="no">无</td><td class="no">无</td></tr>
           <tr><td>模糊音</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>语音输入</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>云同步 / 云词库</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
@@ -461,7 +463,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <span class="c"># 3. 打安装包（发布模式，排除本机个人词库）</span>
 <span class="p">powershell</span> -ExecutionPolicy Bypass -File installer\build_setup.ps1
-<span class="c"># → dist\Feihe-Setup-0.2.1.exe</span></pre>
+<span class="c"># → dist\Feihe-Setup-0.2.2.exe</span></pre>
 
     <div class="grid" style="margin-top:20px">
       <div class="card">
@@ -505,6 +507,7 @@ rustup target add i686-pc-windows-gnullvm
       已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词（退格可拆词）、
       候选窗鼠标点选、一级简码（<code>d</code> 出「的」，次选 <code>d;</code> 出「打」）、二级简码（<code>nd</code> 出「难道」，370 条两键词）、手动置顶（<code>Ctrl</code>+数字，或右键点候选——多页签程序里 <code>Ctrl+1..9</code> 被抢走时用这个）、
       全屏游戏 UILess（候选交给游戏自绘）、候选窗有全屏自动检测（游戏 / 演示时自动收起，不用改设置）、
+      易错词读音标注 + 错音容错（<code>zhongqing</code> 也能打出「重庆 chóng qìng」）、
       快捷输入（日期 / 时间 / 农历 / 干支四柱 / 下一个节气）、
       全角标点、简繁切换、动态词频、自造词（拼过的词自动记住）、状态浮窗、设置窗、符号软键盘、搜狗个人词库导入、
       用户词库编译成二进制走 mmap。
@@ -514,7 +517,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <footer>
   <div class="wrap row">
-    <span>飞鹤输入法 v0.2.1 · Rust + windows-rs · Windows TSF</span>
+    <span>飞鹤输入法 v0.2.2 · Rust + windows-rs · Windows TSF</span>
     <a href="https://github.com/icefairy/feihe">源码</a>
     <a href="https://github.com/icefairy/feihe/blob/main/README.md">文档</a>
     <a href="https://github.com/icefairy/feihe/blob/main/handoff.md">实现笔记</a>

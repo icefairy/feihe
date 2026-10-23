@@ -42,6 +42,8 @@ const CLASS_NAME: PCWSTR = w!("FeiheCandidateWindow");
 const PAD: i32 = 10;
 const GAP: i32 = 16;
 const HEIGHT: i32 = 30;
+/// 候选词和它后面那串读音小字之间的缝
+const HINT_GAP: i32 = 5;
 
 /// 一页最多几个候选（数字键 1-9）
 pub const PAGE_SIZE: usize = 9;
@@ -157,6 +159,41 @@ fn invoke_right(index: usize) {
 /// 重建任何东西，也不会因为转换而影响「选中项对齐到哪个词」的判断。
 fn label(index_in_page: usize, word: &str) -> String {
     format!("{}.{}", index_in_page + 1, crate::zhconv::apply(word))
+}
+
+/// 这一项要不要在词后面标读音（`chóng qìng`）。
+///
+/// 只有 `hint` 表里的「易错词」才有——全库 4.5 万条里 753 条。全标会把候选窗
+/// 撑成两倍宽，而绝大多数词（`你好`、`我们`）读音毫无歧义，标了纯属噪音。
+fn hint_of(word: &str) -> Option<&'static str> {
+    if !config::reading() {
+        return None;
+    }
+    crate::hint::toned(word)
+}
+
+/// 量一项的宽度：主文字 + 可选读音小字。
+///
+/// 两个字号必须**分别**量：小字比主字矮 1px、窄一截，拿主字的宽度去摆小字会
+/// 让相邻候选之间忽宽忽窄。绘制和命中判定都调这里，才不会出现「看着在这、
+/// 点不到」的偏差。
+unsafe fn measure(hdc: HDC, text: &str, hint: Option<&str>) -> (i32, i32) {
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let mut size = SIZE::default();
+    let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
+
+    let hw = match hint {
+        None => 0,
+        Some(h) => {
+            let old = SelectObject(hdc, crate::font::small());
+            let hwide: Vec<u16> = h.encode_utf16().collect();
+            let mut hs = SIZE::default();
+            let _ = GetTextExtentPoint32W(hdc, &hwide, &mut hs);
+            SelectObject(hdc, old);
+            hs.cx
+        }
+    };
+    (size.cx, hw)
 }
 
 fn page_slice(st: &CandState) -> &[String] {
@@ -314,10 +351,18 @@ unsafe fn paint(hwnd: HWND) {
 
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
+    paint_content(hdc, &rc);
 
+    let _ = EndPaint(hwnd, &ps);
+}
+
+/// 真正的绘制。抽成函数是为了能在测试里画到内存 DC 上截图——`paint` 绑死
+/// `BeginPaint`，没有窗口就没法验证布局，而「小字提示把相邻候选挤歪」这类问题
+/// 恰恰只有画出来才看得见。
+unsafe fn paint_content(hdc: HDC, rc: &RECT) {
     let p = crate::theme::current();
-    crate::font::fill(hdc, &rc, p.bg);
-    crate::font::frame(hdc, &rc, p.border);
+    crate::font::fill(hdc, rc, p.bg);
+    crate::font::frame(hdc, rc, p.border);
 
     SelectObject(hdc, crate::font::ui());
     SetBkMode(hdc, TRANSPARENT);
@@ -325,7 +370,6 @@ unsafe fn paint(hwnd: HWND) {
     let st = STATE.lock().unwrap();
     let items = page_slice(&st);
     if items.is_empty() {
-        let _ = EndPaint(hwnd, &ps);
         return;
     }
 
@@ -333,16 +377,19 @@ unsafe fn paint(hwnd: HWND) {
     for (i, word) in items.iter().enumerate() {
         let text = label(i, word);
         let wide: Vec<u16> = text.encode_utf16().collect();
+        let hint = hint_of(word);
 
         let mut size = SIZE::default();
         let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
+        let (_, hw) = measure(hdc, &text, hint);
+        let total = size.cx + if hint.is_some() { HINT_GAP + hw } else { 0 };
 
         // st.selected 是页内序号，不是全局序号
         if i == st.selected {
             let hi = RECT {
                 left: x - 4,
                 top: 3,
-                right: x + size.cx + 4,
+                right: x + total + 4,
                 bottom: rc.bottom - 3,
             };
             crate::font::fill(hdc, &hi, p.accent);
@@ -351,11 +398,25 @@ unsafe fn paint(hwnd: HWND) {
             SetTextColor(hdc, p.text);
         }
 
-        let _ = TextOutW(hdc, x, (rc.bottom - size.cy) / 2, &wide);
-        x += size.cx + GAP;
-    }
+        let ty = (rc.bottom - size.cy) / 2;
+        let _ = TextOutW(hdc, x, ty, &wide);
 
-    let _ = EndPaint(hwnd, &ps);
+        // 读音紧跟词后，小一号、灰一档：它是注解，不能和候选本身抢注意力
+        if let Some(h) = hint {
+            let hwide: Vec<u16> = h.encode_utf16().collect();
+            let old = SelectObject(hdc, crate::font::small());
+            SetTextColor(hdc, if i == st.selected { p.accent_text } else { p.dim });
+            let mut hs = SIZE::default();
+            let _ = GetTextExtentPoint32W(hdc, &hwide, &mut hs);
+            // 比主文字低 2px，视觉上挂在词的下沿，不跟序号抢同一行
+            let _ = TextOutW(hdc, x + size.cx + HINT_GAP, ty + 2, &hwide);
+            SelectObject(hdc, old);
+            // 小字画完要把颜色恢复给下一个候选用（SetTextColor 不随字体还原）
+            SetTextColor(hdc, if i == st.selected { p.accent_text } else { p.text });
+        }
+
+        x += total + GAP;
+    }
 }
 
 /// 换肤后重绘（窗口不存在时什么也不做）
@@ -386,11 +447,11 @@ unsafe fn layout(items: &[String]) -> (i32, Vec<(i32, i32)>) {
     let mut x = PAD;
     let mut spans = Vec::with_capacity(items.len());
     for (i, word) in items.iter().enumerate() {
-        let wide: Vec<u16> = label(i, word).encode_utf16().collect();
-        let mut size = SIZE::default();
-        let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
-        spans.push((x - 4, x + size.cx + 4));
-        x += size.cx + GAP;
+        let text = label(i, word);
+        let (mw, hw) = measure(hdc, &text, hint_of(word));
+        let total = mw + if hw > 0 { HINT_GAP + hw } else { 0 };
+        spans.push((x - 4, x + total + 4));
+        x += total + GAP;
     }
     let _ = ReleaseDC(None, hdc);
     ((x - GAP + PAD).max(80), spans)
@@ -600,5 +661,89 @@ mod tests {
         assert_eq!(hit(&st, 54), None, "右端点属于不存在的下一项");
         st.spans.clear();
         assert_eq!(hit(&st, 10), None);
+    }
+
+    /// 把一页候选画到内存位图上存 BMP，人眼看布局。
+    ///
+    /// **不进 CI**：它不断言任何像素，只是把「小字提示、高亮框、候选间距」画出来。
+    /// 读音提示这种东西的毛病（挤在一起、被裁掉、灰得看不见）没有一条能用断言表达。
+    ///
+    ///     cargo test --lib snapshot -- --ignored --nocapture
+    ///
+    /// 产出 `target/candidate_snapshot.bmp`。
+    #[test]
+    #[ignore = "人工看布局用，不做断言"]
+    fn snapshot_hint_layout() {
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let words = ["重庆", "弹窗", "你好", "银行", "水雷屯", "我们"];
+        {
+            let mut st = STATE.lock().unwrap();
+            st.items = words.iter().map(|s| s.to_string()).collect();
+            st.selected = 1;
+            st.page = 0;
+        }
+        let items: Vec<String> = words.iter().map(|s| s.to_string()).collect();
+        let (w, spans) = unsafe { layout(&items) };
+        assert!(w > 100 && spans.len() == words.len());
+
+        unsafe {
+            let screen = GetDC(None);
+            let mem = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, w, HEIGHT);
+            let old = SelectObject(mem, bmp.into());
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: w,
+                bottom: HEIGHT,
+            };
+            paint_content(mem, &rc);
+
+            let stride = ((w * 3 + 3) / 4 * 4) as usize;
+            let mut bi = BITMAPINFO::default();
+            bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            bi.bmiHeader.biWidth = w;
+            bi.bmiHeader.biHeight = -HEIGHT; // 负数 = 自上而下，省得再翻转
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 24;
+            bi.bmiHeader.biCompression = BI_RGB.0;
+            let mut pix = vec![0u8; stride * HEIGHT as usize];
+            GetDIBits(
+                mem,
+                bmp,
+                0,
+                HEIGHT as u32,
+                Some(pix.as_mut_ptr() as *mut core::ffi::c_void),
+                &mut bi,
+                DIB_RGB_COLORS,
+            );
+
+            SelectObject(mem, old);
+            let _ = DeleteObject(HGDIOBJ(bmp.0));
+            let _ = DeleteDC(mem);
+
+            // 24 位 BMP：14 字节文件头 + 40 字节信息头
+            let mut out = Vec::with_capacity(54 + pix.len());
+            let size = (54 + pix.len()) as u32;
+            out.extend_from_slice(b"BM");
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&[0, 0, 0, 0]);
+            out.extend_from_slice(&54u32.to_le_bytes());
+            out.extend_from_slice(&40u32.to_le_bytes());
+            out.extend_from_slice(&w.to_le_bytes());
+            out.extend_from_slice(&(-HEIGHT).to_le_bytes());
+            out.extend_from_slice(&1u16.to_le_bytes());
+            out.extend_from_slice(&24u16.to_le_bytes());
+            out.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&(pix.len() as u32).to_le_bytes());
+            out.extend_from_slice(&[0u8; 16]);
+            out.extend_from_slice(&pix);
+
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/target/candidate_snapshot.bmp");
+            std::fs::write(path, &out).expect("写截图失败");
+            println!("截图：{path}（{w}x{HEIGHT}）");
+        }
     }
 }

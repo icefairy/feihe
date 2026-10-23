@@ -119,6 +119,8 @@ pub struct Config {
     pub learn: bool,
     /// 候选窗 / 状态浮窗何时不弹，见 `PopupMode`。
     pub popup: PopupMode,
+    /// 候选窗里给易错词标注带调读音（`重庆 chóng qìng`）。见 `hint` 模块。
+    pub reading: bool,
 }
 
 impl Config {
@@ -138,6 +140,9 @@ impl Config {
         learn: true,
         // 默认自动：全屏游戏 / 演示时收起候选窗，其余时候正常弹。
         popup: PopupMode::Auto,
+        // 默认开：易错词的读音该让人看见，不然「重」到底读 chóng 还是 zhòng
+        // 只能靠猜。不想要的人关掉即可，文字宽度会回到旧样子。
+        reading: true,
     };
 }
 
@@ -208,10 +213,23 @@ pub fn set_no_popup_for_test(v: bool) {
     POPUP_OVERRIDE.store(if v { 1 } else { 0 }, Ordering::Release);
 }
 
+/// **读音提示的原子镜像。** 候选窗每画一页都要问一遍（每项一次），走 Mutex 不划算。
+static READING: AtomicBool = AtomicBool::new(true);
+
+pub fn reading() -> bool {
+    READING.load(Ordering::Acquire)
+}
+
+pub fn set_reading(on: bool) {
+    READING.store(on, Ordering::Release);
+    update(|c| c.reading = on);
+}
+
 /// 把配置里的热路径开关同步到原子镜像。`load` / `update` 各调一次。
 fn sync_mirrors(cfg: &Config) {
     PINYIN_MODE.store(cfg.pinyin_mode, Ordering::Release);
     POPUP_MODE.store(cfg.popup.bits(), Ordering::Release);
+    READING.store(cfg.reading, Ordering::Release);
 }
 
 pub fn set_pinyin_mode(on: bool) {
@@ -316,6 +334,7 @@ fn parse(text: &str) -> (Config, u32) {
             "traditional" => cfg.traditional = parse_bool(v),
             "learn" => cfg.learn = parse_bool(v),
             "popup" => cfg.popup = PopupMode::from_key(v),
+            "reading" => cfg.reading = parse_bool(v),
             // v5 及更早的键名。`no_popup=1` 是用户勾过的 → 保持「一律不弹」；
             // `0` 是默认值 → 升级到自动检测（见 `load` 里的 v5→v6 说明）。
             "no_popup" | "uileless" => {
@@ -375,7 +394,8 @@ pub fn save(cfg: &Config) {
          pinyin_mode={}\n\
          traditional={}\n\
          learn={}\n\
-         popup={}\n",
+         popup={}\n\
+         reading={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -386,7 +406,8 @@ pub fn save(cfg: &Config) {
         cfg.pinyin_mode as u8,
         cfg.traditional as u8,
         cfg.learn as u8,
-        cfg.popup.key()
+        cfg.popup.key(),
+        cfg.reading as u8
     );
     // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
     // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程

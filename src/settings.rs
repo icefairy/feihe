@@ -58,6 +58,7 @@ const ID_LEARN_HINT: i32 = 135;
 const ID_POPUP_AUTO: i32 = 136;
 const ID_POPUP_ALWAYS: i32 = 137;
 const ID_POPUP_NEVER: i32 = 138;
+const ID_READING: i32 = 139;
 const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
 const ID_PIN_HINT: i32 = 143;
@@ -198,6 +199,7 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_POPUP_AUTO, cfg.popup == PopupMode::Auto);
     set_checked(h, ID_POPUP_ALWAYS, cfg.popup == PopupMode::Always);
     set_checked(h, ID_POPUP_NEVER, cfg.popup == PopupMode::Never);
+    set_checked(h, ID_READING, cfg.reading);
     set_checked(h, ID_LEARN, cfg.learn);
     let learned = crate::freq::len();
     let phrases = crate::phrase::len();
@@ -321,8 +323,11 @@ unsafe fn on_command(h: HWND, id: i32) {
             let on = checked(GetDlgItem(Some(h), ID_LEARN).unwrap_or_default());
             config::update(|c| c.learn = on);
         }
-        ID_POPUP_AUTO | ID_POPUP_ALWAYS | ID_POPUP_NEVER => {
-            let mode = match id {
+        ID_READING => {
+            let on = checked(GetDlgItem(Some(h), ID_READING).unwrap_or_default());
+            config::set_reading(on);
+        }
+        ID_POPUP_AUTO | ID_POPUP_ALWAYS | ID_POPUP_NEVER => {            let mode = match id {
                 ID_POPUP_ALWAYS => PopupMode::Always,
                 ID_POPUP_NEVER => PopupMode::Never,
                 _ => PopupMode::Auto,
@@ -471,6 +476,18 @@ unsafe fn build(h: HWND) {
         0,
     );
     y += 38; // 给上面两行提示留位置
+
+    // 读音提示紧跟在候选窗设置后面：两者都是「候选长什么样」
+    y += 6;
+    check(
+        h,
+        "易错词标注读音（重庆 chóng qìng）",
+        16,
+        y - 2,
+        420,
+        ID_READING,
+    );
+    y += 24;
 
     y += 12;
     check(h, "动态调频（按实际选词调整候选顺序）", 16, y - 2, 300, ID_LEARN);

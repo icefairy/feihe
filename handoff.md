@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-0.2.1 的功能全部落地，只有组合串下划线未做。这里只列「哪一块在哪、有什么讲究」，
+0.2.2 的功能全部落地，只有组合串下划线未做。这里只列「哪一块在哪、有什么讲究」，
 细节看各自专节。
 
 | 模块 | 位置 | 备注 |
@@ -706,6 +706,67 @@ WM_LBUTTONUP => {
 
 `phrases.txt` 里越靠前越新；同一个词再学一次只是挪到最前，不产生重复条目。
 
+## 易错词读音提示 + 错音容错（`hint.rs` + `hint.txt`）
+
+词库每条词条只存**一个**读音（`重庆` 挂在 `chong qing` 下），带来两个问题：
+用户看不出「重」读 chóng 还是 zhòng；按 `zhong qing` 打时词条根本不在这个码下，
+候选里不会出现——用户不会怀疑自己读错，只会以为词库里没收。
+
+数据是 `src/hint.txt`，`tools/gen_hint.py` 生成，**只有 753 条**（全库 4.6 万）：
+
+```
+词<TAB>带调读音[<TAB>按字级默认读音拼出的全拼]
+重庆	chóng qìng	zhong qing
+弹窗	tán chuāng	dan chuang
+水雷屯	shuǐ léi zhūn	shui lei tun
+```
+
+### 「易错」的判定
+
+逐字比：`词库读音`（人核对过，含 overrides 的古读）vs `该字的默认读音`（pypinyin 单字首选）。
+**不等、且该字是多音字** → 易错。`重审` = zhong shen 正好等于默认读音，不算易错——
+默认读音本来就是对的，提示是噪音。
+
+### 声调必须从「音节匹配」里挑，不能直接信 pypinyin 的词级结果
+
+这条是踩出来的：`pypinyin.pinyin("弹出")` 给的是 **dan**，而词库是 tan（`弹出` 的
+「弹」是 tán）。反过来把 pypinyin 的词级结果当基准，提示就会和词库读音打架，
+用户会看到「弹出 dàn chū」——比不提示更糟。
+
+做法：**词库全拼是基线**，逐字拿该字的全部带调读音（`heteronym=True` + `TONE3`），
+只保留「去调后 == 词库音节」的那些，再用 pypinyin 的词级判断在候选里挑一个
+（同音节不同调的情况：`发` 在「头发」读 fà、在「发现」读 fā，只能靠词级判断）。
+一个都匹配不上就报错退出，不猜。
+
+### 为什么容错不进 `dict::search`
+
+`lookup(code, 1)` 在分词、自造词、二简词里被当成「这个码有词吗」的判断用
+（`plan_segments` 的 `has`）。把错音变体掺进 `search`，`zhongqing` 就变成「有词」，
+分词结果跟着变。所以 `hint` 只提供查询，由 `textservice::refresh` 在候选定稿后追加。
+
+**追加在末尾**，不参与 `freq::rank` / 自造词 / 一简 / 置顶任何一道提权：撞码的 142 个
+变体里（`zhongqing` 本来就有「钟情」），排前面的永远是用户真正想要的那个。
+`append_wrong_reading` 抽成纯函数就是为了能单测这一条。
+
+变体索引在首次使用时按方案各建一份（小鹤 / 微软 / 全拼）并排序，之后每次按键一次二分。
+
+### 渲染
+
+`candidate::paint_content` 从 `paint` 里抽出来了（原来的 `paint` 绑死 `BeginPaint`，
+没窗口就没法验证布局）。`#[ignore]` 的 `snapshot_hint_layout` 把一页候选画到内存位图，
+存 `target/candidate_snapshot.bmp`：
+
+```
+cargo test --lib snapshot -- --ignored --nocapture
+```
+
+「小字把相邻候选挤歪」「拼音被窗口裁掉」「灰色看不清」这类问题没有一条能写成断言，
+只能画出来看。**几何必须是同一份**：`measure()` 同时供绘制和 `layout()` 用，
+否则点拼音小字会点空（命中区还是按主文字算的）。
+
+`config::reading` **只管显示**，容错始终生效——关掉标注是为了不想要那个宽度的用户，
+不该顺手把「打错也能出」这个能力也关掉。
+
 ## 候选窗何时收起（全屏自动检测）
 
 配置项 `popup`（`config_ver=6`，三态 `auto|always|never`）。v5 及以前叫 `no_popup`
@@ -1005,7 +1066,7 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 
 ```
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# → dist\Feihe-Setup-0.2.1.exe（约 1.25 MB，内嵌 5.8 MB 的双架构 DLL）
+# → dist\Feihe-Setup-0.2.2.exe（约 1.25 MB，内嵌 5.8 MB 的双架构 DLL）
 ```
 
 设计取舍：

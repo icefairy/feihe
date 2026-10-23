@@ -287,6 +287,20 @@ impl FeiheTextService {
         }
     }
 
+    /// 把「按错读音打」的词追加到候选末尾（`zhongqing` → 重庆）。
+    ///
+    /// 抽成纯函数是为了能单测：`refresh()` 要 `&self`，而 `self` 里全是 COM 句柄，
+    /// 测试进程造不出来。逻辑本身很薄——去重、追加、不改变已有顺序——但「追加到
+    /// 末尾」这个位置是刻意的：撞码的变体里排前面的永远是用户真正想要的那个
+    /// （`zhongqing` 首先是「钟情」）。
+    fn append_wrong_reading(list: &mut Vec<Cow<'static, str>>, code: &str, flat: bool) {
+        for w in crate::hint::wrong_reading(code, flat, 2) {
+            if !list.iter().any(|x| x.as_ref() == w) {
+                list.push(Cow::Borrowed(w));
+            }
+        }
+    }
+
     /// 全拼串 → 音节序列。
     ///
     /// DP：`ok[i]` 表示 `s[i..]` 能否完整切成合法音节；可行时贪心取最长
@@ -778,7 +792,7 @@ impl FeiheTextService {
         let assist_prefix = self.assist.borrow().clone();
         let mode = config::get().assist_mode;
         let limit = candidate_limit(&code);
-        let list = if config::pinyin_mode() {
+        let mut list = if config::pinyin_mode() {
             // 全拼模式：前缀是「全拼去掉空格」的串（nihao），走另一套索引
             dict::lookup_pinyin_filtered(query, &assist_prefix, mode, limit)
         } else if assist_prefix.is_empty() {
@@ -786,6 +800,19 @@ impl FeiheTextService {
         } else {
             dict::lookup_filtered(query, &assist_prefix, mode, limit)
         };
+
+        // 错音容错：用户按「这个字的默认读音」打多音字词时（`zhongqing` 想打「重庆」），
+        // 词库里那条词条挂在 chóng 下，正常查询永远出不来，用户只会以为没这个词。
+        // `hint` 表里存了这些词的默认读音码，命中就**追加到末尾**——不抢任何正常
+        // 候选的位置，因为撞码的 142 个变体（`zhongqing` 本来就有「钟情」）里，
+        // 排在前面的一定是用户真正想要的。
+        //
+        // 带辅助码时不追加：辅助码是按**首字读音**算的，错音词的首字读音本来就不同，
+        // 硬塞进来等于把用户刚做的那道筛选当没发生。
+        if assist_prefix.is_empty() {
+            FeiheTextService::append_wrong_reading(&mut list, query, config::pinyin_mode());
+        }
+
         self.candidates.borrow_mut().clone_from(&list);
         self.selected.set(0);
         self.page.set(0);
@@ -2357,6 +2384,31 @@ mod tests {
         dict::tests::SCHEME_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 错音容错只能**追加**，绝不能挤掉或重排正常候选。
+    ///
+    /// `zhongqing` 在词库里本来就有「钟情」，用户想打的「重庆」挂在 chóng 下面。
+    /// 如果容错词抢了 0 号位，正常打字的人按空格就会上屏一个自己没想要的词。
+    #[test]
+    fn wrong_reading_appends_at_end() {
+        let mut list: Vec<Cow<'static, str>> = vec![Cow::Borrowed("钟情")];
+        FeiheTextService::append_wrong_reading(&mut list, "zhongqing", true);
+        assert_eq!(list[0], "钟情", "正常候选被挤掉了");
+        assert!(
+            list.iter().skip(1).any(|w| w == "重庆"),
+            "没把重庆补进来：{list:?}"
+        );
+
+        // 已经在候选里（打对了读音）就不该重复
+        let mut dup: Vec<Cow<'static, str>> = vec![Cow::Borrowed("重庆")];
+        FeiheTextService::append_wrong_reading(&mut dup, "chongqing", true);
+        assert_eq!(dup.len(), 1, "重复追加：{dup:?}");
+
+        // 不相干的码一个都不该加
+        let mut none: Vec<Cow<'static, str>> = Vec::new();
+        FeiheTextService::append_wrong_reading(&mut none, "nihao", true);
+        assert!(none.is_empty(), "乱给了：{none:?}");
     }
 
     /// 不弹窗模式下候选要拼进组合串：没有候选窗，这是用户唯一能看到候选的地方。

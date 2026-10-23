@@ -10,6 +10,7 @@ use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::*;
 
 static FONT: AtomicIsize = AtomicIsize::new(0);
+static SMALL: AtomicIsize = AtomicIsize::new(0);
 
 /// 惰性创建并缓存 UI 字体。返回的句柄由本模块持有，调用方**不要** DeleteObject。
 pub fn ui() -> HGDIOBJ {
@@ -44,12 +45,50 @@ pub fn ui() -> HGDIOBJ {
     f
 }
 
+/// 小一号的字体：候选窗里的读音提示、状态浮窗的次要信息。
+///
+/// 比主字体矮 3px 而不是缩成 10px——雅黑在 10px 以下抗锯齿会糊成一团，
+/// 拼音本来就是给人「顺手看一眼」的，糊了不如不显示。
+pub fn small() -> HGDIOBJ {
+    let raw = SMALL.load(Ordering::Acquire);
+    if raw != 0 {
+        return HGDIOBJ(raw as *mut core::ffi::c_void);
+    }
+    let f = unsafe {
+        CreateFontW(
+            -12,
+            0,
+            0,
+            0,
+            FW_NORMAL.0 as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH.0 as u32,
+            w!("Microsoft YaHei UI"),
+        )
+    };
+    let f = if f.is_invalid() {
+        unsafe { HGDIOBJ(GetStockObject(DEFAULT_GUI_FONT).0) }
+    } else {
+        HGDIOBJ(f.0)
+    };
+    SMALL.store(f.0 as isize, Ordering::Release);
+    f
+}
+
 /// 进程退出前释放字体句柄（DLL 卸载时调用，避免 GDI 句柄泄漏）
 pub fn destroy() {
-    let raw = FONT.swap(0, Ordering::AcqRel);
-    if raw != 0 {
-        unsafe {
-            let _ = DeleteObject(HGDIOBJ(raw as *mut core::ffi::c_void));
+    for slot in [&FONT, &SMALL] {
+        let raw = slot.swap(0, Ordering::AcqRel);
+        if raw != 0 {
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(raw as *mut core::ffi::c_void));
+            }
         }
     }
 }

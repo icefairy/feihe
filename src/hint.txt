@@ -1,0 +1,757 @@
+# 易错词读音表（自动生成，勿手改）
+# 由 tools/gen_hint.py 从词库 + pypinyin 生成，重跑：python tools/gen_hint.py --write
+# 格式：词<TAB>带调读音[<TAB>按字级默认读音拼出的全拼]
+# 第三列 = 「用户可能按错的读音」，运行时编码后作为容错候选，追加在候选末尾。
+一刹那	yī chà nà	yi sha na
+一幢	yī zhuàng	yi chuang
+一模一样	yī mú yī yàng	yi mo yi yang
+一目了然	yī mù liǎo rán	yi mu le ran
+一目十行	yī mù shí háng	yi mu shi xing
+一行	yī háng	yi xing
+一针见血	yī zhēn jiàn xiě	yi zhen jian xue
+三重	sān chóng	san zhong
+下载排行	xià zài pái háng	xia zai pai xing
+不了	bù liǎo	bu le
+不了了之	bù liǎo liǎo zhī	bu le le zhi
+不了解	bù liǎo jiě	bu le jie
+不停地	bù tíng de	bu ting di
+不协调	bù xié tiáo	bu xie diao
+不懈地	bù xiè de	bu xie di
+不断地	bù duàn de	bu duan di
+不断调整	bù duàn tiáo zhěng	bu duan diao zheng
+不长	bù cháng	bu zhang
+专长	zhuān cháng	zhuan zhang
+世界银行	shì jiè yín háng	shi jie yin xing
+中国银行	zhōng guó yín háng	zhong guo yin xing
+中央空调	zhōng yāng kōng tiáo	zhong yang kong diao
+中央银行	zhōng yāng yín háng	zhong yang yin xing
+中行	zhōng háng	zhong xing
+中长期	zhōng cháng qī	zhong zhang qi
+丹参	dān shēn	dan can
+丹参酮	dān shēn tóng	dan can tong
+丹参饮	dān shēn yǐn	dan can yin
+为目的	wèi mù dì	wei mu de
+为谁	wèi shéi	wei shui
+主要目的	zhǔ yào mù dì	zhu yao mu de
+主角	zhǔ jué	zhu jiao
+乐器	yuè qì	le qi
+乐团	yuè tuán	le tuan
+乐曲	yuè qǔ	le qu
+乐清	yuè qīng	le qing
+乐章	yuè zhāng	le zhang
+乐谱	yuè pǔ	le pu
+乐队	yuè duì	le dui
+也得	yě děi	ye de
+了不起	liǎo bù qǐ	le bu qi
+了事	liǎo shì	le shi
+了得	liǎo de	le de
+了断	liǎo duàn	le duan
+了结	liǎo jié	le jie
+了解	liǎo jiě	le jie
+了解一下	liǎo jiě yī xià	le jie yi xia
+了解到	liǎo jiě dào	le jie dao
+了解情况	liǎo jiě qíng kuàng	le jie qing kuang
+了解自己	liǎo jiě zì jǐ	le jie zi ji
+事了	shì liǎo	shi le
+亚投行	yà tóu háng	ya tou xing
+交通银行	jiāo tōng yín háng	jiao tong yin xing
+京都	jīng dū	jing dou
+亲家	qìng jia	qin jia
+人参	rén shēn	ren can
+人参养荣丸	rén shēn yǎng róng wán	ren can yang rong wan
+人参蛤蚧散	rén shēn gé jiè sàn	ren can ha jie san
+人民银行	rén mín yín háng	ren min yin xing
+仔猪	zǐ zhū	zai zhu
+仔细	zǐ xì	zai xi
+仔细的	zǐ xì de	zai xi de
+仔细观察	zǐ xì guān chá	zai xi guan cha
+仔细阅读	zǐ xì yuè dú	zai xi yue du
+价格便宜	jià gé pián yí	jia ge bian yi
+会计	kuài jì	hui ji
+会计人员	kuài jì rén yuán	hui ji ren yuan
+会计信息	kuài jì xìn xī	hui ji xin xi
+会计员	kuài jì yuán	hui ji yuan
+会计处理	kuài jì chǔ lǐ	hui ji chu li
+会计学	kuài jì xué	hui ji xue
+会计工作	kuài jì gōng zuò	hui ji gong zuo
+会计报表	kuài jì bào biǎo	hui ji bao biao
+会计核算	kuài jì hé suàn	hui ji he suan
+传记	zhuàn jì	chuan ji
+伺服	sì fú	ci fu
+似乎	sì hū	shi hu
+似乎是	sì hū shì	shi hu shi
+似乎有	sì hū yǒu	shi hu you
+佛像	fó xiàng	fu xiang
+佛学	fó xué	fu xue
+佛山	fó shān	fu shan
+佛山市	fó shān shì	fu shan shi
+佛手	fó shǒu	fu shou
+佛教	fó jiào	fu jiao
+佛法	fó fǎ	fu fa
+佛的	fó de	fu de
+佛祖	fó zǔ	fu zu
+佛经	fó jīng	fu jing
+佛说	fó shuō	fu shuo
+佛陀	fó tuó	fu tuo
+你得	nǐ děi	ni de
+供给	gōng jǐ	gong gei
+便宜	pián yí	bian yi
+便血	biàn xiě	bian xue
+修空调	xiū kōng tiáo	xiu kong diao
+修长	xiū cháng	xiu zhang
+倔强	jué jiàng	jue qiang
+偷偷地	tōu tōu de	tou tou di
+偿还	cháng huán	chang hai
+傻傻地	shǎ shǎ de	sha sha di
+充分地	chōng fèn de	chong fen di
+克莱斯勒	kè lái sī lè	ke lai si lei
+免不了	miǎn bù liǎo	mian bu le
+党参	dǎng shēn	dang can
+全行业	quán háng yè	quan xing ye
+全长	quán cháng	quan zhang
+六安	lù ān	liu an
+关卡	guān qiǎ	guan ka
+兴奋地	xīng fèn de	xing fen di
+其他行业	qí tā háng yè	qi ta xing ye
+再重新	zài chóng xīn	zai zhong xin
+冗长拖沓	rǒng cháng tuō tà	rong zhang tuo da
+农业银行	nóng yè yín háng	nong ye yin xing
+农行	nóng háng	nong xing
+几幢	jǐ zhuàng	ji chuang
+出差	chū chāi	chu cha
+出差单	chū chāi dān	chu cha dan
+出没	chū mò	chu mei
+出血	chū xiě	chu xue
+刀削面	dāo xiāo miàn	dao xue mian
+分行	fēn háng	fen xing
+切削	qiē xiāo	qie xue
+创造性地	chuàng zào xìng de	chuang zao xing di
+刨子	bào zǐ	pao zi
+制造行业	zhì zào háng yè	zhi zao xing ye
+刹那	chà nà	sha na
+刹那间	chà nà jiān	sha na jian
+努力地	nǔ lì de	nu li di
+劲风	jìng fēng	jin feng
+势在必得	shì zài bì děi	shi zai bi de
+勇敢地	yǒng gǎn de	yong gan di
+勒索软件	lè suǒ ruǎn jiàn	lei suo ruan jian
+勾勒	gōu lè	gou lei
+包扎	bāo zā	bao zha
+北沙参	běi shā shēn	bei sha can
+医药行业	yī yào háng yè	yi yao xing ye
+十二长生	shí èr cháng shēng	shi er zhang sheng
+半夏厚朴汤	bàn xià hòu pò tāng	ban xia hou pu tang
+协调	xié tiáo	xie diao
+协调发展	xié tiáo fā zhǎn	xie diao fa zhan
+协调工作	xié tiáo gōng zuò	xie diao gong zuo
+南无	nā mó	nan wu
+南沙参	nán shā shēn	nan sha can
+占卜	zhān bǔ	zhan bo
+卡在	qiǎ zài	ka zai
+厌恶	yàn wù	yan e
+厚朴	hòu pò	hou pu
+厦门	xià mén	sha men
+厦门大学	xià mén dà xué	sha men da xue
+厦门市	xià mén shì	sha men shi
+参差不齐	cēn cī bù qí	can cha bu qi
+参苓白术散	cān líng bái zhú sàn	can ling bai shu san
+及时了解	jí shí liǎo jiě	ji shi le jie
+及时调整	jí shí tiáo zhěng	ji shi diao zheng
+双重	shuāng chóng	shuang zhong
+反弹	fǎn tán	fan dan
+反省	fǎn xǐng	fan sheng
+发卡	fà qiǎ	fa ka
+受不了	shòu bù liǎo	shou bu le
+可恶	kě wù	ke e
+可的松	kě dì sōng	ke de song
+可调	kě tiáo	ke diao
+各行业	gè háng yè	ge xing ye
+各行各业	gè háng gè yè	ge xing ge ye
+合理地	hé lǐ de	he li di
+同行	tóng háng	tong xing
+同行业	tóng háng yè	tong xing ye
+否卦	pǐ guà	fou gua
+听音乐	tīng yīn yuè	ting yin le
+周长	zhōu cháng	zhou zhang
+呼吁	hū yù	hu xu
+命令行	mìng lìng háng	ming ling xing
+和稀泥	huò xī ní	he xi ni
+咖喱	gā lí	ka li
+咯血	kǎ xiě	ge xue
+咳血	ké xiě	ke xue
+哈佛	hā fó	ha fu
+哈佛大学	hā fó dà xué	ha fu da xue
+商业银行	shāng yè yín háng	shang ye yin xing
+商行	shāng háng	shang xing
+喀什	kā shí	ka shen
+器乐	qì yuè	qi le
+噬嗑	shì hé	shi ke
+噬嗑卦	shì hé guà	shi ke gua
+回调	huí tiáo	hui diao
+在成都	zài chéng dū	zai cheng dou
+在行	zài háng	zai xing
+在行业	zài háng yè	zai xing ye
+在重庆	zài chóng qìng	zai zhong qing
+在长期	zài cháng qī	zai zhang qi
+在音乐	zài yīn yuè	zai yin le
+地弹簧	dì tán huáng	di dan huang
+垄断行业	lǒng duàn háng yè	long duan xing ye
+垫圈	diàn juàn	dian quan
+埋怨	mán yuàn	mai yuan
+堵塞	dǔ sè	du sai
+声乐	shēng yuè	sheng le
+复方丹参滴丸	fù fāng dān shēn dī wán	fu fang dan can di wan
+复方阿胶浆	fù fāng ē jiāo jiāng	fu fang a jiao jiang
+外行	wài háng	wai xing
+外资银行	wài zī yín háng	wai zi yin xing
+多重	duō chóng	duo zhong
+多长时间	duō cháng shí jiān	duo zhang shi jian
+大不了	dà bù liǎo	da bu le
+大夫	dài fū	da fu
+大畜	dà xù	da chu
+大畜卦	dà xù guà	da chu gua
+大胆地	dà dǎn de	da dan di
+大都市	dà dū shì	da dou shi
+天地否	tiān dì pǐ	tian di fou
+天长地久	tiān cháng dì jiǔ	tian zhang di jiu
+太子参	tài zi shēn	tai zi can
+太行山	tài háng shān	tai xing shan
+太长	tài cháng	tai zhang
+央行	yāng háng	yang xing
+失调	shī tiáo	shi diao
+女主角	nǚ zhǔ jué	nv zhu jiao
+好似	hǎo sì	hao shi
+学佛	xué fó	xue fu
+完整性校验	wán zhěng xìng jiào yàn	wan zheng xing xiao yan
+宏观调控	hóng guān tiáo kòng	hong guan diao kong
+宝坻	bǎo dǐ	bao chi
+宝藏	bǎo zàng	bao cang
+客观地	kè guān de	ke guan di
+对称	duì chèn	dui cheng
+寿命长	shòu mìng cháng	shou ming zhang
+小畜	xiǎo xù	xiao chu
+小畜卦	xiǎo xù guà	xiao chu gua
+小长假	xiǎo cháng jià	xiao zhang jia
+少不了	shào bù liǎo	shao bu le
+就得	jiù děi	jiu de
+尼泊尔	ní bó ěr	ni po er
+尿血	niào xiě	niao xue
+屯卦	zhūn guà	tun gua
+山天大畜	shān tiān dà xù	shan tian da chu
+山火贲	shān huǒ bì	shan huo ben
+川芎	chuān xiōng	chuan qiong
+川芎茶调散	chuān xiōng chá diào sàn	chuan qiong cha diao san
+川芎茶调颗粒	chuān xiōng chá diào kē lì	chuan qiong cha diao ke li
+工商银行	gōng shāng yín háng	gong shang yin xing
+工行	gōng háng	gong xing
+左炔诺孕酮	zuǒ quē nuò yùn tóng	zuo gui nuo yun tong
+巧妙地	qiǎo miào de	qiao miao di
+巴勒斯坦	bā lè sī tǎn	ba lei si tan
+市场行情	shì chǎng háng qíng	shi chang xing qing
+希特勒	xī tè lè	xi te lei
+并给予	bìng jǐ yǔ	bing gei yu
+广泛地	guǎng fàn de	guang fan di
+应当给予	yīng dāng jǐ yǔ	ying dang gei yu
+延长	yán cháng	yan zhang
+建行	jiàn háng	jian xing
+建设银行	jiàn shè yín háng	jian she yin xing
+开户行	kāi hù háng	kai hu xing
+开户银行	kāi hù yín háng	kai hu yin xing
+张柏芝	zhāng bó zhī	zhang bai zhi
+张靓颖	zhāng liàng yǐng	zhang jing ying
+弹出	tán chū	dan chu
+弹力	tán lì	dan li
+弹力带	tán lì dài	dan li dai
+弹幕	tán mù	dan mu
+弹性	tán xìng	dan xing
+弹性伸缩	tán xìng shēn suō	dan xing shen suo
+弹性布局	tán xìng bù jú	dan xing bu ju
+弹窗	tán chuāng	dan chuang
+弹窗广告	tán chuāng guǎng gào	dan chuang guang gao
+弹簧	tán huáng	dan huang
+强劲	qiáng jìng	qiang jin
+归还	guī huán	gui hai
+形似	xíng sì	xing shi
+很长	hěn cháng	hen zhang
+很长呢	hěn cháng ne	hen zhang ne
+很长时间	hěn cháng shí jiān	hen zhang shi jian
+得在	děi zài	de zai
+得有	děi yǒu	de you
+得让	děi ràng	de rang
+得非常	děi fēi cháng	de fei chang
+心血	xīn xiě	xin xue
+志在必得	zhì zài bì děi	zhi zai bi de
+忘不了	wàng bù liǎo	wang bu le
+念佛	niàn fó	nian fu
+总行	zǒng háng	zong xing
+总长	zǒng cháng	zong zhang
+恐吓	kǒng hè	kong xia
+想了解	xiǎng liǎo jiě	xiang le jie
+慢慢地	màn màn de	man man di
+成佛	chéng fó	cheng fu
+成功地	chéng gōng de	cheng gong di
+成都	chéng dū	cheng dou
+成都市	chéng dū shì	cheng dou shi
+我得	wǒ děi	wo de
+所属行业	suǒ shǔ háng yè	suo shu xing ye
+手机银行	shǒu jī yín háng	shou ji yin xing
+扎染	zā rǎn	zha ran
+执着	zhí zhuó	zhi zhe
+投降	tóu xiáng	tou jiang
+抹布	mā bù	mo bu
+抹布架	mā bù jià	mo bu jia
+拉长	lā cháng	la zhang
+拖沓	tuō tà	tuo da
+招商银行	zhāo shāng yín háng	zhao shang yin xing
+招行	zhāo háng	zhao xing
+拜佛	bài fó	bai fu
+换行	huàn háng	huan xing
+据了解	jù liǎo jiě	ju le jie
+排行	pái háng	pai xing
+排行榜	pái háng bǎng	pai xing bang
+掺和	chān huo	can he
+提防	dī fáng	ti fang
+揲蓍	shé shī	die shi
+搪塞	táng sè	tang sai
+擅长	shàn cháng	shan zhang
+支行	zhī háng	zhi xing
+整个行业	zhěng gè háng yè	zheng ge xing ye
+敷衍了事	fū yǎn liǎo shì	fu yan le shi
+方便地	fāng biàn de	fang bian di
+无奈地	wú nài de	wu nai di
+时长	shí cháng	shi zhang
+时间长	shí jiān cháng	shi jian zhang
+时间长了	shí jiān cháng le	shi jian zhang le
+明了	míng liǎo	ming le
+明党参	míng dǎng shēn	ming dang can
+明显地	míng xiǎn de	ming xian di
+明确地	míng què de	ming que di
+是谁	shì shéi	shi shui
+曝光	bào guāng	pu guang
+更好地	gèng hǎo de	geng hao di
+更长	gèng cháng	geng zhang
+曾孙	zēng sūn	ceng sun
+最便宜	zuì pián yí	zui bian yi
+最长	zuì cháng	zui zhang
+有所了解	yǒu suǒ liǎo jiě	you suo le jie
+有的放矢	yǒu dì fàng shǐ	you de fang shi
+有谁	yǒu shéi	you shui
+服务行业	fú wù háng yè	fu wu xing ye
+朝霞	zhāo xiá	chao xia
+本行	běn háng	ben xing
+本行业	běn háng yè	ben xing ye
+枳壳	zhǐ qiào	zhi ke
+枸橼酸钙	jǔ yuán suān gài	gou yuan suan gai
+枸橼酸钾	jǔ yuán suān jiǎ	gou yuan suan jia
+枸橼酸铋钾	jǔ yuán suān bì jiǎ	gou yuan suan bi jia
+柏拉图	bó lā tú	bai la tu
+柏林	bó lín	bai lin
+校准	jiào zhǔn	xiao zhun
+校对	jiào duì	xiao dui
+校正	jiào zhèng	xiao zheng
+校验	jiào yàn	xiao yan
+校验和	jiào yàn hé	xiao yan he
+校验规则	jiào yàn guī zé	xiao yan gui ze
+桑螵蛸	sāng piāo xiāo	sang piao shao
+桔梗	jié gěng	ju geng
+桔梗汤	jié gěng tāng	ju geng tang
+槟榔	bīng láng	bin lang
+模具	mú jù	mo ju
+模板	mú bǎn	mo ban
+模板库	mú bǎn kù	mo ban ku
+模板消息	mú bǎn xiāo xī	mo ban xiao xi
+模样	mú yàng	mo yang
+正确地	zhèng què de	zheng que di
+残酷地	cán kù de	can ku di
+民生银行	mín shēng yín háng	min sheng yin xing
+气血	qì xiě	qi xue
+氢化可的松	qīng huà kě dì sōng	qing hua ke de song
+水雷屯	shuǐ léi zhūn	shui lei tun
+汇款银行	huì kuǎn yín háng	hui kuan yin xing
+汤匙	tāng chí	tang shi
+汽车行业	qì chē háng yè	qi che xing ye
+沉着	chén zhuó	chen zhe
+沙参	shā shēn	sha can
+沙参麦冬汤	shā shēn mài dōng tāng	sha can mai dong tang
+没收	mò shōu	mei shou
+没药	mò yào	mei yao
+波罗的海	bō luó dì hǎi	bo luo de hai
+波长	bō cháng	bo zhang
+活血	huó xiě	huo xue
+流血	liú xiě	liu xue
+流行音乐	liú xíng yīn yuè	liu xing yin le
+海参	hǎi shēn	hai can
+海螵蛸	hǎi piāo xiāo	hai piao shao
+消息模板	xiāo xī mú bǎn	xiao xi mo ban
+淡薄	dàn bó	dan bao
+淡豆豉	dàn dòu chǐ	dan dou shi
+深入了解	shēn rù liǎo jiě	shen ru le jie
+深刻地	shēn kè de	shen ke di
+深深地	shēn shēn de	shen shen di
+淹没	yān mò	yan mei
+清晰地	qīng xī de	qing xi di
+清楚地	qīng chǔ de	qing chu di
+清洗空调	qīng xǐ kōng tiáo	qing xi kong diao
+满意地	mǎn yì de	man yi di
+漂泊	piāo bó	piao po
+漫长	màn cháng	man zhang
+漯河	tà hé	luo he
+火雷噬嗑	huǒ léi shì hé	huo lei shi ke
+灾后重建	zāi hòu chóng jiàn	zai hou zhong jian
+炔诺酮	quē nuò tóng	gui nuo tong
+热血	rè xiě	re xue
+烹调	pēng tiáo	peng diao
+煮熟	zhǔ shóu	zhu shu
+熟人	shóu rén	shu ren
+熟悉	shóu xī	shu xi
+熟知	shóu zhī	shu zhi
+片长	piàn cháng	pian zhang
+牙龈	yá yín	ya ken
+牙龈出血	yá yín chū xiě	ya ken chu xue
+特长	tè cháng	te zhang
+犹豫地	yóu yù de	you yu di
+狠狠地	hěn hěn de	hen hen di
+率先	shuài xiān	lv xian
+率领	shuài lǐng	lv ling
+琢磨	zhuó mó	zuo mo
+瑜伽	yú jiā	yu ga
+瑜伽垫	yú jiā diàn	yu ga dian
+瑜伽球	yú jiā qiú	yu ga qiu
+用不着	yòng bù zhāo	yong bu zhe
+男主角	nán zhǔ jué	nan zhu jiao
+畜牧	xù mù	chu mu
+畜牧业	xù mù yè	chu mu ye
+畜牧兽医	xù mù shòu yī	chu mu shou yi
+番禺	pān yú	fan yu
+番茄	fān qié	fan jia
+番茄酱	fān qié jiàng	fan jia jiang
+疑似	yí sì	yi shi
+白术	bái zhú	bai shu
+白术散	bái zhú sàn	bai shu san
+的哥	dī gē	de ge
+的士	dī shì	de shi
+的确	dí què	de que
+皮下出血	pí xià chū xiě	pi xia chu xue
+盛饭	chéng fàn	sheng fan
+目的	mù dì	mu de
+目的在于	mù dì zài yú	mu de zai yu
+目的地	mù dì dì	mu de di
+目的就是	mù dì jiù shì	mu de jiu shi
+目的是	mù dì shì	mu de shi
+直截了当	zhí jié liǎo dàng	zhi jie le dang
+相似	xiāng sì	xiang shi
+相协调	xiāng xié tiáo	xiang xie diao
+看似	kàn sì	kan shi
+看谁	kàn shéi	kan shui
+真诚地	zhēn chéng de	zhen cheng di
+着了	zhāo le	zhe le
+着人	zhuó rén	zhe ren
+着力	zhuó lì	zhe li
+着地	zhuó dì	zhe di
+着实	zhuó shí	zhe shi
+着急	zháo jí	zhe ji
+着想	zhuó xiǎng	zhe xiang
+着手	zhuó shǒu	zhe shou
+着眼	zhuó yǎn	zhe yan
+着眼于	zhuó yǎn yú	zhe yan yu
+着色	zhuó sè	zhe se
+着装	zhuó zhuāng	zhe zhuang
+着迷	zháo mí	zhe mi
+着重	zhuó zhòng	zhe zhong
+睡不着	shuì bù zhāo	shui bu zhe
+睡着	shuì zháo	shui zhe
+睡着了	shuì zháo le	shui zhe le
+睡觉	shuì jiào	shui jue
+睡觉的	shuì jiào de	shui jue de
+瞎掺和	xiā chān huo	xia can he
+积极地	jī jí de	ji ji di
+空调	kōng tiáo	kong diao
+空调清洗	kōng tiáo qīng xǐ	kong diao qing xi
+空调滤	kōng tiáo lǜ	kong diao lv
+空调费	kōng tiáo fèi	kong diao fei
+签名校验	qiān míng jiào yàn	qian ming xiao yan
+类似	lèi sì	lei shi
+类似于	lèi sì yú	lei shi yu
+类似的	lèi sì de	lei shi de
+粘包	nián bāo	zhan bao
+紧紧地	jǐn jǐn de	jin jin di
+红军长征	hóng jūn cháng zhēng	hong jun zhang zheng
+组织协调	zǔ zhī xié tiáo	zu zhi xie diao
+细嚼慢咽	xì jiáo màn yàn	xi jue man yan
+细长	xì cháng	xi zhang
+终了	zhōng liǎo	zhong le
+结构调整	jié gòu tiáo zhěng	jie gou diao zheng
+给予	jǐ yǔ	gei yu
+给予奖励	jǐ yǔ jiǎng lì	gei yu jiang li
+给予警告	jǐ yǔ jǐng gào	gei yu jing gao
+给排水	jǐ pái shuǐ	gei pai shui
+缓缓地	huǎn huǎn de	huan huan di
+网上银行	wǎng shàng yín háng	wang shang yin xing
+耳熟	ěr shóu	er shu
+背景音乐	bèi jǐng yīn yuè	bei jing yin le
+胶着	jiāo zhuó	jiao zhe
+脑出血	nǎo chū xiě	nao chu xue
+腰椎间盘	yāo zhuī jiān pán	yao chui jian pan
+膀胱	páng guāng	bang guang
+自动泊车	zì dòng bó chē	zi dong po che
+自然地	zì rán de	zi ran di
+自由地	zì yóu de	zi you di
+自觉地	zì jué de	zi jue di
+般若	bō rě	ban ruo
+芫花	yuán huā	yan hua
+花都	huā dū	hua dou
+苍术	cāng zhú	cang shu
+苦参	kǔ shēn	ku can
+茄子	qié zi	jia zi
+草率	cǎo shuài	cao lv
+荜澄茄	bì chéng qié	bi cheng jia
+荸荠	bí qí	bi ji
+落下	là xià	luo xia
+落在	là zài	luo zai
+薄弱	bó ruò	bao ruo
+薄荷	bò hé	bao he
+薄荷糖	bò hé táng	bao he tang
+薄荷绿	bò hé lǜ	bao he lv
+薄荷脑	bò hé nǎo	bao he nao
+藏族	zàng zú	cang zu
+藏獒	zàng áo	cang ao
+藏蓝	zàng lán	cang lan
+藤蔓	téng wàn	teng man
+蚌埠	bèng bù	bang bu
+蛤壳	gé qiào	ha ke
+蛤蚧	gé jiè	ha jie
+蛤蚧定喘丸	gé jiè dìng chuǎn wán	ha jie ding chuan wan
+蛤蜊	gé lí	ha li
+血压	xiě yā	xue ya
+血型	xiě xíng	xue xing
+血糖	xiě táng	xue tang
+血脉	xiě mài	xue mai
+血腥	xiě xīng	xue xing
+血色	xiě sè	xue se
+行业	háng yè	xing ye
+行业分类	háng yè fēn lèi	xing ye fen lei
+行业协会	háng yè xié huì	xing ye xie hui
+行业发展	háng yè fā zhǎn	xing ye fa zhan
+行业标准	háng yè biāo zhǔn	xing ye biao zhun
+行业管理	háng yè guǎn lǐ	xing ye guan li
+行业自律	háng yè zì lǜ	xing ye zi lv
+行列	háng liè	xing lie
+行家	háng jia	xing jia
+行情	háng qíng	xing qing
+行货	háng huò	xing huo
+行长	háng zhǎng	xing zhang
+行间距	háng jiān jù	xing jian ju
+衣着	yī zhuó	yi zhe
+补给	bǔ jǐ	bu gei
+补肺阿胶汤	bǔ fèi ē jiāo tāng	bu fei a jiao tang
+补觉	bǔ jiào	bu jue
+表率	biǎo shuài	biao lv
+裸露	luǒ lòu	luo lu
+西洋参	xī yáng shēn	xi yang can
+西藏	xī zàng	xi cang
+要了解	yào liǎo jiě	yao le jie
+角色	jué sè	jiao se
+角色扮演	jué sè bàn yǎn	jiao se ban yan
+角逐	jué zhú	jiao zhu
+解决不了	jiě jué bù liǎo	jie jue bu le
+讨价还价	tǎo jià huán jià	tao jia hai jia
+该行	gāi háng	gai xing
+详细了解	xiáng xì liǎo jiě	xiang xi le jie
+说来话长	shuō lái huà cháng	shuo lai hua zhang
+诸佛	zhū fó	zhu fu
+谁不	shéi bù	shui bu
+谁也	shéi yě	shui ye
+谁会	shéi huì	shui hui
+谁呢	shéi ne	shui ne
+谁在	shéi zài	shui zai
+谁就	shéi jiù	shui jiu
+谁敢	shéi gǎn	shui gan
+谁是	shéi shì	shui shi
+谁有	shéi yǒu	shui you
+谁来	shéi lái	shui lai
+谁的	shéi de	shui de
+谁知	shéi zhī	shui zhi
+谁能	shéi néng	shui neng
+谁说	shéi shuō	shui shuo
+谁都	shéi dōu	shui dou
+调价	tiáo jià	diao jia
+调休	tiáo xiū	diao xiu
+调侃	tiáo kǎn	diao kan
+调制	tiáo zhì	diao zhi
+调剂	tiáo jì	diao ji
+调剂线	tiáo jì xiàn	diao ji xian
+调味	tiáo wèi	diao wei
+调味品	tiáo wèi pǐn	diao wei pin
+调和	tiáo hé	diao he
+调和油	tiáo hé yóu	diao he you
+调处	tiáo chǔ	diao chu
+调控	tiáo kòng	diao kong
+调整	tiáo zhěng	diao zheng
+调整了	tiáo zhěng le	diao zheng le
+调整后	tiáo zhěng hòu	diao zheng hou
+调料	tiáo liào	diao liao
+调料盒	tiáo liào hé	diao liao he
+调理	tiáo lǐ	diao li
+调皮	tiáo pí	diao pi
+调节	tiáo jié	diao jie
+调解	tiáo jiě	diao jie
+调试	tiáo shì	diao shi
+调试器	tiáo shì qì	diao shi qi
+调频	tiáo pín	diao pin
+豆豉	dòu chǐ	dou shi
+貌似	mào sì	mao shi
+财务会计	cái wù kuài jì	cai wu hui ji
+贲卦	bì guà	ben gua
+资产重组	zī chǎn chóng zǔ	zi chan zhong zu
+超长	chāo cháng	chao zhang
+越长	yuè cháng	yue zhang
+身着	shēn zhuó	shen zhe
+车行	chē háng	che xing
+轻松地	qīng sōng de	qing song di
+轻轻地	qīng qīng de	qing qing di
+较长	jiào cháng	jiao zhang
+输血	shū xiě	shu xue
+辗转	zhǎn zhuǎn	nian zhuan
+迅速地	xùn sù de	xun su di
+过长	guò cháng	guo zhang
+近似	jìn sì	jin shi
+返还	fǎn huán	fan hai
+还价	huán jià	hai jia
+还原	huán yuán	hai yuan
+还得	hái děi	hai de
+还款	huán kuǎn	hai kuan
+还贷	huán dài	hai dai
+进行调整	jìn xíng tiáo zhěng	jin xing diao zheng
+远远地	yuǎn yuǎn de	yuan yuan di
+退耕还林	tuì gēng huán lín	tui geng hai lin
+退还	tuì huán	tui hai
+适当地	shì dàng de	shi dang di
+都城	dū chéng	dou cheng
+都市	dū shì	dou shi
+都市报	dū shì bào	dou shi bao
+都得	dōu děi	dou de
+都江堰	dū jiāng yàn	dou jiang yan
+配乐	pèi yuè	pei le
+酷似	kù sì	ku shi
+采血	cǎi xiě	cai xue
+重修	chóng xiū	zhong xiu
+重叠	chóng dié	zhong die
+重合	chóng hé	zhong he
+重启	chóng qǐ	zhong qi
+重塑	chóng sù	zhong su
+重复	chóng fù	zhong fu
+重庆	chóng qìng	zhong qing
+重庆市	chóng qìng shì	zhong qing shi
+重建	chóng jiàn	zhong jian
+重播	chóng bō	zhong bo
+重整	chóng zhěng	zhong zheng
+重新	chóng xīn	zhong xin
+重新启动	chóng xīn qǐ dòng	zhong xin qi dong
+重新安装	chóng xīn ān zhuāng	zhong xin an zhuang
+重新开始	chóng xīn kāi shǐ	zhong xin kai shi
+重新编辑	chóng xīn biān jí	zhong xin bian ji
+重新获得	chóng xīn huò dé	zhong xin huo de
+重温	chóng wēn	zhong wen
+重现	chóng xiàn	zhong xian
+重申	chóng shēn	zhong shen
+重组	chóng zǔ	zhong zu
+重组人促红素	chóng zǔ rén cù hóng sù	zhong zu ren cu hong su
+重组人胰岛素	chóng zǔ rén yí dǎo sù	zhong zu ren yi dao su
+重装	chóng zhuāng	zhong zhuang
+重返	chóng fǎn	zhong fan
+重逢	chóng féng	zhong feng
+重重	chóng chóng	zhong zhong
+重阳	chóng yáng	zhong yang
+银行	yín háng	yin xing
+银行业	yín háng yè	yin xing ye
+银行卡	yín háng kǎ	yin xing ka
+银行存款	yín háng cún kuǎn	yin xing cun kuan
+银行汇款	yín háng huì kuǎn	yin xing hui kuan
+银行账号	yín háng zhàng hào	yin xing zhang hao
+银行账户	yín háng zhàng hù	yin xing zhang hu
+银行贷款	yín háng dài kuǎn	yin xing dai kuan
+长三角	cháng sān jiǎo	zhang san jiao
+长久	cháng jiǔ	zhang jiu
+长于	cháng yú	zhang yu
+长假	cháng jià	zhang jia
+长兴岛	cháng xīng dǎo	zhang xing dao
+长发	cháng fà	zhang fa
+长城	cháng chéng	zhang cheng
+长处	cháng chù	zhang chu
+长安	cháng ān	zhang an
+长寿	cháng shòu	zhang shou
+长年	cháng nián	zhang nian
+长度	cháng dù	zhang du
+长廊	cháng láng	zhang lang
+长征	cháng zhēng	zhang zheng
+长效	cháng xiào	zhang xiao
+长效机制	cháng xiào jī zhì	zhang xiao ji zhi
+长方形	cháng fāng xíng	zhang fang xing
+长时间	cháng shí jiān	zhang shi jian
+长时间的	cháng shí jiān de	zhang shi jian de
+长春	cháng chūn	zhang chun
+长春市	cháng chūn shì	zhang chun shi
+长春新碱	cháng chūn xīn jiǎn	zhang chun xin jian
+长春瑞滨	cháng chūn ruì bīn	zhang chun rui bin
+长期	cháng qī	zhang qi
+长期从事	cháng qī cóng shì	zhang qi cong shi
+长期以来	cháng qī yǐ lái	zhang qi yi lai
+长期使用	cháng qī shǐ yòng	zhang qi shi yong
+长期合作	cháng qī hé zuò	zhang qi he zuo
+长期投资	cháng qī tóu zī	zhang qi tou zi
+长期方案	cháng qī fāng àn	zhang qi fang an
+长期有效	cháng qī yǒu xiào	zhang qi you xiao
+长江	cháng jiāng	zhang jiang
+长沙	cháng shā	zhang sha
+长沙市	cháng shā shì	zhang sha shi
+长治	cháng zhì	zhang zhi
+长生	cháng shēng	zhang sheng
+长白山	cháng bái shān	zhang bai shan
+长的	cháng de	zhang de
+长短	cháng duǎn	zhang duan
+长篇	cháng piān	zhang pian
+长篇大论	cháng piān dà lùn	zhang pian da lun
+长篇小说	cháng piān xiǎo shuō	zhang pian xiao shuo
+长约	cháng yuē	zhang yue
+长线	cháng xiàn	zhang xian
+长虹	cháng hóng	zhang hong
+长虹玻璃	cháng hóng bō lí	zhang hong bo li
+长袜	cháng wà	zhang wa
+长裤	cháng kù	zhang ku
+长达	cháng dá	zhang da
+长远	cháng yuǎn	zhang yuan
+长连接	cháng lián jiē	zhang lian jie
+长途	cháng tú	zhang tu
+长颈鹿	cháng jǐng lù	zhang jing lu
+闵行区	mǐn háng qū	min xing qu
+阻塞	zǔ sè	zu sai
+阿弥陀佛	ē mí tuó fó	a mi tuo fu
+阿胶	ē jiāo	a jiao
+阿胶补血膏	ē jiāo bǔ xuè gāo	a jiao bu xue gao
+附着	fù zhuó	fu zhe
+降伏	xiáng fú	jiang fu
+雅鲁藏布江	yǎ lǔ zàng bù jiāng	ya lu cang bu jiang
+雷水解	léi shuǐ xiè	lei shui jie
+露出	lòu chū	lu chu
+露出了	lòu chū le	lu chu le
+露面	lòu miàn	lu mian
+青藏铁路	qīng zàng tiě lù	qing cang tie lu
+青藏高原	qīng zàng gāo yuán	qing cang gao yuan
+靓丽	liàng lì	jing li
+非得	fēi děi	fei de
+面熟	miàn shóu	mian shu
+鞭长莫及	biān cháng mò jí	bian zhang mo ji
+音乐	yīn yuè	yin le
+音乐会	yīn yuè huì	yin le hui
+音乐厅	yīn yuè tīng	yin le ting
+音乐家	yīn yuè jiā	yin le jia
+顺利地	shùn lì de	shun li di
+风天小畜	fēng tiān xiǎo xù	feng tian xiao chu
+首都	shǒu dū	shou dou
+马槟榔	mǎ bīng láng	ma bin lang
+高兴地	gāo xìng de	gao xing di
+黄柏	huáng bó	huang bai
+黄连阿胶汤	huáng lián ē jiāo tāng	huang lian a jiao tang
+黄陂	huáng pí	huang bei
+默默地	mò mò de	mo mo di
+鼻塞	bí sè	bi sai
