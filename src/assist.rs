@@ -37,14 +37,6 @@ impl AssistMode {
             AssistMode::Xiaohe => "xiaohe",
         }
     }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            AssistMode::Off => "关闭",
-            AssistMode::Ziranma => "自然码辅助码",
-            AssistMode::Xiaohe => "小鹤音形",
-        }
-    }
 }
 
 type Table = HashMap<char, (&'static str, &'static str)>;

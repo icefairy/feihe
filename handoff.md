@@ -24,7 +24,8 @@
 | 简繁切换 | ✅ `zhconv`：LCMapStringEx + LCMAP_TRADITIONAL_CHINESE，逐字映射 |
 | 全拼模式 | ✅ 设置窗「输入模式」单选，独立全拼索引，**落盘** |
 | 快捷输入 | ✅ `` ` `` 引导：`` `rq `` 日期 / `` `sj `` 时间 / `` `xq `` 星期 / `` `dt `` 日期时间 / `` `ts `` 时间戳 |
-| 鼠标点选候选 | ❌ 未做 |
+| 鼠标点选候选 | ✅ `layout()` 统一几何，按下/抬起同一项才算点击，`MA_NOACTIVATE` 不抢焦点 |
+| 候选数衰减 | ✅ 1 键 18 / 2 键 45 / 3 键以上 90（`candidate_limit`） |
 | 组合串下划线 | ❌ 未做（`ITfDisplayAttributeProvider`） |
 | Shift 中英切换 | ✅ 单击切（按住期间按过别的键就不算单击） |
 | 回车原样上屏 | ✅ 空格选候选、回车把编码原样上屏 |
@@ -247,6 +248,61 @@ if ver < CONFIG_VER { cfg.fullwidth = true; }   // v1→v2 的迁移
 > 教训：迁移条件永远写「小于哪个版本」，不要写「小于最新版本」。后者在加下一个
 > 版本时会静默重放所有历史迁移，用户设置被无声改掉，比崩溃还难查。
 
+
+## 候选窗鼠标点选（`candidate.rs`）
+
+候选窗是自绘的 `WS_POPUP`，本来就把点击吞掉了——「点了没反应」比「点了没这个功能」更难受。
+实现里有四个地方值得记一笔：
+
+**1. `#[implement]` 没有反向路径。** 它只生成「结构体 → 接口」的转换，
+拿到 `FeiheTextService_Impl` 的裸地址后没法再还原成 `&FeiheTextService`。
+而点击回调需要调 `_Impl` 上的私有方法（`pick` / `confirm_segment`），
+所以只能存裸地址 + 一个 `Arc<()>` 的 `Weak` 当存活令牌：对象析构后 `upgrade()` 失败，
+回调直接返回，不会打到野指针上。
+
+```rust
+let addr = self as *const FeiheTextService_Impl as usize;
+let alive = Arc::downgrade(&self.alive);
+candidate::set_click_handler(addr, move || {
+    let alive = alive.clone();
+    Arc::new(move |index| {
+        let Some(_token) = alive.upgrade() else { return };
+        let this = unsafe { &*(addr as *const FeiheTextService_Impl) };
+        this.on_candidate_click(index);
+    })
+});
+```
+
+**2. 命中区必须和绘制用同一份几何。** `layout()` 返回总宽 + 每项的 `(left, right)`，
+绘制和 `hit()` 都只认它。否则改个 `PAD` 或字体就变成「看着点到了、实际没中」，
+而且这种错只在特定词长下出现，很难对上。
+
+**3. 按下 + 抬起落在同一项才算点击。** `WM_LBUTTONDOWN` 记 `pressed` 并 `SetCapture`，
+`WM_LBUTTONUP` 比对后分发，中途 `WM_CAPTURECHANGED`（拖出去、被别的窗口抢）就清空。
+只认 `WM_LBUTTONUP` 会让「按下发现点错了、拖出去松开」变成误上屏。
+
+**4. 回调不能持锁调用。** 回调会走 edit session，可能又触发 `show()` → `set_click_handler()`，
+持着 `ON_CLICK` 的锁调用就是自锁。所以先克隆 `Arc`、释放锁，再调。
+
+> `SetCapture` / `ReleaseCapture` 归 `Win32::UI::Input::KeyboardAndMouse`，
+> 不在 `WindowsAndMessaging`，`windows` crate 的模块划分和直觉不一致。
+> 另外窗口要响应 `WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATE`，否则点候选窗会把
+> 输入框的焦点抢走，点完继续打字就打到别处去了。
+
+## 候选数按码长衰减（`textservice.rs`）
+
+```rust
+fn candidate_limit(code: &str) -> usize {
+    let n = code.chars().filter(|c| *c != SEP && !c.is_whitespace()).count();
+    match n { 0 | 1 => 18, 2 => 45, _ => MAX_CANDIDATES }   // 90
+}
+```
+
+单键（`n`）能命中几千个字，取前 90 个里绝大多数是用户永远不会选的。
+18 = 2 页，正好覆盖「我要的那个字在第二页」这种常见情况；三键以上才可能真的需要 90。
+
+改的是一个函数，但所有查询入口都得换：`refresh` 的两条路径、`confirm_segment`、
+分词 `lookup_any`。漏一处就会出现「分词时又冒出 90 个」。
 
 ## 词库架构（v3：静态二进制 + 运行时覆盖层）
 
@@ -598,27 +654,24 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 ## 调试手段
 
-`src/log.rs` 是**临时诊断日志**，写 `%TEMP%\feihe-trace.log`，格式
-`[毫秒][pid][ThreadId] 内容`。已在这些位置打点：
+**诊断日志已经删掉了。** 早期有一份 `src/log.rs`，往 `%TEMP%\feihe-trace.log` 打
+`[毫秒][pid][ThreadId] 内容`，在 `DllGetClassObject` / `CreateInstance` / `Activate` /
+`OnTestKeyDown` / `OnKeyDown` / `DoEditSession` / `candidate::show` 上都打了点。
+验收完成后连同 8 个文件里 55 处 `crate::trace!` 一起清了——发给别人的包不该往
+`%TEMP%` 写东西，而且每次按键都开文件句柄本身就有成本。
 
-- `DllGetClassObject` / `CreateInstance`
-- `Activate`（tid、focus、compartment 前后值、AdviseKeyEventSink 返回值）
-- `OnTestKeyDown` / `OnKeyDown`（虚拟键码 + 判断结果）
-- `DoEditSession`（Start/Update/Commit/Cancel + 失败原因）
-- `candidate::show`（窗口坐标、尺寸、候选数）
+要重新抓现场就照这个顺序恢复：把 `log.rs` 加回 `lib.rs` 的 `mod`，
+`trace!` 写成 `macro_rules!` 空实现即可（调用点已删，得按上面列表重新插）。
 
 **排查 TSF 问题的正确顺序**：先确认 sink 到底有没有被调用，再看组合态，最后才看候选窗。
 不要一上来就怀疑 UI。
-
-验收完成后把 `log.rs` 和所有 `crate::trace!` 调用删掉。
 
 ## 待办
 
 > 2026-10-23 逐条核实过代码，下面每条都确认「确实没做」。已做的都挪到「已完成」了。
 
-**M3 剩余部分**（`README` 的里程碑里 M3 列了三项，只完成了 Shift 中英切换）：
+**M3 剩余部分**（M3 列了四项，Shift 中英切换 / 点击选词 / 候选数衰减都已完成）：
 
-- [ ] 候选窗鼠标点击选词（现在窗口吞掉点击但不透传）
 - [ ] 组合串下划线（`GUID_DISPLAY_FEIHE` 已在 `clsid.rs` 定义，但没实现 `ITfDisplayAttributeProvider`）
 
 **功能**
@@ -635,12 +688,14 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 - [ ] 设置窗改双拼方案后，**其它已打开的进程**要重新激活才生效（方案缓存在各自的原子变量里；
       `Activate` 里已经会重读 config，所以只是「不即时」，不是「不生效」）
-- [ ] 删除诊断日志，回到干净构建（`src/log.rs` + 8 个文件里 55 处 `crate::trace!` 还在）
 - [ ] `C:\ProgramData\Feihe\` 下 **4 个** `feihe.dll.old-*`（约 16MB）被运行中的进程占用，
       重启后可删
 
 已完成（别再当待办）：
 
+- [x] 候选窗鼠标点击选词（`layout()` 统一几何 + `SetCapture` 按下/抬起判定，见专节）
+- [x] 单键候选数衰减（`candidate_limit`：1 键 18 / 2 键 45 / 3 键以上 90）
+- [x] 删除诊断日志（`src/log.rs` + 55 处 `crate::trace!` 全清，运行期不写 `%TEMP%`）
 - [x] Shift 单击切中英（`OnKeyUp` + 物理键态，见「中英切换」）
 - [x] 全拼兜底（`config::pinyin_mode()` + 独立的全拼索引）
 - [x] 回车原样上屏编码（`commit_raw`，快捷输入例外）
@@ -654,5 +709,4 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 ## 已知问题
 
-- 单键（如 `n`）会一次查出 90 个候选，偏多，可以按码长做衰减
 - `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现

@@ -5,16 +5,27 @@
 //! `WS_POPUP | WS_EX_NOACTIVATE | WS_EX_TOPMOST` 的窗口用 GDI 画，效果一样，
 //! 而且不会被宿主应用的窗口层级盖住。
 //!
-//! v1 只支持键盘选词（空格 / 数字 / 方向键），鼠标点击暂未接——
-//! 窗口会吞掉点击但不会把事件透给下层应用，避免误移光标导致组合被打断。
+//! ## 鼠标点击
+//!
+//! 窗口是 `NOACTIVATE` 的，点它不会抢焦点、也不会打断组合态。点击通过
+//! `set_click_handler` 注册的回调路由回文本服务——本模块不认识 `textservice`，
+//! 只负责「第几个候选被点了」。
+//!
+//! 判定用「按下 + 抬起落在同一项」：按下时记下命中项并 `SetCapture`，
+//! 抬起时比对，中途移开就取消。这样和普通按钮的手感一致，也避免误触。
+//!
+//! 命中区**必须和绘制用同一份几何**（`layout()`），否则会出现「看着点到了、
+//! 实际没中」这种最难查的偏差。
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+// SetCapture / ReleaseCapture 归在 Input::KeyboardAndMouse，不在 WindowsAndMessaging
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS_NAME: PCWSTR = w!("FeiheCandidateWindow");
@@ -32,6 +43,10 @@ struct CandState {
     page: usize,
     x: i32,
     y: i32,
+    /// 每一项的横向命中区（相对客户区），由 `layout()` 算出
+    spans: Vec<(i32, i32)>,
+    /// 按下时命中的项，抬起时比对
+    pressed: Option<usize>,
 }
 
 static STATE: Mutex<CandState> = Mutex::new(CandState {
@@ -40,10 +55,58 @@ static STATE: Mutex<CandState> = Mutex::new(CandState {
     page: 0,
     x: 0,
     y: 0,
+    spans: Vec::new(),
+    pressed: None,
 });
 
 static WND: AtomicIsize = AtomicIsize::new(0);
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+type ClickFn = Arc<dyn Fn(usize) + Send + Sync>;
+
+struct Handler {
+    /// 注册者的身份（文本服务对象的地址），用来判断要不要重建闭包
+    id: usize,
+    f: ClickFn,
+}
+
+static ON_CLICK: Mutex<Option<Handler>> = Mutex::new(None);
+
+/// 注册「第 N 个候选被点击」的回调。
+///
+/// `id` 是注册者身份：同一个对象重复注册直接返回，不用每敲一个键就重建闭包。
+/// `make` 只在确实需要换人时才调用。
+pub fn set_click_handler(id: usize, make: impl FnOnce() -> ClickFn) {
+    let mut g = match ON_CLICK.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    if g.as_ref().is_some_and(|h| h.id == id) {
+        return;
+    }
+    *g = Some(Handler { id, f: make() });
+}
+
+/// 撤销回调（对象销毁时调，避免留着一个指向已释放对象的闭包）
+pub fn clear_click_handler() {
+    let mut g = match ON_CLICK.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    *g = None;
+}
+
+/// 调用回调。**不能持锁调用**：回调会走 edit session，而 edit session 里可能
+/// 又调 `show()` → `set_click_handler()`，持锁就成了自己等自己。
+fn invoke_click(index: usize) {
+    let f = match ON_CLICK.lock() {
+        Ok(g) => g.as_ref().map(|h| h.f.clone()),
+        Err(e) => e.into_inner().as_ref().map(|h| h.f.clone()),
+    };
+    if let Some(f) = f {
+        f(index);
+    }
+}
 
 /// 候选显示文本：`1.词`。
 ///
@@ -61,6 +124,11 @@ fn page_slice(st: &CandState) -> &[String] {
     let end = (start + PAGE_SIZE).min(st.items.len());
     &st.items[start..end]
 }
+
+fn hit(st: &CandState, x: i32) -> Option<usize> {
+    st.spans.iter().position(|(l, r)| x >= *l && x < *r)
+}
+
 
 unsafe fn ensure_class() -> bool {
     if CLASS_REGISTERED.load(Ordering::Acquire) {
@@ -116,6 +184,58 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         WM_ERASEBKGND => LRESULT(1),
         // 点候选窗不抢焦点，否则应用会失焦、组合态被断掉
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+
+        WM_LBUTTONDOWN => {
+            let idx = {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = ScreenToClient(hwnd, &mut pt);
+                let mut st = match STATE.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                let idx = hit(&st, pt.x);
+                st.pressed = idx;
+                idx
+            };
+            // 捕获鼠标：在窗口外抬起也能收到 WM_LBUTTONUP，用来取消这次点击
+            if idx.is_some() {
+                SetCapture(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            let _ = ReleaseCapture();
+            let target = {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = ScreenToClient(hwnd, &mut pt);
+                let mut st = match STATE.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                let up = hit(&st, pt.x);
+                let pressed = st.pressed.take();
+                // 按下和抬起必须落在同一项，否则算误触
+                if pressed.is_some() && pressed == up {
+                    up
+                } else {
+                    None
+                }
+            };
+            // 锁已释放，这里才回调
+            if let Some(i) = target {
+                invoke_click(i);
+            }
+            LRESULT(0)
+        }
+        // 鼠标捕获被别人抢走（比如弹了个系统菜单）→ 这次点击作废
+        WM_CAPTURECHANGED => {
+            if let Ok(mut st) = STATE.lock() {
+                st.pressed = None;
+            }
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, w, l),
     }
 }
@@ -184,28 +304,31 @@ pub fn refresh_theme() {
     }
 }
 
-/// 计算窗口宽度
-unsafe fn measure(items: &[String]) -> i32 {
+/// 计算窗口宽度和每一项的横向命中区。
+///
+/// 绘制（`paint`）和命中判定（`hit`）都依赖这里的几何：paint 按同样的
+/// `size.cx + GAP` 递增，高亮框左右各放宽 4px，所以命中区也用 ±4。
+unsafe fn layout(items: &[String]) -> (i32, Vec<(i32, i32)>) {
     if items.is_empty() {
-        return PAD * 2;
+        return (PAD * 2, Vec::new());
     }
     let hdc = GetDC(None);
     if hdc.is_invalid() {
-        return 320;
+        return (320, Vec::new());
     }
-    let font = crate::font::ui();
-    SelectObject(hdc, font);
+    SelectObject(hdc, crate::font::ui());
 
-    let mut total = PAD * 2;
+    let mut x = PAD;
+    let mut spans = Vec::with_capacity(items.len());
     for (i, word) in items.iter().enumerate() {
         let wide: Vec<u16> = label(i, word).encode_utf16().collect();
         let mut size = SIZE::default();
         let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
-        total += size.cx;
+        spans.push((x - 4, x + size.cx + 4));
+        x += size.cx + GAP;
     }
-    total += GAP * (items.len() as i32 - 1);
     let _ = ReleaseDC(None, hdc);
-    total.max(80)
+    ((x - GAP + PAD).max(80), spans)
 }
 
 /// 显示候选窗。`x` / `y` 是光标左下角的屏幕坐标。
@@ -216,7 +339,6 @@ pub fn show(items: &[&str], selected: usize, page: usize, x: i32, y: i32) {
     }
     unsafe {
         if !ensure_class() {
-            crate::trace!("cand: RegisterClass failed");
             return;
         }
     }
@@ -234,14 +356,17 @@ pub fn show(items: &[&str], selected: usize, page: usize, x: i32, y: i32) {
     unsafe {
         let hwnd = ensure_window();
         if hwnd.is_invalid() {
-            crate::trace!("cand: CreateWindowEx failed");
             return;
         }
         let st = STATE.lock().unwrap();
         let page_items: Vec<String> = page_slice(&st).to_vec();
         drop(st);
 
-        let w = measure(&page_items);
+        let (w, spans) = layout(&page_items);
+        if let Ok(mut st) = STATE.lock() {
+            st.spans = spans;
+            st.pressed = None;
+        }
 
         // 贴光标下方 6px，并夹在屏幕内
         let sw = GetSystemMetrics(SM_CXSCREEN);
@@ -266,10 +391,6 @@ pub fn show(items: &[&str], selected: usize, page: usize, x: i32, y: i32) {
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
         let _ = InvalidateRect(Some(hwnd), None, true);
-        crate::trace!(
-            "cand: show at ({px},{py}) {w}x{HEIGHT} caret=({x},{y}) screen={sw}x{sh} items={} page={page} sel={selected}",
-            page_items.len()
-        );
     }
 }
 
@@ -282,10 +403,16 @@ pub fn hide() {
         let hwnd = HWND(raw as *mut core::ffi::c_void);
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
+    // 窗口藏起来时可能还有一次没走完的按下，清掉，免得下次显示时误判
+    if let Ok(mut st) = STATE.lock() {
+        st.pressed = None;
+        st.spans.clear();
+    }
 }
 
 /// 卸载/反激活时销毁窗口，避免 DLL 被卸载后窗口过程指针失效
 pub fn destroy() {
+    clear_click_handler();
     let raw = WND.swap(0, Ordering::AcqRel);
     if raw == 0 {
         return;

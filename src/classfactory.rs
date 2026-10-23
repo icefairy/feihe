@@ -39,7 +39,6 @@ impl IClassFactory_Impl for FeiheClassFactory_Impl {
             ));
         }
         let svc: ITfTextInputProcessorEx = FeiheTextService::new().into();
-        crate::trace!("CreateInstance: text service created");
         unsafe { svc.query(riid, ppvobject).ok()?; }
         Ok(())
     }

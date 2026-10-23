@@ -91,7 +91,6 @@ unsafe fn ensure_window() -> Option<HWND> {
         return Some(HWND(raw as *mut core::ffi::c_void));
     }
     if !ensure_class() {
-        crate::trace!("kbd: RegisterClass failed");
         return None;
     }
     let hinst = GetModuleHandleW(None).unwrap_or_default();
@@ -111,7 +110,6 @@ unsafe fn ensure_window() -> Option<HWND> {
     )
     .unwrap_or_default();
     if h.is_invalid() {
-        crate::trace!("kbd: CreateWindowEx failed");
         return None;
     }
     WND.store(h.0 as isize, Ordering::Release);
@@ -233,8 +231,7 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             let y = ((l.0 >> 16) & 0xFFFF) as i16 as i32;
             if let Some(idx) = hit(x, y) {
                 let sym = SYMBOLS[idx];
-                let ok = insert::insert_text(sym);
-                crate::trace!("kbd: insert {sym:?} -> {ok}");
+                let _ = insert::insert_text(sym);
             }
             LRESULT(0)
         }

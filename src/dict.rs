@@ -542,10 +542,7 @@ pub fn import_from(path: &Path) -> Result<(usize, Option<(usize, usize)>), Strin
         // 编译失败不算导入失败——txt 已经写好了，退回覆盖层照样能用，只是慢一点。
         match compile_user_bin() {
             Ok((n, bytes)) => return Ok((added, Some((n, bytes)))),
-            Err(e) => {
-                crate::trace!("user.bin 编译失败，退回文本覆盖层：{e}");
-                reload_overlay();
-            }
+            Err(_) => reload_overlay(),
         }
     }
     Ok((added, None))

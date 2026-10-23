@@ -157,7 +157,6 @@ unsafe fn place(hwnd: HWND, follow_caret: bool) {
 
 unsafe fn create() -> Option<HWND> {
     if !ensure_class() {
-        crate::trace!("bar: RegisterClass failed");
         return None;
     }
     let hinst = GetModuleHandleW(None).unwrap_or_default();
@@ -177,13 +176,11 @@ unsafe fn create() -> Option<HWND> {
     )
     .unwrap_or_default();
     if hwnd.is_invalid() {
-        crate::trace!("bar: CreateWindowEx failed");
         return None;
     }
     OWNER_PID.store(GetCurrentProcessId() as i32, Ordering::Release);
     place(hwnd, config::get().bar_follow);
     SetTimer(Some(hwnd), TIMER_ID, TIMER_MS, None);
-    crate::trace!("bar: created");
     Some(hwnd)
 }
 
@@ -353,12 +350,10 @@ unsafe fn on_click(idx: usize) {
         Btn::Mode => {
             let next = !insert::chinese();
             if insert::set_chinese(next) {
-                crate::trace!("bar: chinese -> {next}");
             }
         }
         Btn::Width => {
             config::update(|c| c.fullwidth = !c.fullwidth);
-            crate::trace!("bar: fullwidth -> {}", config::get().fullwidth);
         }
         Btn::Symbols => {
             let h = hwnd();
@@ -448,7 +443,6 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                             c.bar_x = wr.left;
                             c.bar_y = wr.top;
                         });
-                        crate::trace!("bar: moved to ({},{})", wr.left, wr.top);
                     }
                 }
                 Some((_, false, _)) => {

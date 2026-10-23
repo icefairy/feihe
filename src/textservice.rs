@@ -24,7 +24,7 @@ use crate::statusbar;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Variant::{VariantInit, VARIANT, VT_I4};
+use windows::Win32::System::Variant::{VariantInit, VT_I4};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5,
     VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RWIN, VK_SHIFT,
@@ -34,9 +34,32 @@ use windows_core::{implement, IUnknownImpl};
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
-/// 一次最多取多少候选（10 页 × 9）
+/// 一次最多取多少候选（10 页 × 9）。单键 / 两键会按码长衰减，见 `candidate_limit`。
 const MAX_CANDIDATES: usize = 90;
+
+/// 候选上限按码长衰减。
+///
+/// 敲一个 `n` 能查出 90 个候选 = 10 页，第 4 页往后基本是生僻字，翻过去也没用，
+/// 但「一直能翻」这件事本身就会让人怀疑是不是翻不完。所以：
+///
+/// - 1 键：18 个（2 页）
+/// - 2 键：45 个（5 页）
+/// - 3 键及以上：满额 90
+///
+/// 按**去掉手动分隔符和空白后的字符数**算，`ni'hao` 和 `nihao` 拿同样的额度。
+fn candidate_limit(code: &str) -> usize {
+    let n = code
+        .chars()
+        .filter(|c| *c != FeiheTextService::SEP && !c.is_whitespace())
+        .count();
+    match n {
+        0 | 1 => 18,
+        2 => 45,
+        _ => MAX_CANDIDATES,
+    }
+}
 
 enum EditOp {
     /// 建立 composition 并写入首个双拼码。
@@ -95,6 +118,9 @@ pub struct FeiheTextService {
     segments: RefCell<Vec<Segment>>,
     /// 分词模式下光标落在第几段
     seg_idx: Cell<usize>,
+    /// 存活令牌。候选窗的点击回调拿着它的 `Weak`——对象析构后 `upgrade()` 失败，
+    /// 回调就不会去碰已经释放的地址。见 `install_click_handler`。
+    alive: Arc<()>,
 }
 
 impl FeiheTextService {
@@ -117,6 +143,7 @@ impl FeiheTextService {
             shift_used: Cell::new(false),
             segments: RefCell::new(Vec::new()),
             seg_idx: Cell::new(0),
+            alive: Arc::new(()),
         }
     }
 
@@ -509,7 +536,7 @@ impl FeiheTextService {
             let idx = self.seg_idx.get().min(self.segments.borrow().len() - 1);
             let code = self.segments.borrow()[idx].code.clone();
             let word = self.segments.borrow()[idx].word.clone();
-            let list = FeiheTextService::lookup_any(&code, MAX_CANDIDATES);
+            let list = FeiheTextService::lookup_any(&code, candidate_limit(&code));
             // 选中项对齐到这一段当前选中的词，左右移动时不会跳回第一项
             let sel = list.iter().position(|w| &**w == word).unwrap_or(0);
             self.candidates.borrow_mut().clone_from(&list);
@@ -538,13 +565,14 @@ impl FeiheTextService {
 
         let assist_prefix = self.assist.borrow().clone();
         let mode = config::get().assist_mode;
+        let limit = candidate_limit(&code);
         let list = if config::pinyin_mode() {
             // 全拼模式：前缀是「全拼去掉空格」的串（nihao），走另一套索引
-            dict::lookup_pinyin_filtered(query, &assist_prefix, mode, MAX_CANDIDATES)
+            dict::lookup_pinyin_filtered(query, &assist_prefix, mode, limit)
         } else if assist_prefix.is_empty() {
-            dict::lookup(query, MAX_CANDIDATES)
+            dict::lookup(query, limit)
         } else {
-            dict::lookup_filtered(query, &assist_prefix, mode, MAX_CANDIDATES)
+            dict::lookup_filtered(query, &assist_prefix, mode, limit)
         };
         self.candidates.borrow_mut().clone_from(&list);
         self.selected.set(0);
@@ -611,7 +639,6 @@ impl FeiheTextService_Impl {
         // 兜底：组合串只允许当前模式的编码键。万一有控制字符漏进来（例如宿主直接调
         // OnKeyDown 送来了 Ctrl / 退格），宁可不组合，也绝不写进文档。
         if code.is_empty() || !FeiheTextService::code_allowed(&code) {
-            crate::trace!("start_composition: rejected code {code:?}");
             self.clear_state();
             return;
         }
@@ -639,7 +666,6 @@ impl FeiheTextService_Impl {
             self.commit_current();
         }
         statusbar::repaint();
-        crate::trace!("chinese -> {next}");
     }
 
     fn commit_current(&self) {
@@ -753,7 +779,6 @@ impl FeiheTextService_Impl {
         self.seg_idx.set(self.seg_idx.get().min(n - 1));
         self.refresh();
         self.update_composition();
-        crate::trace!("segment mode: {n} segments from '{code}'");
         true
     }
 
@@ -767,7 +792,10 @@ impl FeiheTextService_Impl {
         let idx = self.seg_idx.get().min(n - 1);
         let word = {
             let segs = self.segments.borrow();
-            let list = FeiheTextService::lookup_any(&segs[idx].code, MAX_CANDIDATES);
+            let list = FeiheTextService::lookup_any(
+                &segs[idx].code,
+                candidate_limit(&segs[idx].code),
+            );
             list.get(sel)
                 .or_else(|| list.first())
                 .map(|s| s.to_string())
@@ -960,6 +988,49 @@ impl FeiheTextService_Impl {
         }
     }
 
+    /// 把候选窗的点击路由回本对象。
+    ///
+    /// 存裸地址是必要的：windows-rs 的 `#[implement]` 只生成「结构体 → 接口」，
+    /// 没有「接口 → 结构体」的路径，而点击回调需要的正是 `_Impl` 上的
+    /// `pick` / `confirm_segment`——它们要 `to_interface()` 去开 edit session，
+    /// 光有内部数据结构的引用办不到。
+    ///
+    /// 安全性靠 `alive` 令牌：闭包只持有 `Weak`，对象析构后 `upgrade()` 失败，
+    /// 就不会去解引用一个已经释放的地址。地址本身在 COM 对象生命周期内不变
+    /// （宏把对象分配在堆上，之后不会移动）。
+    fn install_click_handler(&self) {
+        let addr = self as *const FeiheTextService_Impl as usize;
+        let alive = Arc::downgrade(&self.alive);
+        crate::candidate::set_click_handler(addr, move || {
+            let alive = alive.clone();
+            Arc::new(move |index: usize| {
+                let Some(_token) = alive.upgrade() else {
+                    return;
+                };
+                // SAFETY: 令牌还活着 ⇒ 对象没析构；地址在生命周期内不变。
+                let this = unsafe { &*(addr as *const FeiheTextService_Impl) };
+                this.on_candidate_click(index);
+            })
+        });
+    }
+
+    /// 候选窗被点了页内第 `index` 项（0 基）。
+    ///
+    /// 行为和对应的数字键完全一致——鼠标只是「按数字键」的另一种入口，
+    /// 不应该有第二套语义。
+    fn on_candidate_click(&self, index: usize) {
+        // 窗口可能还挂在屏幕上，但组合态已经结束（宿主刚提交、或按了 Esc）
+        if !self.is_composing() {
+            return;
+        }
+        if !self.segments.borrow().is_empty() {
+            // 分词模式：确认当前段并跳到下一段（最后一段则整体上屏）
+            self.confirm_segment(index);
+        } else {
+            // 普通模式的 `pick` 是 1 基（数字键 1-9），这里补 1
+            self.pick(index + 1);
+        }
+    }
 }
 
 impl FeiheTextService {
@@ -1042,7 +1113,6 @@ impl FeiheTextService {
             // 状态浮窗的「跟随光标」模式靠这个位置
             statusbar::set_caret(rc.left, rc.bottom);
         } else {
-            crate::trace!("caret: GetTextExt failed");
         }
         self.show_candidates();
     }
@@ -1058,7 +1128,6 @@ impl FeiheTextService_Impl {
     unsafe fn begin_composition(&self, context: &ITfContext, ec: u32) -> Result<()> {
         let text = self.composition_text();
         let Ok(range) = caret_range(context, ec) else {
-            crate::trace!("begin_composition: no caret range");
             return Err(Error::new(E_FAIL, "no caret range"));
         };
         let comp_mgr: ITfContextComposition = context.cast()?;
@@ -1072,11 +1141,6 @@ impl FeiheTextService_Impl {
 
         self.composition.borrow_mut().replace(comp);
         self.remember_caret(context, ec, &r);
-        crate::trace!(
-            "begin_composition('{text}') done, caret=({},{})",
-            self.caret_x.get(),
-            self.caret_y.get()
-        );
         Ok(())
     }
 
@@ -1109,16 +1173,11 @@ impl Drop for FeiheTextService {
 impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
     fn Activate(&self, ptim: Ref<'_, ITfThreadMgr>, tid: u32) -> Result<()> {
         let tim: ITfThreadMgr = ptim.ok()?.clone();
-        crate::trace!("Activate: tid={tid}");
 
         // 焦点文档不一定已存在，容错处理（否则 Activate 失败会让服务被判为加载失败）
         let context = unsafe { tim.GetFocus() }
             .ok()
             .and_then(|doc| unsafe { doc.GetTop() }.ok());
-        crate::trace!(
-            "Activate: focus context = {}",
-            if context.is_some() { "ok" } else { "none" }
-        );
 
         // 读配置并按当前双拼方案准备词库索引（方案变了会重建，约 30ms）
         let cfg = config::load();
@@ -1132,12 +1191,11 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 选到第一位，切到浏览器里它又沉回去了——用户会觉得这功能时灵时不灵。
         // `refresh` 内部按 mtime 判断，没变化就只做一次 stat。
         crate::freq::refresh();
-        crate::trace!(
-            "Activate: scheme={} assist={} fullwidth={}",
-            cfg.scheme.label(),
-            cfg.assist_mode.label(),
-            cfg.fullwidth
-        );
+
+        // 候选窗鼠标点击：把「点了第几个」路由回本对象。
+        // 放在 Activate 里而不是每次 show——闭包要捕获对象地址，只在对象身份
+        // 变化时才需要重建，`set_click_handler` 内部按 id 判断。
+        self.install_click_handler();
 
         // 中英文开关。关着的时候 MSCTF 不会把按键交给 TIP，症状就是
         // 「切到飞鹤拼音后字母直接进应用、没有任何候选窗」。
@@ -1147,7 +1205,6 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         if insert::chinese() {
             open_keyboard(&tim, tid);
         } else {
-            crate::trace!("Activate: keep english mode");
         }
 
         let keystroke_mgr: ITfKeystrokeMgr = tim.cast()?;
@@ -1159,7 +1216,6 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 传 FALSE 会导致 Activate 成功、sink 挂上，但 OnTestKeyDown 永远不被调用，
         // 表现就是「切到输入法后字母直接进应用、没有候选窗」。
         let hr = unsafe { keystroke_mgr.AdviseKeyEventSink(tid, &key_sink, true) };
-        crate::trace!("Activate: AdviseKeyEventSink -> {hr:?}");
         hr?;
 
         self.thread_mgr.borrow_mut().replace(tim);
@@ -1168,12 +1224,10 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 软键盘 / 设置窗要靠这个 client id 才能 RequestEditSession 和改中英开关
         insert::set_client_tid(tid);
         statusbar::show();
-        crate::trace!("Activate: done");
         Ok(())
     }
 
     fn Deactivate(&self) -> Result<()> {
-        crate::trace!("Deactivate");
         self.deactivate_sink();
         // 浮窗、软键盘、设置窗都属于本 TIP，反激活时一并销毁，
         // 否则切走输入法后它们还挂在屏幕上（而且窗口过程指针会随 DLL 卸载失效）。
@@ -1215,7 +1269,6 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 收不到（OnTestKeyDown 拒了就不派发），所以只能在这里做标记。
         self.note_shift_combo(vk);
         if FeiheTextService::modifiers_down() {
-            crate::trace!("TestKeyDown vk=0x{vk:02x}: modifier down -> false");
             return Ok(BOOL::from(false));
         }
         // 英文态：一个键都不吃，全部交给应用。
@@ -1224,7 +1277,6 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             return Ok(BOOL::from(false));
         }
         if self.is_composing() {
-            crate::trace!("TestKeyDown vk=0x{vk:02x}: composing -> true");
             return Ok(BOOL::from(true));
         }
         // 除了编码键，**全角标点键也必须认**。经典宿主（记事本、Word）里
@@ -1233,7 +1285,6 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 该拒绝的照样返回 FALSE，键最终还是会交给应用。
         let take = FeiheTextService::is_code_key(vk)
             || FeiheTextService::fullwidth_punct_for(vk).is_some();
-        crate::trace!("TestKeyDown vk=0x{vk:02x} -> {take}");
         Ok(BOOL::from(take))
     }
 
@@ -1244,7 +1295,6 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         _lparam: LPARAM,
     ) -> Result<BOOL> {
         let vk = (wparam.0 & 0xff) as u8;
-        crate::trace!("KeyDown vk=0x{vk:02x} composing={}", self.is_composing());
 
         // 在应用里敲键就说明用户已经回到打字，软键盘可以收了
         softkbd::hide();
@@ -1252,7 +1302,6 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         if let Ok(context) = pic.ok() {
             self.context.borrow_mut().replace(context.clone());
         } else {
-            crate::trace!("KeyDown: pic is null");
         }
 
         // ── Shift：单击切中英 ──────────────────────────────
@@ -1296,11 +1345,6 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 if ch != FeiheTextService::SEP {
                     self.code.borrow_mut().push(ch);
                     self.refresh();
-                    crate::trace!(
-                        "KeyDown: start composition code='{}' candidates={}",
-                        self.code.borrow(),
-                        self.candidates.borrow().len()
-                    );
                     self.start_composition();
                     return Ok(BOOL::from(true));
                 }
@@ -1371,7 +1415,6 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 if !next {
                     self.assist.borrow_mut().clear();
                 }
-                crate::trace!("KeyDown: assist -> {next} ({})", mode.label());
                 self.refresh();
                 self.update_composition();
                 Ok(BOOL::from(true))
@@ -1476,11 +1519,7 @@ impl ITfCompositionSink_Impl for FeiheTextService_Impl {
 
 impl ITfEditSession_Impl for FeiheTextService_Impl {
     fn DoEditSession(&self, ec: u32) -> Result<()> {
-        let r = self.run_edit_session(ec);
-        if let Err(e) = &r {
-            crate::trace!("DoEditSession: ERR {e:?}");
-        }
-        r
+        self.run_edit_session(ec)
     }
 }
 
@@ -1490,7 +1529,6 @@ impl FeiheTextService_Impl {
             return Ok(());
         };
         let Some(context) = self.context.borrow().as_ref().cloned() else {
-            crate::trace!("DoEditSession: no context");
             self.composition.borrow_mut().take();
             return Ok(());
         };
@@ -1499,12 +1537,10 @@ impl FeiheTextService_Impl {
             match op {
                 EditOp::Start => {
                     if self.begin_composition(&context, ec).is_err() {
-                        crate::trace!("edit: Start -> no caret range");
                         self.clear_state();
                     }
                 }
                 EditOp::Update(text) => {
-                    crate::trace!("edit: Update('{text}')");
                     // 先把引用 clone 出来，避免 RefCell 借用跨越 EndComposition 之类的重入
                     let comp = self.composition.borrow().as_ref().cloned();
                     if let Some(comp) = comp {
@@ -1514,11 +1550,9 @@ impl FeiheTextService_Impl {
                         put_caret(&context, ec, &r);
                         self.remember_caret(&context, ec, &r);
                     } else {
-                        crate::trace!("edit: Update -> no composition");
                     }
                 }
                 EditOp::Commit(text) => {
-                    crate::trace!("edit: Commit('{text}')");
                     // 简繁转换只在这一个出口做：候选里存的永远是词库原文（简体），
                     // 显示层和上屏层各自转。这样切换字形不需要重建任何索引。
                     let text = crate::zhconv::apply(&text);
@@ -1530,12 +1564,10 @@ impl FeiheTextService_Impl {
                         put_caret(&context, ec, &r);
                         let _ = comp.EndComposition(ec);
                     } else {
-                        crate::trace!("edit: Commit -> no composition");
                     }
                     candidate::hide();
                 }
                 EditOp::Insert(text) => {
-                    crate::trace!("edit: Insert('{text}')");
                     // 标点、软键盘符号转换是空操作（它们本来就不在简繁映射里），
                     // 但快捷输入的日期/星期文本要跟着走，所以统一在这里过一遍
                     let text = crate::zhconv::apply(&text);
@@ -1547,7 +1579,6 @@ impl FeiheTextService_Impl {
                     put_caret(&context, ec, &range);
                 }
                 EditOp::Cancel => {
-                    crate::trace!("edit: Cancel");
                     let comp = self.composition.borrow_mut().take();
                     if let Some(comp) = comp {
                         let r = comp.GetRange()?;
@@ -1579,20 +1610,11 @@ fn to_utf16(s: &str) -> Vec<u16> {
 /// 新注册的 TIP 这个值可能是关的，所以激活时直接置 1。
 fn open_keyboard(tim: &ITfThreadMgr, tid: u32) {
     let Ok(mgr) = tim.cast::<ITfCompartmentMgr>() else {
-        crate::trace!("compartment: no ITfCompartmentMgr");
         return;
     };
-    let comp = match unsafe { mgr.GetCompartment(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) } {
-        Ok(c) => c,
-        Err(e) => {
-            crate::trace!("compartment: GetCompartment err {e:?}");
-            return;
-        }
+    let Ok(comp) = (unsafe { mgr.GetCompartment(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) }) else {
+        return;
     };
-    match unsafe { comp.GetValue() } {
-        Ok(v) => crate::trace!("compartment: openclose before = {}", describe_variant(&v)),
-        Err(e) => crate::trace!("compartment: GetValue err {e:?}"),
-    }
 
     let mut v = unsafe { VariantInit() };
     unsafe {
@@ -1601,26 +1623,8 @@ fn open_keyboard(tim: &ITfThreadMgr, tid: u32) {
         inner.vt = VT_I4;
         inner.Anonymous.lVal = 1;
     }
-    match unsafe { comp.SetValue(tid, &v) } {
-        Ok(()) => crate::trace!("compartment: forced open (1)"),
-        Err(e) => crate::trace!("compartment: SetValue err {e:?}"),
-    }
-    match unsafe { comp.GetValue() } {
-        Ok(v) => crate::trace!("compartment: openclose after = {}", describe_variant(&v)),
-        Err(e) => crate::trace!("compartment: re-read err {e:?}"),
-    }
-}
-
-fn describe_variant(v: &VARIANT) -> String {
-    unsafe {
-        let vt = v.Anonymous.Anonymous.vt.0;
-        // 3 = VT_I4
-        if vt == 3 {
-            format!("VT_I4({})", v.Anonymous.Anonymous.Anonymous.lVal)
-        } else {
-            format!("vt={vt}")
-        }
-    }
+    // 写失败也没别的办法——这里没有能补救的动作，只能让输入法按当前状态跑
+    let _ = unsafe { comp.SetValue(tid, &v) };
 }
 
 unsafe fn caret_range(context: &ITfContext, ec: u32) -> Result<ITfRange> {

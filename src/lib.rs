@@ -12,7 +12,6 @@ mod dllcount;
 mod font;
 mod freq;
 mod insert;
-mod log;
 mod quick;
 mod settings;
 mod shuangpin;
@@ -49,13 +48,10 @@ extern "system" fn DllGetClassObject(
             return E_POINTER;
         }
         if *rclsid != clsid::CLSID_FEIHE_TEXTSERVICE {
-            crate::trace!("DllGetClassObject: wrong clsid");
             return CLASS_E_CLASSNOTAVAILABLE;
         }
-        crate::trace!("DllGetClassObject: creating factory");
         let factory: IClassFactory = classfactory::FeiheClassFactory::new().into();
         let hr = factory.query(riid, ppv);
-        crate::trace!("DllGetClassObject: query hr={hr:?}");
         hr
     }
 }

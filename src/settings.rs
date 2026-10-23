@@ -542,7 +542,6 @@ unsafe fn create() -> Option<HWND> {
     )
     .unwrap_or_default();
     if h.is_invalid() {
-        crate::trace!("settings: CreateWindowEx failed");
         return None;
     }
 

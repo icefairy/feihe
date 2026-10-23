@@ -2,7 +2,7 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.0** ｜ 安装包 1.24 MB ｜ 装完约 5.7 MB ｜ 单字 8006 ｜ 词条 38024 ｜
+**当前版本 0.2.0** ｜ 安装包 1.23 MB ｜ 装完约 5.7 MB ｜ 单字 8006 ｜ 词条 38024 ｜
 不联网、不弹窗、无账号 ｜ 93 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
@@ -14,8 +14,8 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 - **M2（已完成）**：小鹤双拼引擎 + 内置词库 + 候选窗（纯 Rust，暂不引 librime，原因见下）
 - **M2.5（已完成）**：状态浮窗、设置窗（输入模式 / 方案 / 皮肤 / 字形 / 词库管理）、
   符号软键盘、小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、全角标点、简繁切换
-- **M3（进行中）**：Shift 中英切换（已完成）／ 候选窗鼠标点击选词（未做）／
-  组合串下划线 `ITfDisplayAttributeProvider`（未做）
+- **M3（进行中）**：Shift 中英切换（已完成）／ 候选窗鼠标点击选词（已完成）／
+  单键候选数按码长衰减（已完成）／ 组合串下划线 `ITfDisplayAttributeProvider`（未做）
 - **M5**（v2）：语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关）
 
 > 关于 librime：它是 C++17 + CMake，与当前的 llvm-mingw/gnullvm 无 MSVC 路线在 C++ 标准库
@@ -45,7 +45,7 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 | 模糊音 | **无** | 有 | 有 |
 | 语音输入 | **无**（M5 才规划） | 有 | 有 |
 | 云同步 / 云词库 | **无** | 有 | 有 |
-| 候选窗点击选词 | **无**（M3 未做） | 有 | 有 |
+| 候选窗点击选词 | **有** | 有 | 有 |
 
 **它真正占优的地方，都是「少」带来的：**
 
@@ -72,7 +72,7 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
   网络新词、人名地名基本查不到，得靠用户词库补（支持导入搜狗个人词库，
   见后文）。
 - **没有云**。换电脑不同步，词频学习只在本机。
-- **模糊音、语音、手写、候选窗点击选词都还没有**。
+- **模糊音、语音、手写都还没有**。
 - **安装包未签名**，首次运行会撞 SmartScreen。
 
 如果你要的是「功能最全的中文输入法」，用搜狗或微软拼音；如果你要的是
@@ -128,6 +128,10 @@ z=ou   x=ia   c=ao   v=ui    b=in   n=iao  m=ian
 不选候选），数字键 `1-9` 选对应候选，`←/→` 页内移动，`-` `=` 或 `↑` `↓` 翻页
 （`-`/`=` 是搜狗、微软拼音的通行键位；组合态下这两个键归翻页，想打 `－` `＝` 先上屏）。
 退格删一个键，`Esc` 取消。`Ctrl` / `Alt` / `Win` 组合键一律放行不拦截。
+
+**鼠标也能选词**：直接点候选窗里的那一项就上屏。窗口不抢输入框焦点，点完继续打字
+仍然进组合态；按下后拖到窗外再松开算取消，不会误上屏。候选数量按码长衰减——
+单键 18 个（2 页）、两键 45 个，三键以上才满 90。
 
 **单击 Shift** 切中英文（按住期间按过别的键就不算单击，`Shift+A` 照常是大写 A）。
 切到英文后所有按键原样进应用，候选窗不弹。
@@ -459,10 +463,10 @@ src/dict.txt          基础词库（38573 条 / 626KB，gen_dict.py 生成，�
 src/extra_dict.txt    常用词补充表（76 条，手工维护，只放基础词库里缺的词）
 src/user_dict.txt     用户词库（import_sogou.py 生成，可反复重跑；未导入时为空文件）
 build.rs              生成 base.bin（预编码三套码）+ 编译图标资源
-src/candidate.rs      候选窗（自绘 WS_POPUP + GDI，不抢焦点）
+src/candidate.rs      候选窗（自绘 WS_POPUP + GDI，不抢焦点，支持鼠标点选）
 src/statusbar.rs      状态浮窗（中/英、全/半、符号、设置；可拖动 + 前台判定）
 src/softkbd.rs        特殊符号软键盘（9×5 自绘网格）
-src/settings.rs       设置窗（原生控件：输入模式 / 方案 / 皮肤 / 字形 / 全角 / 词库）
+src/settings.rs       设置窗（原生控件：输入模式 / 方案 / 皮肤 / 字形 / 全角 / 动态调频 / 词库）
 src/freq.rs           动态词频（选词计数 → 稳定重排候选，freq.txt 落盘）
 src/zhconv.rs         简繁转换（LCMapStringEx + LCMAP_TRADITIONAL_CHINESE）
 src/theme.rs          皮肤调色板（浅色 / 深色 / 护眼）
@@ -482,7 +486,6 @@ installer/register.cmd       安装入口（管理员，部署 64 + 32 位 DLL�
 installer/unregister.cmd     卸载入口（管理员）
 build.ps1             一键构建（llvm-mingw，默认 64 + 32 位；-Arch / -Debug / -SkipTest）
 check_env.ps1         环境自检（llvm-mingw / rust target / NSIS 是否就位）
-src/log.rs            **临时诊断日志**（写 %TEMP%\feihe-trace.log，验收后应删除）
 dist/                 安装包产物（已 gitignore）
 rust-toolchain.toml   固定 gnu toolchain + gnullvm target
 .cargo/config.toml    固定构建 target 与 linker（含 i686 的 linker）
@@ -667,7 +670,6 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 | 项 | 说明 |
 |---|---|
-| 候选窗鼠标点击选词 | 窗口吞掉点击但不透传，只能键盘选 |
 | 组合串下划线 | `GUID_DISPLAY_FEIHE` 已定义，`ITfDisplayAttributeProvider` 未实现 |
 | 快捷输入扩展 | 只有日期 / 时间 / 星期 / 时间戳，没有农历和自定义短语 |
 | 模糊音 | 未排期。要做建议在 `shuangpin::encode_pinyin` 之后加等价类归并，而不是改词库 |
@@ -676,11 +678,9 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 **已知问题**
 
-- 单键（如 `n`）一次查 90 个候选，偏多，可以按码长做衰减
 - 搜狗 `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现
 - 设置窗改双拼方案后，**其它已打开的进程**要重新激活才生效（`Activate` 里会重读配置，
   所以是「不即时」而不是「不生效」）
-- `src/log.rs` 是临时诊断日志，验收后应连同 55 处 `crate::trace!` 一起删掉
 - 安装包未签名
 
 ## 验证清单
@@ -725,3 +725,11 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 23. 全拼模式下打 `nihaoshijie` → 切成 `[你好]世界` 两段（不再是整串挂字母）
 24. `xi'an` 能强制切成 `xi`+`an`；`ni'hao` 的分隔符不会出现在上屏文本里
 25. 微软双拼下 `;` 仍然出 `ing`，分隔用 `'`
+
+**M3.5（交互打磨）**
+
+26. 鼠标点候选窗里的词 → 直接上屏该项；按下后拖到窗外再松开 → 不上屏（防误触）
+27. 点候选窗不会让输入框失焦，点完继续按键仍然进组合态（`WM_MOUSEACTIVATE → MA_NOACTIVATE`）
+28. 敲单键 `n` → 候选窗只有 18 项（2 页）；敲 `ni` → 45 项（5 页）；三键及以上满 90
+29. 设置窗勾掉「动态调频」→ 选词后候选顺序不再变化；点「重置」提示清空的条数
+30. 打完一轮字后 `%TEMP%` 下**没有** `feihe-trace.log`（诊断日志已移除）
