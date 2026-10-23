@@ -255,6 +255,24 @@ pub fn get() -> &'static Bin {
 /// 全局缓存，直到进程退出；进程退出时内核自动回收。这样既拿到了 `'static`
 /// 又不用引入自引用的所有权结构。代价是重新编译 `user.bin` 后旧映射会残留
 /// （每次重编译 +1 份共享页），而重编译只在设置窗里点按钮时才发生，可接受。
+/// 只读文件头拿条目数，不做映射。
+///
+/// `map_file` 的视图是**故意不释放**的（每个进程只映射一次，退出才回收），
+/// 拿它「数一下」会让设置窗每点一次按钮就多攒一份映射。这里只读前 12 个字节。
+pub fn count_file(path: &Path) -> Option<usize> {
+    use std::io::Read;
+
+    let mut head = [0u8; 12];
+    std::fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
+    if &head[0..4] != MAGIC {
+        return None;
+    }
+    if u32::from_le_bytes([head[4], head[5], head[6], head[7]]) != VERSION {
+        return None;
+    }
+    Some(u32::from_le_bytes([head[8], head[9], head[10], head[11]]) as usize)
+}
+
 pub fn map_file(path: &Path) -> Option<&'static Bin> {
     use std::os::windows::io::AsRawHandle;
 
@@ -302,6 +320,25 @@ pub fn map_file(path: &Path) -> Option<&'static Bin> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `count_file` 是「编译个人词库」用来判断「已有多少条」的，只读文件头。
+    /// 三个要点：正常文件给出正确条数、不存在的文件给 `None`、垃圾内容给 `None` 而不 panic。
+    #[test]
+    fn count_file_reads_header_only() {
+        let entries = crate::dictenc::parse_entries("你好\tni hao\n难道\tnan dao\n");
+        let built = crate::dictenc::build(&entries);
+
+        let path = std::env::temp_dir().join("feihe_count_file_test.bin");
+        std::fs::write(&path, &built.bytes).unwrap();
+        assert_eq!(count_file(&path), Some(built.count));
+
+        assert_eq!(count_file(&path.with_extension("nope")), None, "不存在的文件");
+
+        std::fs::write(&path, b"FHDB").unwrap();
+        assert_eq!(count_file(&path), None, "截断的文件不能 panic");
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn header_ok() {

@@ -366,13 +366,22 @@ unsafe fn on_command(h: HWND, id: i32) {
             // 手改过 user_dict.txt、或想确认 user.bin 状态时用。
             // 编译是幂等的：内容没变也会重写一遍，成本只有几十毫秒。
             match dict::compile_user_bin() {
-                Ok((n, bytes)) => set_text(
+                Ok(dict::CompileOutcome::Compiled { count, bytes }) => set_text(
                     h,
                     ID_NOTE,
                     &format!(
-                        "已编译 {n} 条到 user.bin（{} KB）。其它程序重新切换一次输入法后生效。",
+                        "已编译 {count} 条到 user.bin（{} KB）。其它程序重新切换一次输入法后生效。",
                         bytes / 1024
                     ),
+                ),
+                // 没导入过个人词库：这不是错误，别拿「找不到文件」吓人
+                Ok(dict::CompileOutcome::NoSource { existing }) => set_text(
+                    h,
+                    ID_NOTE,
+                    &match existing {
+                        Some(n) => format!("没有 user_dict.txt，现有 user.bin {n} 条，无需编译。"),
+                        None => "还没有个人词库。先用「导入词库…」导入一个词表。".to_string(),
+                    },
                 ),
                 Err(e) => set_text(h, ID_NOTE, &format!("编译失败：{e}")),
             }
@@ -454,7 +463,7 @@ unsafe fn build(h: HWND) {
     y += 34;
     push(h, "导入词库…", 16, y, 104, 28, ID_IMPORT);
     push(h, "导出词库…", 128, y, 104, 28, ID_EXPORT);
-    push(h, "编译成二进制", 240, y, 128, 28, ID_COMPILE);
+    push(h, "编译个人词库", 240, y, 128, 28, ID_COMPILE);
 
     y += 38;
     label(h, "导入格式：每行「词<TAB>全拼」，例如：你好<TAB>ni hao", 16, y, 428, ID_NOTE);

@@ -3,7 +3,7 @@
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
 **当前版本 0.2.0** ｜ 安装包 1.39 MB ｜ 装完约 6.0 MB ｜ 单字 8006 ｜ 词条 38024 ｜
-不联网、不弹窗、无账号 ｜ 141 项单元测试
+不联网、不弹窗、无账号 ｜ 142 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
 > 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
@@ -517,7 +517,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶，共 141 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶，共 142 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -733,8 +733,12 @@ python tools/gen_dict.py --no-download # 只用缓存
 | `%APPDATA%\Feihe\user_dict.txt` | **源文件**，人可读、可手改、可导出（`词<TAB>全拼`） |
 | `%APPDATA%\Feihe\user.bin` | 上面那份**编译出来的 FHDB 二进制**，运行时 mmap |
 
-设置窗里三个按钮：`导入词库…` / `导出词库…` / `编译成二进制`。**导入后会自动编译**，
+设置窗里三个按钮：`导入词库…` / `导出词库…` / `编译个人词库`。**导入后会自动编译**，
 所以正常情况下你不用管 `user.bin`。
+
+「编译个人词库」编译的是**你的** `user_dict.txt`，不是程序本身。从没导入过个人词库时
+那个文件不存在——这时点按钮不报错，只提示「还没有个人词库」，因为它本来就无事可做
+（早期版本会甩一句 `读不到 user_dict.txt：系统找不到指定的文件`，看着像崩了）。
 
 为什么值得编译：
 
@@ -747,7 +751,7 @@ python tools/gen_dict.py --no-download # 只用缓存
 
 判定规则是「产物不能比源旧」：如果 `user_dict.txt` 的 mtime 比 `user.bin` 新
 （说明你手改了 txt 但没重新编译），运行时自动退回文本覆盖层，避免「改了不生效」。
-点一次「编译成二进制」就回到快路径。
+点一次「编译个人词库」就回到快路径。
 
 `user.bin` 和 `base.bin` 用的是**同一个编码器**（`src/dictenc.rs`，`build.rs` 与运行期
 各以 `#[path]` 引入一次）。两边各写一份的话，改了布局忘改另一边，症状是「导入的词

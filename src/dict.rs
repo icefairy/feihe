@@ -245,15 +245,37 @@ fn user_source() -> UserSrc {
     }
 }
 
+/// 「编译成二进制」的结果。
+pub enum CompileOutcome {
+    /// 真的编译了
+    Compiled { count: usize, bytes: usize },
+    /// 没有 `user_dict.txt`（全新安装、从没导入过个人词库）。
+    /// 这种情况本来就无事可做，不是错误——`existing` 是现有 `user.bin` 的条目数。
+    NoSource { existing: Option<usize> },
+}
+
 /// 把 `user_dict.txt` 编译成 `user.bin`，然后立刻重新映射。
 ///
-/// 返回 `(条目数, 字节数)`。写临时文件再改名，避免编译到一半时别的进程
-/// 映射到半截文件；改名后旧映射仍然指向旧文件（Windows 允许改名已映射的文件）。
-pub fn compile_user_bin() -> Result<(usize, usize), String> {
-    let txt = std::fs::read_to_string(user_file()).map_err(|e| format!("读不到 user_dict.txt：{e}"))?;
+/// 写临时文件再改名，避免编译到一半时别的进程映射到半截文件；改名后旧映射
+/// 仍然指向旧文件（Windows 允许改名已映射的文件）。
+///
+/// **源文件不存在不算失败**：全新安装没有 `user_dict.txt`，用户点按钮只是想
+/// 「把词库整理一下」，这时候报「系统找不到指定的文件」纯属吓人。返回
+/// `NoSource`，由调用方给一句人话。
+pub fn compile_user_bin() -> Result<CompileOutcome, String> {
+    let src = user_file();
+    let txt = match std::fs::read_to_string(&src) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CompileOutcome::NoSource {
+                existing: dictbin::count_file(&user_bin_file()),
+            })
+        }
+        Err(e) => return Err(format!("读不到 {}：{e}", src.display())),
+    };
     let entries = dictenc::parse_entries(&txt);
     if entries.is_empty() {
-        return Err("user_dict.txt 里没有有效条目（格式：每行「词<TAB>全拼」）".into());
+        return Err("user_dict.txt 是空的（格式：每行「词<TAB>全拼」），没有可编译的内容".into());
     }
     let built = dictenc::build(&entries);
 
@@ -267,7 +289,10 @@ pub fn compile_user_bin() -> Result<(usize, usize), String> {
     })?;
 
     refresh_user_bin();
-    Ok((built.count, built.bytes.len()))
+    Ok(CompileOutcome::Compiled {
+        count: built.count,
+        bytes: built.bytes.len(),
+    })
 }
 
 static OVERLAY: RwLock<Option<Arc<Overlay>>> = RwLock::new(None);
@@ -747,8 +772,11 @@ pub fn import_from(path: &Path) -> Result<(usize, Option<(usize, usize)>), Strin
         // 导入完立刻编译成 user.bin，让用户词库走 mmap 而不是每进程解析一遍。
         // 编译失败不算导入失败——txt 已经写好了，退回覆盖层照样能用，只是慢一点。
         match compile_user_bin() {
-            Ok((n, bytes)) => return Ok((added, Some((n, bytes)))),
-            Err(_) => reload_overlay(),
+            Ok(CompileOutcome::Compiled { count, bytes }) => {
+                return Ok((added, Some((count, bytes))))
+            }
+            // 刚写完 txt，不可能走到 NoSource；真走到也只当编译失败处理
+            _ => reload_overlay(),
         }
     }
     Ok((added, None))

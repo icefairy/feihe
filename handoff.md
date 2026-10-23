@@ -40,8 +40,8 @@
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
-实测数据：安装包 1.39 MB、装完约 6.0 MB、64 位 DLL 3086 KB、`base.bin` 38024 条 /
-2321 KB、141 项单测。
+实测数据：安装包 1.39 MB、装完约 6.0 MB、64 位 DLL 3088 KB、`base.bin` 38024 条 /
+2321 KB、142 项单测。
 
 
 ## 自绘窗口架构（v2 新增）
@@ -418,6 +418,13 @@ GBK 那两万多字（异形字 / 繁体 / 日韩汉字）不收：繁体靠 `zh
 4. **改名覆盖已映射的文件是可行的**。重编译写 `user.bin.tmp` 再 `fs::rename` 覆盖，
    Windows 允许（旧映射继续指向旧文件）。`rename_over_mapped_file` 这个测试钉住了
    这个语义——不钉的话第二次编译会莫名其妙失败。
+5. **缺源文件不是错误**。全新安装没有 `user_dict.txt`（只有导入过才有），
+   `compile_user_bin()` 早期直接 `fs::read_to_string(...)?` → 报「系统找不到指定的文件」，
+   用户看到「编译失败」以为程序坏了。现在返回 `CompileOutcome::NoSource{existing}`，
+   设置窗给一句人话（有 bin 就说「现有 N 条，无需编译」）。同时按钮从「编译成二进制」
+   改名「编译个人词库」——原名让人以为在编译程序本身。
+   统计现有条数用 `dictbin::count_file()`（只读 12 字节文件头），不能顺手调
+   `map_file()`：视图故意不释放，点几次按钮就攒几份映射。
 
 跨进程生效：别的进程还映射着旧文件，靠 `Activate` 里的 `dict::refresh_user_bin()`
 重新探测 mtime（两次文件属性查询，可忽略）并重映射。
