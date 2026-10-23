@@ -2,7 +2,7 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.0** ｜ 安装包 1.54 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 45796 ｜
+**当前版本 0.2.1** ｜ 安装包 1.54 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 45796 ｜
 不联网、不弹窗、无账号 ｜ 156 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
@@ -602,7 +602,7 @@ unregister.cmd    :: 全部移除
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.2.0.exe
+# 产物：dist\Feihe-Setup-0.2.1.exe
 ```
 
 `build_setup.ps1` 做四件事：

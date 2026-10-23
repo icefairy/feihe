@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-0.2.0 的功能全部落地，只有组合串下划线未做。这里只列「哪一块在哪、有什么讲究」，
+0.2.1 的功能全部落地，只有组合串下划线未做。这里只列「哪一块在哪、有什么讲究」，
 细节看各自专节。
 
 | 模块 | 位置 | 备注 |
@@ -976,7 +976,7 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 
 ```
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# → dist\Feihe-Setup-0.2.0.exe（约 1.25 MB，内嵌 5.8 MB 的双架构 DLL）
+# → dist\Feihe-Setup-0.2.1.exe（约 1.25 MB，内嵌 5.8 MB 的双架构 DLL）
 ```
 
 设计取舍：
