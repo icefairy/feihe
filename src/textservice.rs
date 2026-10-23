@@ -474,7 +474,7 @@ impl FeiheTextService {
 
     /// 组合串里允许出现哪些字符（全拼模式放宽到纯字母，两种模式都允许手动分隔符）
     fn code_allowed(s: &str) -> bool {
-        // 快捷输入：`\` + 纯小写字母
+        // 快捷输入：引导符（反引号，见 quick::PREFIX）+ 纯小写字母
         if let Some(rest) = s.strip_prefix(quick::PREFIX) {
             return rest.chars().all(|c| c.is_ascii_lowercase());
         }

@@ -532,7 +532,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 3. **发布模式构建**（`FEIHE_NO_USER_DICT=1`）。`src/user_dict.txt` 是 5 万条个人打字记录，
    普通构建会并进 `base.bin`（86749 条 → 38024 条，DLL 7.0 MB → 2.8 MB）。
 
-五个坑（按踩到的顺序）：
+六个坑（按踩到的顺序）：
 
 - **`.nsi` 必须带 UTF-8 BOM**。NSIS 只在文件开头有 BOM 时才按 UTF-8 解析，否则按系统 ACP
   读。中文注释直接报 `Bad text encoding: feihe.nsi:1` + `Error in script "feihe.nsi" on
@@ -614,15 +614,30 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 ## 待办
 
+> 2026-10-23 逐条核实过代码，下面每条都确认「确实没做」。已做的都挪到「已完成」了。
+
+**M3 剩余部分**（`README` 的里程碑里 M3 列了三项，只完成了 Shift 中英切换）：
+
 - [ ] 候选窗鼠标点击选词（现在窗口吞掉点击但不透传）
 - [ ] 组合串下划线（`GUID_DISPLAY_FEIHE` 已在 `clsid.rs` 定义，但没实现 `ITfDisplayAttributeProvider`）
-- [ ] 快捷输入扩展：农历、`` ` `` 后的自定义短语
+
+**功能**
+
+- [ ] 快捷输入扩展：农历、`` ` `` 后的自定义短语（`quick.rs` 现在只有日期/时间/星期/时间戳）
 - [ ] **阶段二**：用户词库换 SQLite（`winsqlite3.dll` + 手写 FFI），支持删词/置顶
       （词频学习已经用 `freq.rs` + `freq.txt` 做了，见「动态词频」一节；SQLite 的
       价值现在只剩「删词 / 置顶 / 事务」，别再拿「支持词频学习」当迁移理由）
-- [ ] 设置窗改双拼方案后，**其它已打开的进程**要重新激活才生效（方案缓存在各自的原子变量里）
-- [ ] 删除诊断日志，回到干净构建
-- [ ] `C:\ProgramData\Feihe\` 下 3 个 `feihe.dll.old-*` 被运行中的进程占用，重启后可删
+- [ ] 模糊音（只在 README 的 librime 说明里提过一句，没排期。真要做建议在
+      `shuangpin::encode_pinyin` 之后加一层等价类归并，而不是改词库）
+- [ ] **M5（v2）**：语音输入热键 + ASR + AI 修正，完全没动
+
+**工程债**
+
+- [ ] 设置窗改双拼方案后，**其它已打开的进程**要重新激活才生效（方案缓存在各自的原子变量里；
+      `Activate` 里已经会重读 config，所以只是「不即时」，不是「不生效」）
+- [ ] 删除诊断日志，回到干净构建（`src/log.rs` + 8 个文件里 55 处 `crate::trace!` 还在）
+- [ ] `C:\ProgramData\Feihe\` 下 **4 个** `feihe.dll.old-*`（约 16MB）被运行中的进程占用，
+      重启后可删
 
 已完成（别再当待办）：
 

@@ -179,7 +179,7 @@ pub fn commands() -> Vec<(&'static str, &'static str)> {
     CMDS.iter().map(|c| (c.key, c.label)).collect()
 }
 
-/// 给 `\` 后面的码生成候选。
+/// 给引导符（`PREFIX`，即反引号）后面的码生成候选。
 ///
 /// - 空串：列出全部命令的当前值预览（按空格拿日期，按数字选别的）
 /// - 是某个命令的前缀：展开该命令的所有格式

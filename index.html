@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.24 MB，不联网、不弹窗、无账号，源码全开。">
+<style>
+  :root{
+    --ink:#0a0d12;
+    --ink-2:#0f141c;
+    --card:#141b25;
+    --card-2:#19222e;
+    --line:#243040;
+    --line-soft:#1c2632;
+    --fg:#e8eef6;
+    --fg-dim:#9fb0c4;
+    --fg-mute:#6b7d92;
+    --red:#d4553f;
+    --red-soft:#f08a72;
+    --jade:#4fb3a0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--ink);color:var(--fg);
+    font-family:var(--sans);line-height:1.75;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+
+  /* ── 导航 ── */
+  nav{
+    position:sticky;top:0;z-index:50;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    background:rgba(10,13,18,.78);border-bottom:1px solid var(--line-soft);
+  }
+  nav .wrap{display:flex;align-items:center;gap:28px;height:60px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.02em}
+  .brand .mark{
+    width:22px;height:22px;border-radius:6px;
+    background:linear-gradient(140deg,var(--red),#8d2f22);
+    box-shadow:0 0 0 1px rgba(212,85,63,.35),0 4px 14px -4px rgba(212,85,63,.6);
+  }
+  nav .links{margin-left:auto;display:flex;gap:22px;font-size:14px;color:var(--fg-dim)}
+  nav .links a:hover{color:var(--fg)}
+  @media(max-width:720px){nav .links{display:none}}
+
+  /* ── Hero ── */
+  header{position:relative;overflow:hidden;padding:92px 0 76px}
+  header::before{
+    content:"";position:absolute;inset:-40% 20% auto -10%;height:620px;
+    background:radial-gradient(closest-side,rgba(212,85,63,.20),transparent 72%);
+    pointer-events:none;
+  }
+  header::after{
+    content:"";position:absolute;inset:auto -20% -40% 40%;height:520px;
+    background:radial-gradient(closest-side,rgba(79,179,160,.12),transparent 72%);
+    pointer-events:none;
+  }
+  .hero{position:relative;z-index:1}
+  .tag{
+    display:inline-flex;align-items:center;gap:8px;
+    font-size:13px;color:var(--fg-dim);
+    border:1px solid var(--line);border-radius:999px;padding:5px 14px;
+    background:rgba(255,255,255,.02);
+  }
+  .tag b{color:var(--red-soft);font-weight:600}
+  h1{
+    font-size:clamp(38px,6.4vw,62px);line-height:1.12;
+    margin:26px 0 0;letter-spacing:-.02em;font-weight:800;
+  }
+  h1 .thin{color:var(--fg-mute);font-weight:300}
+  .lede{
+    margin:22px 0 0;max-width:660px;font-size:clamp(15px,2.1vw,18px);
+    color:var(--fg-dim);
+  }
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:12px 22px;border-radius:10px;font-size:15px;font-weight:600;
+    border:1px solid transparent;transition:.18s;
+  }
+  .btn.primary{background:var(--red);color:#fff;box-shadow:0 8px 26px -10px rgba(212,85,63,.9)}
+  .btn.primary:hover{background:#e0604a;transform:translateY(-1px)}
+  .btn.ghost{border-color:var(--line);color:var(--fg-dim);background:rgba(255,255,255,.02)}
+  .btn.ghost:hover{border-color:var(--fg-mute);color:var(--fg)}
+
+  /* ── 数字 ── */
+  .stats{
+    display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+    margin-top:64px;background:var(--line-soft);
+    border:1px solid var(--line-soft);border-radius:14px;overflow:hidden;
+  }
+  .stat{background:var(--ink-2);padding:22px 20px}
+  .stat .n{font-size:clamp(22px,3.2vw,30px);font-weight:800;letter-spacing:-.02em}
+  .stat .n small{font-size:.55em;font-weight:600;color:var(--fg-mute);margin-left:3px}
+  .stat .k{font-size:12.5px;color:var(--fg-mute);margin-top:2px;letter-spacing:.04em}
+  @media(max-width:720px){
+    .stats{grid-template-columns:repeat(2,1fr)}
+    header{padding:64px 0 56px}
+  }
+
+  /* ── 通用小节 ── */
+  section{padding:72px 0;border-top:1px solid var(--line-soft)}
+  .sec-head{margin-bottom:36px}
+  .eyebrow{
+    font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--red-soft);font-weight:700;
+  }
+  h2{font-size:clamp(24px,3.6vw,32px);margin:10px 0 0;letter-spacing:-.01em;font-weight:750}
+  .sub{color:var(--fg-dim);margin:12px 0 0;max-width:680px}
+
+  /* ── 特性卡 ── */
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:600px){.grid{grid-template-columns:1fr}}
+  .card{
+    background:var(--card);border:1px solid var(--line-soft);
+    border-radius:14px;padding:22px 20px;transition:.2s;
+  }
+  .card:hover{border-color:var(--line);background:var(--card-2);transform:translateY(-2px)}
+  .card h3{margin:0 0 8px;font-size:16px;font-weight:700}
+  .card p{margin:0;font-size:14px;color:var(--fg-dim);line-height:1.7}
+  .card code{
+    font-family:var(--mono);font-size:12.5px;color:var(--jade);
+    background:rgba(79,179,160,.09);padding:1px 5px;border-radius:4px;
+  }
+
+  /* ── 对比表 ── */
+  .tablewrap{overflow-x:auto;border:1px solid var(--line-soft);border-radius:14px}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:620px}
+  th,td{padding:13px 18px;text-align:left;border-bottom:1px solid var(--line-soft)}
+  thead th{
+    font-size:12.5px;letter-spacing:.06em;color:var(--fg-mute);
+    font-weight:700;background:var(--ink-2);
+  }
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:rgba(255,255,255,.015)}
+  td:first-child{color:var(--fg-dim)}
+  .me{color:var(--fg);font-weight:650}
+  .yes{color:var(--jade)}
+  .no{color:var(--fg-mute)}
+  .half{color:var(--red-soft)}
+
+  /* ── 键位图 ── */
+  .kbd-wrap{
+    background:var(--card);border:1px solid var(--line-soft);
+    border-radius:16px;padding:26px 22px;
+  }
+  .kbd{display:flex;flex-direction:column;gap:8px;align-items:center}
+  .krow{display:flex;gap:8px}
+  .key{
+    width:64px;height:58px;border-radius:9px;
+    background:linear-gradient(180deg,#1d2734,#161e29);
+    border:1px solid var(--line);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:1px;
+  }
+  .key .l{font-size:14px;font-weight:700;color:var(--fg);line-height:1}
+  .key .y{font-family:var(--mono);font-size:12px;color:var(--jade);line-height:1.25}
+  .key.dim{opacity:.34}
+  .key.hl{border-color:rgba(212,85,63,.55);background:linear-gradient(180deg,#2a1d1c,#1e1616)}
+  .key.hl .y{color:var(--red-soft)}
+  .kbd-note{
+    margin-top:18px;font-size:13px;color:var(--fg-mute);text-align:center;line-height:1.9;
+  }
+  @media(max-width:720px){
+    .key{width:auto;flex:1;min-width:0;height:52px}
+    .krow{width:100%}
+    .key .y{font-size:10.5px}
+  }
+
+  /* ── 零声母表 ── */
+  .zero{
+    margin-top:26px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;
+  }
+  @media(max-width:760px){.zero{grid-template-columns:1fr}}
+  .zero .z{
+    border:1px solid var(--line-soft);border-radius:12px;padding:16px 18px;
+    background:var(--ink-2);
+  }
+  .zero .z .t{font-size:12px;color:var(--fg-mute);letter-spacing:.05em}
+  .zero .z .d{font-size:14px;margin-top:6px;color:var(--fg-dim)}
+  .zero .z .d code{font-family:var(--mono);color:var(--jade);font-size:13px}
+
+  /* ── 代码块 ── */
+  pre{
+    background:var(--ink-2);border:1px solid var(--line-soft);border-radius:12px;
+    padding:18px 20px;overflow-x:auto;font-family:var(--mono);
+    font-size:13.5px;line-height:1.85;color:#cbd8e6;margin:0;
+  }
+  pre .c{color:var(--fg-mute)}
+  pre .p{color:var(--red-soft)}
+
+  /* ── 未完成清单 ── */
+  .todo{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 24px}
+  @media(max-width:700px){.todo{grid-template-columns:1fr}}
+  .todo div{
+    display:flex;gap:10px;font-size:14px;color:var(--fg-dim);
+    padding:9px 0;border-bottom:1px dashed var(--line-soft);
+  }
+  .todo div::before{content:"—";color:var(--fg-mute);flex:none}
+
+  footer{
+    padding:52px 0 64px;border-top:1px solid var(--line-soft);
+    color:var(--fg-mute);font-size:13.5px;
+  }
+  footer .row{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
+  footer a{color:var(--fg-dim);border-bottom:1px solid var(--line)}
+  footer a:hover{color:var(--fg);border-color:var(--fg-mute)}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand"><span class="mark"></span>飞鹤输入法</div>
+    <div class="links">
+      <a href="#compare">对比</a>
+      <a href="#features">特性</a>
+      <a href="#keymap">键位</a>
+      <a href="#start">开始用</a>
+      <a href="#status">现状</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap hero">
+    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.2.0</b></span>
+    <h1>一个只有几 MB 的<br><span class="thin">双拼输入法</span></h1>
+    <p class="lede">
+      飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼，词库在构建期预编码成
+      二进制嵌进 DLL，由系统 mmap 共享。不联网、不弹窗、不要账号，源码全开。
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/icefairy/feihe">查看源码</a>
+      <a class="btn ghost" href="https://github.com/icefairy/feihe/blob/main/README.md">构建与安装</a>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="n">1.24<small>MB</small></div><div class="k">安装包</div></div>
+      <div class="stat"><div class="n">8006</div><div class="k">收录单字</div></div>
+      <div class="stat"><div class="n">38024</div><div class="k">词条</div></div>
+      <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
+    </div>
+  </div>
+</header>
+
+<section id="compare">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Positioning</div>
+      <h2>不打算取代搜狗，只服务一种人</h2>
+      <p class="sub">
+        体积数据是本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件，用户数据另占 7.8 MB）。
+        飞鹤装完是两份 DLL，约 5.7 MB。
+      </p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>安装包</td><td class="me">1.24 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>装完占用</td><td class="me">约 5.7 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
+          <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
+          <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
+          <tr><td>开源</td><td class="yes">是，Rust 全文可改</td><td class="no">否</td><td class="no">否</td></tr>
+          <tr><td>小鹤双拼</td><td class="yes">原生，不用装方案</td><td class="half">支持</td><td class="half">支持</td></tr>
+          <tr><td>词库规模</td><td class="no">3.8 万条</td><td class="yes">数百万级云词库</td><td class="half">系统词库</td></tr>
+          <tr><td>生僻字</td><td class="yes">GB2312 + 规范字表全收，缺 0</td><td class="yes">全</td><td class="yes">全</td></tr>
+          <tr><td>动态词频</td><td class="yes">本地学习</td><td class="yes">云端 + 本地</td><td class="yes">本地</td></tr>
+          <tr><td>简繁切换</td><td class="yes">Windows NLS，零体积</td><td class="yes">有</td><td class="yes">有</td></tr>
+          <tr><td>模糊音</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
+          <tr><td>语音输入</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
+          <tr><td>云同步 / 云词库</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
+          <tr><td>候选窗点击选词</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Design</div>
+      <h2>它占优的地方，都是「少」带来的</h2>
+      <p class="sub">没有一项是靠堆功能赢的。省掉的东西，最后都变成了体积、启动速度和可读的代码。</p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>词库零解析</h3>
+        <p>构建期把 3.8 万条预编码成三套码（小鹤 / 微软 / 全拼），连同偏移表写成一个扁平文件，
+          用 <code>include_bytes!</code> 嵌进 DLL 的 <code>.rdata</code>。运行时只是「读两个数组 + 二分」。</p>
+      </div>
+      <div class="card">
+        <h3>多进程共享物理页</h3>
+        <p><code>.rdata</code> 由 PE 加载器 mmap，记事本、Word、浏览器打开同一个输入法，
+          词库在内存里只有一份。不是每进程各背一份私有堆。</p>
+      </div>
+      <div class="card">
+        <h3>没有联网代码</h3>
+        <p>这不是隐私承诺，是「没写这个功能」。实测 18 个导入 DLL 全是
+          <code>kernel32</code> / <code>user32</code> / <code>ole32</code> / CRT 这一层，
+          没有 <code>wininet</code>、<code>winhttp</code>、<code>ws2_32</code>。
+          用 <code>objdump -p</code> 一眼可验。</p>
+      </div>
+      <div class="card">
+        <h3>不自动上屏</h3>
+        <p>只有你按空格 / 数字 / 回车 / 标点，字才落进文档。长句切成分段让你一段段选，
+          绝不替你猜一半先写进去。</p>
+      </div>
+      <div class="card">
+        <h3>生僻字不缺</h3>
+        <p>《通用规范汉字表》可编码的 7896 字全收，再补 GB2312 独有的 110 字（嬲、欷、榘、
+          以及 忄 亻 扌 这类部件）。姓「仝」的人能打出自己的姓。</p>
+      </div>
+      <div class="card">
+        <h3>动态词频</h3>
+        <p>你选了哪个词，下次它就往前排。稳定排序，没学过的词相对顺序一点不动，
+          不会因为开了这个功能把候选搞乱。</p>
+      </div>
+      <div class="card">
+        <h3>简繁零体积</h3>
+        <p>走 Windows 自带的 NLS 映射（<code>LCMapStringEx</code>），不带外部字表，
+          不增加安装包体积。转换失败时原样输出简体，绝不吞字。</p>
+      </div>
+      <div class="card">
+        <h3>全角标点跟手</h3>
+        <p><code>\</code> 或 <code>/</code> 出顿号（搜狗 / 微软两种习惯都照顾），
+          <code>Shift+\</code> 出 <code>|</code>。组合态按标点不会出现「，,」两个字符。</p>
+      </div>
+      <div class="card">
+        <h3>改一行就能重编</h3>
+        <p>不喜欢候选顺序、想加快捷输入命令、想换皮肤颜色，改 Rust 源码，30 秒出包。
+          不用等官方发版。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="keymap">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">小鹤双拼</div>
+      <h2>每个音节固定两键</h2>
+      <p class="sub">
+        声母 + 韵母。声母除 <code>zh ch sh</code> 落在 <code>v i u</code> 外都用字母本身。
+        口诀：秋闱软月云梳翅，松拥黛粉更航安，快莺两望奏夏蛙，撇草追鱼滨鸟眠。
+      </p>
+    </div>
+
+    <div class="kbd-wrap">
+      <div class="kbd">
+        <div class="krow">
+          <div class="key"><span class="l">Q</span><span class="y">iu</span></div>
+          <div class="key"><span class="l">W</span><span class="y">ei</span></div>
+          <div class="key"><span class="l">E</span><span class="y">e</span></div>
+          <div class="key"><span class="l">R</span><span class="y">uan</span></div>
+          <div class="key"><span class="l">T</span><span class="y">ue</span></div>
+          <div class="key"><span class="l">Y</span><span class="y">un</span></div>
+          <div class="key hl"><span class="l">U</span><span class="y">u / sh</span></div>
+          <div class="key hl"><span class="l">I</span><span class="y">i / ch</span></div>
+          <div class="key"><span class="l">O</span><span class="y">o·uo</span></div>
+          <div class="key"><span class="l">P</span><span class="y">ie</span></div>
+        </div>
+        <div class="krow">
+          <div class="key"><span class="l">A</span><span class="y">a</span></div>
+          <div class="key"><span class="l">S</span><span class="y">ong</span></div>
+          <div class="key"><span class="l">D</span><span class="y">ai</span></div>
+          <div class="key"><span class="l">F</span><span class="y">en</span></div>
+          <div class="key"><span class="l">G</span><span class="y">eng</span></div>
+          <div class="key"><span class="l">H</span><span class="y">ang</span></div>
+          <div class="key"><span class="l">J</span><span class="y">an</span></div>
+          <div class="key"><span class="l">K</span><span class="y">uai</span></div>
+          <div class="key"><span class="l">L</span><span class="y">iang</span></div>
+        </div>
+        <div class="krow">
+          <div class="key"><span class="l">Z</span><span class="y">ou</span></div>
+          <div class="key"><span class="l">X</span><span class="y">ia</span></div>
+          <div class="key"><span class="l">C</span><span class="y">ao</span></div>
+          <div class="key hl"><span class="l">V</span><span class="y">ui / zh</span></div>
+          <div class="key"><span class="l">B</span><span class="y">in</span></div>
+          <div class="key"><span class="l">N</span><span class="y">iao</span></div>
+          <div class="key"><span class="l">M</span><span class="y">ian</span></div>
+        </div>
+      </div>
+      <div class="kbd-note">
+        <code style="font-family:var(--mono);color:var(--jade)">nihc</code> → 你好 ·
+        <code style="font-family:var(--mono);color:var(--jade)">vsgo</code> → 中国 ·
+        <code style="font-family:var(--mono);color:var(--jade)">uijp</code> → 世界 ·
+        <code style="font-family:var(--mono);color:var(--jade)">annq</code> → 按钮
+      </div>
+    </div>
+
+    <div class="zero">
+      <div class="z">
+        <div class="t">零声母 · 单字母韵母</div>
+        <div class="d">重复该字母：啊 <code>aa</code>、哦 <code>oo</code>、额 <code>ee</code></div>
+      </div>
+      <div class="z">
+        <div class="t">零声母 · 双字母韵母</div>
+        <div class="d">保持全拼形式：爱 <code>ai</code>、安 <code>an</code>、欧 <code>ou</code></div>
+      </div>
+      <div class="z">
+        <div class="t">零声母 · 三字母韵母</div>
+        <div class="d">用韵母所在键：昂 <code>ah</code>、鞥 <code>eg</code></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Getting started</div>
+      <h2>怎么跑起来</h2>
+      <p class="sub">
+        需要 Rust、llvm-mingw（解压到 <code>C:\llvm-mingw</code>）、以及 gnullvm target。
+        不需要 MSVC，也不需要 CMake。
+      </p>
+    </div>
+
+    <pre><span class="c"># 1. 准备 target（国内直连不通时用中科大镜像）</span>
+rustup target add x86_64-pc-windows-gnullvm
+rustup target add i686-pc-windows-gnullvm
+
+<span class="c"># 2. 一键构建：64 + 32 位两份 DLL，自动校验 PE 头并跑加载冒烟测试</span>
+<span class="p">powershell</span> -ExecutionPolicy Bypass -File build.ps1
+
+<span class="c"># 3. 打安装包（发布模式，排除本机个人词库）</span>
+<span class="p">powershell</span> -ExecutionPolicy Bypass -File installer\build_setup.ps1
+<span class="c"># → dist\Feihe-Setup-0.2.0.exe</span></pre>
+
+    <div class="grid" style="margin-top:20px">
+      <div class="card">
+        <h3>为什么要两份 DLL</h3>
+        <p>in-proc COM 的位数必须和宿主进程一致。64 位宿主加载 <code>feihe.dll</code>，
+          32 位 Office 之类加载 <code>feihe32.dll</code>，同一个 CLSID 背后挂两个文件。</p>
+      </div>
+      <div class="card">
+        <h3>安装后要手动加一下</h3>
+        <p>到「设置 → 时间和语言 → 语言和区域 → 中文 → 语言选项 → 键盘」里应出现「飞鹤拼音」。
+          列表由 shell 缓存，没刷新就注销重登一次。</p>
+      </div>
+      <div class="card">
+        <h3>未签名，会撞 SmartScreen</h3>
+        <p>首次运行提示「已保护你的电脑」，点「更多信息 → 仍要运行」。
+          要消掉得买代码签名证书，暂时没买。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Status</div>
+      <h2>还没做的，也写在明面上</h2>
+      <p class="sub">省得你试了半天才发现。每一条都对照代码核实过。</p>
+    </div>
+    <div class="todo">
+      <div>候选窗鼠标点击选词（只能键盘选）</div>
+      <div>组合串下划线（ITfDisplayAttributeProvider 未实现）</div>
+      <div>快捷输入的农历与自定义短语</div>
+      <div>模糊音</div>
+      <div>语音输入（M5 才规划）</div>
+      <div>删词 / 置顶（需要 SQLite，阶段二）</div>
+      <div>云同步 / 云词库</div>
+      <div>安装包代码签名</div>
+    </div>
+    <p class="sub" style="margin-top:26px">
+      已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词、全角标点、
+      简繁切换、动态词频、状态浮窗、设置窗、符号软键盘、搜狗个人词库导入、
+      用户词库编译成二进制走 mmap。
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap row">
+    <span>飞鹤输入法 v0.2.0 · Rust + windows-rs · Windows TSF</span>
+    <a href="https://github.com/icefairy/feihe">源码</a>
+    <a href="https://github.com/icefairy/feihe/blob/main/README.md">文档</a>
+    <a href="https://github.com/icefairy/feihe/blob/main/handoff.md">实现笔记</a>
+  </div>
+</footer>
+
+</body>
+</html>

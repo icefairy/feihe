@@ -2,18 +2,81 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
+**当前版本 0.2.0** ｜ 安装包 1.24 MB ｜ 装完约 5.7 MB ｜ 单字 8006 ｜ 词条 38024 ｜
+不联网、不弹窗、无账号 ｜ 93 项单元测试
+
+> 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
+> 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
+
 ## 里程碑
 
 - **M1（已完成）**：TSF 骨架——注册为系统输入法、收键、组合态、edit session 上屏
 - **M2（已完成）**：小鹤双拼引擎 + 内置词库 + 候选窗（纯 Rust，暂不引 librime，原因见下）
 - **M2.5（已完成）**：状态浮窗、设置窗（输入模式 / 方案 / 皮肤 / 字形 / 词库管理）、
   符号软键盘、小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、全角标点、简繁切换
-- **M3**：候选窗鼠标点击选词、组合串下划线（`ITfDisplayAttributeProvider`）、Shift 中英切换
+- **M3（进行中）**：Shift 中英切换（已完成）／ 候选窗鼠标点击选词（未做）／
+  组合串下划线 `ITfDisplayAttributeProvider`（未做）
 - **M5**（v2）：语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关）
 
 > 关于 librime：它是 C++17 + CMake，与当前的 llvm-mingw/gnullvm 无 MSVC 路线在 C++ 标准库
 > ABI 上摩擦较大。双拼本质是「两键 → 一个全拼音节」的查表映射，纯 Rust 几百行即可跑通，
 > 等确实需要 rime 的 schema 生态（模糊音、多方案、用户词典）时再引入。
+
+## 和主流输入法比，飞鹤是什么定位
+
+一句话：**一个只有几 MB、不联网、不弹窗、源码全开的双拼输入法**。
+不打算取代搜狗的全功能，只服务「只想安安静静打双拼」的人。
+
+体积数据是本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件，用户数据另占 7.8 MB）：
+
+| 维度 | 飞鹤 | 搜狗拼音 | 微软拼音 |
+|---|---|---|---|
+| 安装包 | **1.24 MB** | 百 MB 量级 | 随系统预装 |
+| 装完占用 | **约 5.7 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
+| 广告 / 热点推送 | **没有这功能** | 有（可在设置里关） | 无 |
+| 账号 / 联网 | **完全不需要** | 登录后云同步 | 微软账户可选 |
+| 开源 | **是**（Rust，全文可改） | 否 | 否 |
+| 小鹤双拼 | **原生**，不用装方案 | 支持 | 支持 |
+| 词库规模 | 3.8 万条 | 数百万级云词库 | 系统词库 |
+| 生僻字 | GB2312 + 通用规范汉字表**全收，缺 0** | 全 | 全 |
+| 动态词频 | 本地学习 | 云端 + 本地 | 本地 |
+| 简繁切换 | Windows NLS，零体积 | 有 | 有 |
+| 皮肤 | 3 套内置 | 皮肤商店 | 少量 |
+| 模糊音 | **无** | 有 | 有 |
+| 语音输入 | **无**（M5 才规划） | 有 | 有 |
+| 云同步 / 云词库 | **无** | 有 | 有 |
+| 候选窗点击选词 | **无**（M3 未做） | 有 | 有 |
+
+**它真正占优的地方，都是「少」带来的：**
+
+- **体积差两个数量级**。词库在构建期预编码成扁平二进制，`include_bytes!` 嵌进 DLL 的
+  `.rdata`；PE 加载器 mmap 它，**多个进程共享同一份物理页**。没有运行时解析、没有
+  每进程私有堆，所以 3.8 万条词库只值 2.3 MB。
+- **没有联网代码**。整个 DLL 的导入表里没有任何网络 API，这不是「隐私承诺」，是
+  「没写这个功能」。实测 18 个导入 DLL 全是 `kernel32` / `user32` / `ole32` / CRT 这一层，
+  没有 `wininet` / `winhttp` / `ws2_32` / `urlmon`。自己验：
+
+  ```cmd
+  objdump -p feihe.dll | findstr /i "DLL Name"
+  objdump -p feihe.dll | findstr /i "internet winhttp ws2_32 urlmon"
+  ```
+- **改一行就能重新编译**。不喜欢候选顺序、想加个快捷输入命令、想换皮肤颜色，
+  改 Rust 源码 30 秒出包，不用等官方发版。
+- **双拼是一等公民**。不是「全拼输入法附带一个双拼模式」，键位表本身就是规格，
+  单元测试拿官方反查结果钉死（`按钮` = `annq` 这种零声母细节）。
+- **不自动上屏**。长句一定是「你按空格才落字」，不会替你猜一半先写进文档。
+
+**它明确不如人的地方，也说清楚：**
+
+- **词库差得远**。3.8 万条是「够日常」的量级，不是「什么都有」。专业术语、
+  网络新词、人名地名基本查不到，得靠用户词库补（支持导入搜狗个人词库，
+  见后文）。
+- **没有云**。换电脑不同步，词频学习只在本机。
+- **模糊音、语音、手写、候选窗点击选词都还没有**。
+- **安装包未签名**，首次运行会撞 SmartScreen。
+
+如果你要的是「功能最全的中文输入法」，用搜狗或微软拼音；如果你要的是
+「一个安静、干净、能改的双拼引擎」，飞鹤就是为这个做的。
 
 ## 怎么打字（小鹤双拼）
 
@@ -268,7 +331,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 + 词库查询）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 分词，共 93 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -344,7 +407,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 ### 安装包里为什么没有 Python
 
-`tools\*.py`（`import_sogou.py`、`gen_ids.py`、`smoke_com.py`）全是**开发期**工具：
+`tools\*.py`（`import_sogou.py`、`gen_assist.py`、`gen_dict.py`、`smoke_com.py`）全是**开发期**工具：
 导词库、生成辅助码、跑冒烟测试。运行时一个都不需要，所以不随安装包分发，
 也就没有内置 Python 的必要。安装包实际只装 4 个文件：
 
@@ -382,6 +445,7 @@ uninstall_tip.ps1  注销脚本
 ## 目录
 
 ```
+index.html            项目主页（GitHub Pages 用，单文件零依赖，内嵌全部 CSS）
 src/lib.rs            DLL 入口（DllGetClassObject / DllCanUnloadNow）
 src/clsid.rs          固定 GUID
 src/classfactory.rs   IClassFactory
@@ -390,6 +454,7 @@ src/textservice.rs    TSF 核心（Activate / 按键 sink / 组合态 / edit ses
 src/shuangpin.rs      小鹤双拼编码（全拼→两键码，带单测当规格）
 src/dict.rs           词库查询（静态二进制 + 运行时覆盖层，二分前缀扫描）
 src/dictbin.rs        词库二进制的零解析读取器（段偏移 + 索引表 + 字节池）
+src/dictenc.rs        FHDB 编码器（build.rs 与运行期各 #[path] 引入一次，只此一份）
 src/dict.txt          基础词库（38573 条 / 626KB，gen_dict.py 生成，勿手改）
 src/extra_dict.txt    常用词补充表（76 条，手工维护，只放基础词库里缺的词）
 src/user_dict.txt     用户词库（import_sogou.py 生成，可反复重跑；未导入时为空文件）
@@ -416,6 +481,9 @@ installer/uninstall_tip.ps1  卸载：ILOT_UNINSTALL + 注册表清理（纯 ASC
 installer/register.cmd       安装入口（管理员，部署 64 + 32 位 DLL）
 installer/unregister.cmd     卸载入口（管理员）
 build.ps1             一键构建（llvm-mingw，默认 64 + 32 位；-Arch / -Debug / -SkipTest）
+check_env.ps1         环境自检（llvm-mingw / rust target / NSIS 是否就位）
+src/log.rs            **临时诊断日志**（写 %TEMP%\feihe-trace.log，验收后应删除）
+dist/                 安装包产物（已 gitignore）
 rust-toolchain.toml   固定 gnu toolchain + gnullvm target
 .cargo/config.toml    固定构建 target 与 linker（含 i686 的 linker）
 ```
@@ -514,10 +582,11 @@ python tools/gen_dict.py --no-download # 只用缓存
 
 | 文件 | 大小 | 谁读 | 删了会怎样 |
 |---|---|---|---|
-| `_icebase.yaml` | 15.8 MB | `tools/gen_dict.py` | 下次跑会自动重下（镜像可达 ✅） |
+| `_icebase.yaml` | 15.8 MB | `tools/gen_dict.py` | 下次跑会自动重下（镜像可达） |
 | `_ice8105.yaml` | 0.1 MB | `gen_dict.py`、`import_sogou.py` | 同上 |
-| `_ids.txt` | 2.1 MB | `tools/gen_assist.py` | 可重下 ✅（见下） |
-| `_unihan.zip` | 8.0 MB | `tools/gen_assist.py` | ⚠️ **别删**：unicode.org 目前连不上，删了就没法重生成自然码辅助码 |
+| `_pinyin_data.txt` | 1.0 MB | `gen_dict.py`（GB2312 补字取音） | 自动重下（`pinyin-data` 的 `pinyin.txt`，多镜像） |
+| `_ids.txt` | 2.1 MB | `tools/gen_assist.py` | 可重下（见下） |
+| `_unihan.zip` | 8.0 MB | `tools/gen_assist.py` | **别删**：unicode.org 目前连不上，删了就没法重生成自然码辅助码 |
 | `_luna.yaml` | 0.8 MB | **无人引用** | 死文件，可删 |
 | `_kmandarin.txt` | 0.9 MB | **无人引用** | 死文件，可删 |
 
@@ -576,11 +645,43 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 ### 两个词库怎么合并
 
-`dict.rs` 先加载 `user_dict.txt` 再加载 `dict.txt`，按词面去重，然后按双拼码做一次
-**稳定排序**。稳定排序保证同码时用户词的相对顺序不变，也就是**用户词永远排在基础词前面**。
+分两个阶段，**不是运行时合并**：
 
-实测合并后 81503 条（去重掉 3891 条重复），首次查询含全量解析 11.5ms，
-后续查询 584ns。DLL 从 812KB 涨到 1.99MB。
+1. **构建期**：开发机的 `src/user_dict.txt`（如果有）和 `src/dict.txt` 一起喂给
+   `build.rs`，按词面去重、按码稳定排序，编成 `base.bin` 嵌进 DLL。
+   发布构建（`FEIHE_NO_USER_DICT=1`）跳过前者——个人打字记录不能随包发出去。
+2. **运行期**：`%APPDATA%\Feihe\user.bin`（由 `user_dict.txt` 编译而来）单独 mmap，
+   查询时**先查用户词库、再查 `base.bin`**，用户词天然排在前面，不需要合并两张表。
+
+两阶段都走 `dictbin` 的同一套零解析二分。查询成本是两次前缀区间定位，
+和词库大小基本无关——`base.bin` 3.8 万条也好、8.7 万条也好，都是「读两个 u32 数组 + 二分」。
+
+> 早期版本是运行时把两份文本解析进堆、合并、稳定排序，5 万条要 125 ms/进程、
+> 每进程多背 6 MB 私有堆。换成「构建期预编码 + 运行期 mmap」之后降到 0.75 ms 且全系统共享一份页。
+
+## 已知缺口
+
+写在这里是为了让人一眼看到边界，而不是试了才发现。每一条都对照代码核实过。
+
+**没做的功能**
+
+| 项 | 说明 |
+|---|---|
+| 候选窗鼠标点击选词 | 窗口吞掉点击但不透传，只能键盘选 |
+| 组合串下划线 | `GUID_DISPLAY_FEIHE` 已定义，`ITfDisplayAttributeProvider` 未实现 |
+| 快捷输入扩展 | 只有日期 / 时间 / 星期 / 时间戳，没有农历和自定义短语 |
+| 模糊音 | 未排期。要做建议在 `shuangpin::encode_pinyin` 之后加等价类归并，而不是改词库 |
+| 语音输入 | M5（v2）才规划，完全没动 |
+| 删词 / 置顶 | 需要 SQLite（阶段二）；现在只有「导入 / 导出 / 动态词频」 |
+
+**已知问题**
+
+- 单键（如 `n`）一次查 90 个候选，偏多，可以按码长做衰减
+- 搜狗 `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现
+- 设置窗改双拼方案后，**其它已打开的进程**要重新激活才生效（`Activate` 里会重读配置，
+  所以是「不即时」而不是「不生效」）
+- `src/log.rs` 是临时诊断日志，验收后应连同 55 处 `crate::trace!` 一起删掉
+- 安装包未签名
 
 ## 验证清单
 
@@ -608,7 +709,8 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 14. 敲你平时常用、但基础词库里没有的短语（比如常打的短句），候选窗里能出
 15. 用户词排在基础词前面：敲 `de`，如果搜狗词库里有以 `de` 开头的常用词，它应排在「的」之前
 16. 反复执行 `import_sogou.py` 两次，`user_dict.txt` 内容一致（幂等）
-17. 把 `src/user_dict.txt` 清空后重新构建，DLL 回到 812KB，说明没导入时不影响基础功能
+17. 把 `src/user_dict.txt` 清空后重新构建，发布 DLL 回到 2.8 MB、`base.bin` 38024 条，
+    说明没导入时不影响基础功能
 
 **M3（32 位支持 / 长句分隔）**
 
