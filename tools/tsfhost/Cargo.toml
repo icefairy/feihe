@@ -1,0 +1,34 @@
+[package]
+name = "tsfhost"
+version = "0.1.0"
+edition = "2021"
+description = "飞鹤输入法 · 最小 TSF 宿主，用来验证 UILess（宿主自绘候选）通道"
+license = "MIT"
+
+# 独立 workspace：本目录嵌在主 crate 里，不声明的话 cargo 会去上层找 workspace。
+[workspace]
+
+[dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    # CoInitializeEx / CoCreateInstance
+    "Win32_System_Com",
+    # ITextStoreACP 的 GetFormattedText / TS_ATTRVAL 门控在这个组合上
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    # TSF 全套接口
+    "Win32_UI_TextServices",
+    # 窗口、消息泵、DrawText
+    "Win32_UI_WindowsAndMessaging",
+    # VK_* 常量、GetKeyState
+    "Win32_UI_Input_KeyboardAndMouse",
+    # GDI 绘制候选条
+    "Win32_Graphics_Gdi",
+    # GetModuleHandleW：检查 feihe.dll 有没有被加载进来
+    "Win32_System_LibraryLoader",
+] }
+windows-core = "0.62"
+
+# 体积无所谓，测试工具，要的是能调试
+[profile.dev]
+opt-level = 1
