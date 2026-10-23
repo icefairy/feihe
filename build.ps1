@@ -39,6 +39,27 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 
+# cargo 的 `cargo:warning=...`（比如 build.rs 打的 base.bin 统计）走 **stderr**。
+# $ErrorActionPreference = 'Stop' 下，PowerShell 5.1 会把原生命令的 stderr 包装成
+# NativeCommandError 并**直接终止脚本**——于是「词库改了、build.rs 正常打了条统计」
+# 这种完全无害的情况会让整个构建红屏失败，看起来像编译错误，实际 cargo 已经成功。
+#
+# 注意：只做 `2>&1` 收进变量**不够**。PS 5.1 里原生命令的 stderr 会先变成
+# ErrorRecord，'Stop' 在记录产生的那一刻就抛了，根本走不到赋值。必须临时把
+# 偏好降成 'Continue'，跑完再恢复——这是这条路径上唯一可靠的写法。
+function Invoke-Cargo([string[]]$CargoArgs) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & cargo @CargoArgs 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    foreach ($line in $out) { Write-Host $line }
+    return $code
+}
+
 if ($NoUserDict) {
     $env:FEIHE_NO_USER_DICT = '1'
     Write-Host "[build] 发布模式：已排除 src/user_dict.txt" -ForegroundColor Yellow
@@ -113,17 +134,17 @@ function Build-X64 {
     try {
         $cargoArgs = @('build')
         if (-not $Debug) { $cargoArgs += '--release' }
-        & cargo @cargoArgs
-        if ($LASTEXITCODE -ne 0) {
+        $code = Invoke-Cargo $cargoArgs
+        if ($code -ne 0) {
             # Windows 允许重命名被占用的文件（如已注册后被 ctfmon/explorer 加载），
             # 此处自动重命名旧 DLL 后重试一次。
             $dll0 = Join-Path $repo "target\x86_64-pc-windows-gnullvm\$profile\feihe.dll"
             if (Test-Path $dll0) {
                 Write-Host "[build] feihe.dll 被占用，重命名后重试..." -ForegroundColor Yellow
                 Move-Item $dll0 "$dll0.old-$([DateTime]::Now.ToString('HHmmss'))" -Force
-                & cargo @cargoArgs
+                $code = Invoke-Cargo $cargoArgs
             }
-            if ($LASTEXITCODE -ne 0) { throw "cargo build (x64) 失败 ($LASTEXITCODE)" }
+            if ($code -ne 0) { throw "cargo build (x64) 失败 ($code)" }
         }
     } finally {
         Pop-Location
@@ -167,15 +188,15 @@ function Build-X86 {
     try {
         $cargoArgs = @('build', '--target', 'i686-pc-windows-gnullvm')
         if (-not $Debug) { $cargoArgs += '--release' }
-        & cargo @cargoArgs
-        if ($LASTEXITCODE -ne 0) {
+        $code = Invoke-Cargo $cargoArgs
+        if ($code -ne 0) {
             $dll0 = Join-Path $repo "target\i686-pc-windows-gnullvm\$profile\feihe.dll"
             if (Test-Path $dll0) {
                 Write-Host "[build] feihe.dll (x86) 被占用，重命名后重试..." -ForegroundColor Yellow
                 Move-Item $dll0 "$dll0.old-$([DateTime]::Now.ToString('HHmmss'))" -Force
-                & cargo @cargoArgs
+                $code = Invoke-Cargo $cargoArgs
             }
-            if ($LASTEXITCODE -ne 0) { throw "cargo build (x86) 失败 ($LASTEXITCODE)" }
+            if ($code -ne 0) { throw "cargo build (x86) 失败 ($code)" }
         }
     } finally {
         Pop-Location

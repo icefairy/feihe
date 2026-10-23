@@ -31,11 +31,39 @@ $version = '0.1.0'
 
 function Write-Step($msg) { Write-Host "`n[setup] $msg" -ForegroundColor Cyan }
 
+# 原生命令的统一调用方式。
+# 两个坑叠在一起：$ErrorActionPreference = 'Stop' 时，PS 5.1 会把子进程的 stderr
+# 包装成 NativeCommandError **立即抛出**，而且光写 `2>&1` 收进变量也拦不住——
+# ErrorRecord 在产生的那一刻就触发了 'Stop'。所以必须临时降到 'Continue'。
+# 不这么做的话，「cargo 打了条 cargo:warning」或「NSIS 输出一行提示」都会让脚本
+# 以一个和真实原因毫无关系的红屏结束。
+# 默认只在失败时回显输出（makensis -V3 太吵，成功时没必要刷屏）。
+function Invoke-Native([string]$Exe, [string[]]$ArgList, [switch]$Always) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Exe @ArgList 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($Always -or $code -ne 0) {
+        foreach ($line in $out) { Write-Host $line }
+    }
+    return $code
+}
+
 # ── 1. 发布构建 ─────────────────────────────────────────────────
 if (-not $SkipBuild) {
     Write-Step '构建发布版 DLL（排除个人词库）'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'build.ps1') -NoUserDict -Arch both
-    if ($LASTEXITCODE -ne 0) { throw "build.ps1 失败（$LASTEXITCODE）" }
+    # 和 Invoke-Makensis 同样的写法：先 2>&1 收进变量再输出。
+    # $ErrorActionPreference = 'Stop' 下原生命令的 stderr 会被包装成
+    # NativeCommandError 直接终止脚本，连真正的失败原因都看不到。
+    $code = Invoke-Native 'powershell' @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', (Join-Path $repo 'build.ps1'), '-NoUserDict', '-Arch', 'both'
+    ) -Always
+    if ($code -ne 0) { throw "build.ps1 失败（$code），上面是构建输出" }
 }
 
 $dll64 = Join-Path $repo 'target\x86_64-pc-windows-gnullvm\release\feihe.dll'
@@ -99,21 +127,15 @@ if (-not $hasBom) {
 
 # makensis 调用抽成函数：正式包和自检包只差一个 /DSELFTEST 宏和输出目录
 function Invoke-Makensis([string]$OutDir, [switch]$SelfTestMode) {
-    $extra = @()
-    if ($SelfTestMode) { $extra += '/DSELFTEST' }
+    # 变量别叫 $args —— 那是 PowerShell 的自动变量，容易被覆盖出怪问题
+    $margs = @("/DOUTDIR=$OutDir", "/DSRCDIR=$(Join-Path $repo 'target')", '-V3')
+    if ($SelfTestMode) { $margs += '/DSELFTEST' }
+    $margs += 'feihe.nsi'
     Push-Location $PSScriptRoot
     try {
         # /D 选项前面不能有空格，路径不要带尾反斜杠
-        $log = & $makensis `
-            "/DOUTDIR=$OutDir" `
-            "/DSRCDIR=$(Join-Path $repo 'target')" `
-            '-V3' `
-            @extra `
-            'feihe.nsi' 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            $log | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-            throw "makensis 失败（$LASTEXITCODE），上面是编译器输出"
-        }
+        $code = Invoke-Native $makensis $margs
+        if ($code -ne 0) { throw "makensis 失败（$code），上面是编译器输出" }
     } finally {
         Pop-Location
     }

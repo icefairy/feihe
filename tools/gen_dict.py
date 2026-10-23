@@ -24,11 +24,17 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_CHAR = os.path.join(ROOT, "_ice8105.yaml")
 CACHE_WORD = os.path.join(ROOT, "_icebase.yaml")
+# 补充拼音源：mozillazg/pinyin-data 的 pinyin.txt（Unicode 全 CJK 读音，带调号）
+CACHE_PY = os.path.join(ROOT, "_pinyin_data.txt")
 OUT = os.path.join(ROOT, "src", "dict.txt")
 
 MIRRORS = [
     "https://ghproxy.net/https://raw.githubusercontent.com/iDvel/rime-ice/main/",
     "https://raw.githubusercontent.com/iDvel/rime-ice/main/",
+]
+PY_MIRRORS = [
+    "https://ghproxy.net/https://raw.githubusercontent.com/mozillazg/pinyin-data/master/",
+    "https://raw.githubusercontent.com/mozillazg/pinyin-data/master/",
 ]
 
 # 与 src/shuangpin.rs 保持完全一致
@@ -98,8 +104,8 @@ def normalize_pinyin(pinyin):
     return " ".join(pinyin.split()).lower()
 
 
-def fetch(name, dest):
-    for base in MIRRORS:
+def fetch(name, dest, mirrors=None):
+    for base in mirrors or MIRRORS:
         url = base + name
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -111,6 +117,68 @@ def fetch(name, dest):
         except Exception as e:
             print(f"  {url.split('/')[2]} failed: {type(e).__name__}")
     return False
+
+
+# ── GB2312 补字 ────────────────────────────────────────────────
+#
+# 为什么要补：rime-ice 的 8105 字表以《通用规范汉字表》为准，而这份表**并不包含
+# 全部 GB2312 二级字**。实测 GB2312 的 6763 个汉字里有 110 个不在 8105 表里
+# （嬲 欷 榘 憝 揎 摺 捭…以及 忄 亻 扌 这些部首部件），这些字在简体中文环境里
+# 仍然会被用到，缺了就是打不出来。
+#
+# 所以目标字符集 = 《通用规范汉字表》∪ GB2312。GB2312 的 6763 个汉字是简体中文
+# 的事实下限，先把这个兜住；GBK / GB18030 那两万多个（大量异体字）暂不做——
+# 收益低而候选列表会明显变长。
+
+# 带调号拼音 → 无调号（ü 统一写 v，和词库里「女 nv / 略 lve」的写法一致）
+TONE_TABLE = str.maketrans({
+    "ā": "a", "á": "a", "ǎ": "a", "à": "a",
+    "ē": "e", "é": "e", "ě": "e", "è": "e",
+    "ī": "i", "í": "i", "ǐ": "i", "ì": "i",
+    "ō": "o", "ó": "o", "ǒ": "o", "ò": "o",
+    "ū": "u", "ú": "u", "ǔ": "u", "ù": "u",
+    "ǖ": "v", "ǘ": "v", "ǚ": "v", "ǜ": "v", "ü": "v",
+    "ń": "n", "ň": "n", "ǹ": "n", "ḿ": "m",
+})
+
+
+def load_pinyin_data(path):
+    """解析 pinyin.txt：`U+4E00: yī,yí,yì  # 一` → {'一': ['yi', 'yi', 'yi']}
+
+    保留全部读音的顺序（第一个通常是主读音），补字时取第一个**能编码**的。
+    """
+    out = {}
+    for line in io.open(path, encoding="utf-8"):
+        if not line.startswith("U+"):
+            continue
+        head = line.split("#", 1)[0]
+        cp, _, rest = head.partition(":")
+        try:
+            ch = chr(int(cp[2:].strip(), 16))
+        except ValueError:
+            continue
+        for py in rest.split(","):
+            py = py.strip().translate(TONE_TABLE).lower()
+            if py:
+                out.setdefault(ch, []).append(py)
+    return out
+
+
+def gb2312_hanzi():
+    """GB2312 的全部汉字（一级 3755 + 二级 3008 = 6763）。
+
+    区位 0xB0A1~0xF7FE 里既有汉字也有符号，逐字节 decode 后按 CJK 区间过滤即可。
+    """
+    out = []
+    for hi in range(0xB0, 0xF8):
+        for lo in range(0xA1, 0xFF):
+            try:
+                ch = bytes([hi, lo]).decode("gb2312")
+            except UnicodeDecodeError:
+                continue
+            if "\u4e00" <= ch <= "\u9fff":
+                out.append(ch)
+    return out
 
 
 def parse_dict(path):
@@ -153,6 +221,10 @@ def main():
             print("fetching word dict...")
             if not fetch("cn_dicts/base.dict.yaml", CACHE_WORD):
                 sys.exit("cannot download base.dict.yaml")
+        if not os.path.exists(CACHE_PY):
+            print("fetching pinyin data...")
+            if not fetch("pinyin.txt", CACHE_PY, PY_MIRRORS):
+                print("  [!] 拿不到 pinyin.txt，跳过 GB2312 补字")
 
     # 词库存「词 + 全拼」，不存双拼码：方案切换/导入导出都不必重新生成数据。
     # 输出按词频降序，DLL 载入时按当前方案编码后做稳定排序，同码内自然保持词频序。
@@ -185,6 +257,26 @@ def main():
         entries[(text, normalize_pinyin(pinyin))] = weight
         kept += 1
     print(f"words kept: {kept}")
+
+    # ── GB2312 补字 ────────────────────────────────────────────
+    # 词频记 0：排序时落在每个码的最后，不影响常用字的位置。
+    # 只补「整个字都没收录」的，已经有的不重复加（避免多音字被塞进别的码）。
+    added = 0
+    if os.path.exists(CACHE_PY):
+        pinyin_data = load_pinyin_data(CACHE_PY)
+        have = {w for (w, _p) in entries if len(w) == 1}
+        for ch in gb2312_hanzi():
+            if ch in have:
+                continue
+            for py in pinyin_data.get(ch, []):
+                if encode_pinyin(py) is None:
+                    continue
+                entries[(ch, py)] = 0
+                added += 1
+                break  # 只取第一个能编码的读音
+        print(f"gb2312 补字: {added}（GB2312 共 {len(set(gb2312_hanzi()))} 个汉字）")
+    else:
+        print("  [!] 缺少 _pinyin_data.txt，未做 GB2312 补字")
 
     rows = sorted(entries.items(), key=lambda kv: -kv[1])
 

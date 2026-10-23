@@ -11,7 +11,8 @@
 | 按键接收 | ✅ 通（`AdviseKeyEventSink` 第三参数必须是 `TRUE`） |
 | 组合态 + 候选窗 | ✅ 通（`nihc` → 候选窗 → 空格上屏「你好」） |
 | 小鹤双拼编码 | ✅ 通（`ui`→是、`vsgo`→中国、`uh`→上） |
-| 词库 | ✅ 8.18 万条预编码成 `base.bin` 嵌在 `.rdata`，零解析 + 跨进程共享页；整码优先排序 |
+| 词库 | ✅ 9.1 万条预编码成 `base.bin` 嵌在 `.rdata`，零解析 + 跨进程共享页；整码优先排序 |
+| 单字覆盖 | ✅ 8006 个（8105 表 7896 可编码全收 + GB2312 兜底补 110），GB2312 / 8105 缺 0 |
 | 双拼方案 | ✅ 小鹤 + 微软两套表，词库运行时按方案编码（配置项 `scheme`） |
 | 配置持久化 | ✅ `%APPDATA%\Feihe\config.ini` |
 | 状态浮窗 | ✅ 中/英、全/半、符号、设置四个按钮，可拖动、记住位置、可选跟随光标 |
@@ -163,18 +164,37 @@
 ### 源数据
 
 `词<TAB>全拼`（音节空格分隔），按词频降序。**不存双拼码**——存码等于把方案焊死。
-`src/dict.txt`（38463 系统词）+ `src/user_dict.txt`（52522 搜狗导入词）。
+`src/dict.txt`（38573 系统词）+ `src/user_dict.txt`（52522 搜狗导入词）。
 
 **单字必须全收，不能按词频截断。** 早期 `gen_dict.py` 里 `MAX_CHARS = 3500`，
 把 8105 字表按词频砍到前 3500 个。同事姓「仝」，它在表里排 5402 名（词频 796，
 第 3500 名的下限是 11418）——直接没了，用户翻页也翻不到。
-现在 `MAX_CHARS = None`（7896 个可编码单字全收，含 567 个多音字的第二读音），
-代价是 base.bin 从 2120 KB 涨到 2316 KB，非常划算。
+现在 `MAX_CHARS = None`（8006 个可编码单字全收，8573 条含 567 个多音字读音）。
 回归测试：`rare_name_chars_are_reachable`（仝佟覃翟邬阚亓郗禚仉）。
+
+**GB2312 兜底补字。** 《通用规范汉字表》不含全部 GB2312 二级字，实测缺 110 个
+（`嬲 欷 榘 憝 揎 摺` + `忄 亻 扌 丌 丬 丶 丿` 这类部首部件）。`gen_dict.py` 里的
+`gb2312_hanzi()` 枚举全部 6763 个 GB2312 汉字，`load_pinyin_data()` 读
+`pinyin-data` 的 `pinyin.txt`（`U+4E00: yī,yí,yì  # 一`，44440 行）取音，
+只补「整个字都没收录」的（避免多音字被塞进别的码），词频记 0。
+
+覆盖率（生成后自检）：
+| 字表 | 字数 | 覆盖 | 缺 |
+|---|---|---|---|
+| 通用规范汉字表 | 8105 | 7896 可编码全部 | 0 |
+| GB2312 | 6763 | 6763 | 0 |
+| 去重合计 | — | 8006 | — |
+
+GB2312 是**下限不是上限**：GBK 那两万多字（异形字 / 繁体字 / 日韩汉字）不收，
+繁体靠 `zhconv` 实时转，异体字收了只会让候选变长。
+
+补字后 `base.bin`（发布构建，不含个人词库）**2321 KB / 38024 条**，补字前 2316 KB ——
+5 KB 换 110 个字，这个交换没有任何犹豫的余地。（`dict.txt` 是 38573 行，`build.rs` 里
+按「词 + 全拼」去重后剩 38024 条。）
 
 ### 构建期：`build.rs` → `$OUT_DIR/base.bin`
 
-把 8.17 万条预编码成三套码（小鹤 / 微软 / 全拼去空格），各生成一张**按码升序的下标表**，
+把 9.1 万条预编码成三套码（小鹤 / 微软 / 全拼去空格），各生成一张**按码升序的下标表**，
 连同「偏移表 + 字节池」一起写成一个扁平文件，用 `include_bytes!` 嵌进 DLL。
 
 **为什么不用独立的 mmap 文件**：DLL 的 `.rdata` 段本来就由 PE 加载器 mmap，
@@ -421,13 +441,25 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 2. **装到 `%ProgramFiles%\Feihe`**，不是老的 `%ProgramData%\Feihe`。安装时尽力清理老副本
    （`Delete /REBOOTOK` 处理被占用的）。
 3. **发布模式构建**（`FEIHE_NO_USER_DICT=1`）。`src/user_dict.txt` 是 5 万条个人打字记录，
-   普通构建会并进 `base.bin`（86639 条 → 37914 条，DLL 6.8 MB → 2.7 MB）。
+   普通构建会并进 `base.bin`（86749 条 → 38024 条，DLL 7.0 MB → 2.8 MB）。
 
 五个坑（按踩到的顺序）：
 
 - **`.nsi` 必须带 UTF-8 BOM**。NSIS 只在文件开头有 BOM 时才按 UTF-8 解析，否则按系统 ACP
   读。中文注释直接报 `Bad text encoding: feihe.nsi:1` + `Error in script "feihe.nsi" on
   line 1`，报错完全指不到真因。`build_setup.ps1` 现在编译前自动补 BOM。
+- **`$ErrorActionPreference = 'Stop'` 会把子进程 stderr 变成终止性错误**。`build.rs` 的
+  `cargo:warning=base.bin: N 条` 走 stderr，于是「改了词库」这种再正常不过的情况会让
+  整个构建红屏挂掉，报 `NativeCommandError` + `FullyQualifiedErrorId`，看着像编译失败，
+  其实 cargo 早就成功了。**光写 `2>&1` 收进变量拦不住**——PS 5.1 里 ErrorRecord 在产生的
+  那一刻就触发了 `Stop`，赋值语句根本执行不到。唯一可靠的写法是临时降级：
+  ```powershell
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { $out = & $Exe @ArgList 2>&1; $code = $LASTEXITCODE }
+  finally { $ErrorActionPreference = $prev }
+  ```
+  `build.ps1` 的 `Invoke-Cargo` 和 `build_setup.ps1` 的 `Invoke-Native` 都是这个形状。
+  顺带：`makensis -V3` 也走这条路，以前只是恰好没往 stderr 写过东西。
 - **DLL 必须 `File` 内嵌**。第一版用了 `CopyFiles`，那是**运行时**拷贝，源路径是构建机的
   `target\...`，用户机上不存在 —— 打出来只有 192 KB 空壳（`Install data: 73260 bytes`）。
   正确做法：`File` 解到 `$PLUGINSDIR\ime`，再 `CopyFiles` 到 `$INSTDIR`。
