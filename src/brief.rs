@@ -74,6 +74,53 @@ pub fn char_for(code: &str) -> Option<char> {
     TABLE.iter().find(|(k, _)| *k == c).map(|(_, v)| *v)
 }
 
+/// 一简次选表：键 → 次选字/词。
+///
+/// 官方表里每个键还有**第二个**候选（`d` 的第二位是「打」、`c` 是「词库」），
+/// 小鹤用分号键 `;` 直接取（`d;` → 打）。飞鹤同样支持：`d;` 上屏次选，
+/// 不按 `;` 的话它就老实待在第二位。
+///
+/// 官方说明「放用户分类词库中，不需要可清空」——这里同理，整张表留空就等于关掉。
+pub const ALT: [(char, &str); 26] = [
+    ('a', "安装"),
+    ('b', "比较"),
+    ('c', "词库"),
+    ('d', "打"),
+    ('e', "嗯嗯"),
+    ('f', "复杂"),
+    ('g', "管"),
+    ('h', "忽略"),
+    ('i', "重新"),
+    ('j', "见"),
+    ('k', "可以"),
+    ('l', "理解"),
+    ('m', "没有"),
+    ('n', "内容"),
+    ('o', "哦哦"),
+    ('p', "便宜"),
+    ('q', "期"),
+    ('r', "然后"),
+    ('s', "所有"),
+    ('t', "提供"),
+    ('u', "时"),
+    ('v', "之"),
+    ('w', "位"),
+    ('x', "显示"),
+    ('y', "有时"),
+    ('z', "自动"),
+];
+
+/// 这个编码对应的**一简次选**。同样只认恰好一个字母。
+pub fn alt_for(code: &str) -> Option<&'static str> {
+    let mut it = code.chars();
+    let c = it.next()?;
+    if it.next().is_some() {
+        return None;
+    }
+    let c = c.to_ascii_lowercase();
+    ALT.iter().find(|(k, _)| *k == c).map(|(_, v)| *v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +141,35 @@ mod tests {
         // 一简字是「一键一字」，多一个键就交给正常排序
         for code in ["de", "ui", "ni", "ni'hao", "", "\r", "dd"] {
             assert_eq!(char_for(code), None, "{code} 不该有一简字");
+        }
+    }
+
+    #[test]
+    fn alt_table_covers_all_and_is_unique() {
+        let keys: String = ALT.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, "abcdefghijklmnopqrstuvwxyz", "26 个键必须齐全且有序");
+        let mut words: Vec<&str> = ALT.iter().map(|(_, v)| *v).collect();
+        let n = words.len();
+        words.sort_unstable();
+        words.dedup();
+        assert_eq!(words.len(), n, "次选词不能重复");
+        // 次选和首选也不能撞：`d` 的第二位不该又是「的」
+        for (_, w) in ALT {
+            assert!(
+                !TABLE.iter().any(|(_, c)| c.encode_utf8(&mut [0u8; 4]) == w),
+                "{w} 同时出现在首选和次选表里"
+            );
+        }
+    }
+
+    #[test]
+    fn alt_hits_only_single_letter() {
+        assert_eq!(alt_for("d"), Some("打"));
+        assert_eq!(alt_for("j"), Some("见"));
+        assert_eq!(alt_for("c"), Some("词库"));
+        assert_eq!(alt_for("D"), Some("打"));
+        for code in ["", "da", "ni'hao", "dd"] {
+            assert_eq!(alt_for(code), None, "{code} 不该有次选");
         }
     }
 

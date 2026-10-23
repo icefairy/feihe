@@ -728,6 +728,19 @@ impl FeiheTextService {
         tail.chars().count() % 2 == 0
     }
 
+    /// 单键组合态下的「一简次选」：`d;` → 打。
+    ///
+    /// 只认**恰好一个字母**，并且只在双拼下：全拼里一个字母后面还能跟分隔符
+    /// （`xi'an` 这类），分号键不能挪作他用。双拼恰好相反——`can_insert_sep`
+    /// 要求断在完整音节（2 键）之后，所以单键后面的分号本来就被吞掉，
+    /// 这个键位是空的，正好接小鹤的次选键。
+    fn brief_alt(code: &str) -> Option<&'static str> {
+        if config::pinyin_mode() {
+            return None;
+        }
+        crate::brief::alt_for(code)
+    }
+
     /// 重新查候选并回到第一页第一项
     fn refresh(&self) {
         // 分词模式：候选就是当前这一段的
@@ -913,6 +926,19 @@ impl FeiheTextService_Impl {
 
     fn commit_current(&self) {
         self.commit_with("");
+    }
+
+    /// 直接上屏一段文本，**不经过候选列表**。
+    ///
+    /// 一简次选 `d;` 用它：要出什么由键位决定，跟候选里选中的那个没关系。
+    /// 别拿 `commit_with` 顶替——那个是「当前候选 + 后缀」，会拼出「的打」。
+    fn commit_literal(&self, text: &str) {
+        crate::freq::bump(text);
+        self.pending_op
+            .borrow_mut()
+            .replace(EditOp::Commit(text.to_string()));
+        self.request_edit_session();
+        self.clear_state();
     }
 
     /// 提交当前候选，并在后面粘上一段文本（通常是全角标点）。
@@ -1991,6 +2017,15 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                         return Ok(BOOL::from(true));
                     }
                     if ch == FeiheTextService::SEP {
+                        // 一简次选键：单键后面本来就插不了分隔符（见 `brief_alt`），
+                        // 分号在这个位置是空键，接过来当 `d;` → 打。
+                        if vk == VK_OEM_1.0 as u8 {
+                            let alt = FeiheTextService::brief_alt(&self.code.borrow());
+                            if let Some(w) = alt {
+                                self.commit_literal(w);
+                                return Ok(BOOL::from(true));
+                            }
+                        }
                         // 手动分隔：位置不合理就吞掉，不打扰用户
                         if !FeiheTextService::can_insert_sep(&self.code.borrow()) {
                             return Ok(BOOL::from(true));
@@ -2642,6 +2677,21 @@ mod tests {
         // 全拼不限制位置（音节不定长，交给 DP 判断）
         config::set_pinyin_mode(true);
         assert!(FeiheTextService::can_insert_sep("niha"));
+        config::set_pinyin_mode(false);
+    }
+
+    #[test]
+    fn brief_alt_only_for_single_letter_in_shuangpin() {
+        let _g = lock();
+        dict::set_scheme(Scheme::Xiaohe);
+        config::set_pinyin_mode(false);
+        assert_eq!(FeiheTextService::brief_alt("d"), Some("打"));
+        assert_eq!(FeiheTextService::brief_alt("c"), Some("词库"));
+        assert_eq!(FeiheTextService::brief_alt("de"), None, "只有单键才有次选");
+        assert_eq!(FeiheTextService::brief_alt(""), None);
+        // 全拼下一个字母后面还能跟分隔符（`a'i`），分号不能挪作次选键
+        config::set_pinyin_mode(true);
+        assert_eq!(FeiheTextService::brief_alt("d"), None);
         config::set_pinyin_mode(false);
     }
 

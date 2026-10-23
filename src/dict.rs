@@ -405,6 +405,15 @@ fn search(
         promote(&mut out, c.encode_utf8(&mut buf), false, limit);
     }
 
+    // 一简次选：单键查询时把该键的次选字/词放到**第二位**（`d` → 的 / 打）。
+    //
+    // 只占 1 号位，不抢 0 号位——首位永远是首选一简字。这里允许插入：
+    // 次选里有「嗯嗯」「可以」「词库」这类两字词，词库未必收，不插就永远不出现
+    // （小鹤把它们放在独立的分类词库里，我们直接内嵌）。
+    if let Some(w) = crate::brief::alt_for(prefix) {
+        place(&mut out, w, 1, limit);
+    }
+
     // 手动置顶压在最后，也就是排在最前：用户显式钉的东西必须赢过一切默认值。
     // 这里 `insert_missing = true`——置顶的全部意义就是「哪怕它不在候选里也要出」。
     if let Some(w) = crate::pin::word_for(prefix) {
@@ -862,19 +871,45 @@ pub(crate) mod tests {
         assert!(bad.is_empty(), "这些键的一简字没排第一：\n{}", bad.join("\n"));
     }
 
+    /// 一简次选：单键的第二位固定是该键的次选字/词（`d` → 的 / 打）。
+    ///
+    /// 首位永远是首选一简字，次选只占 1 号位——这是小鹤的「一简首选 / 次选」，
+    /// 分号键 `d;` 就是直接取第二位（见 `textservice::brief_alt`）。
+    #[test]
+    fn brief_alt_ranks_second() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        let mut bad = Vec::new();
+        for (key, want) in crate::brief::ALT {
+            let r = lookup(&key.to_string(), 18);
+            if r.get(1).map(|s| &**s) != Some(want) {
+                bad.push(format!("{key}→{want}: {r:?}"));
+            }
+        }
+        assert!(bad.is_empty(), "这些键的次选没排第二位：\n{}", bad.join("\n"));
+    }
+
     /// 单键查询的候选：短码（单字）排在长码（多字词）前面。
     ///
     /// 用户打 `d` 想要的是「的/大/到」这一批单字，不是「都是 / 对了」。
-    /// 唯一的例外是某些键的单字不够 18 个（`o` 只有「哦/噢/喔」这么几个），
-    /// 那时顺延到两字词是对的——多给几个候选总比空着强。所以这里断言的是
-    /// **顺序**而不是「全部都是单字」：一旦出现多字词，后面不能再冒出单字。
+    /// 两个例外，都是刻意塞进来的：
+    ///
+    /// - 1 号位是**一简次选**（`d` 的第二位固定是「打」、`c` 是「词库」）
+    /// - 某些键的单字不够 18 个（`o` 只有「哦/噢/喔」这么几个），顺延到两字词更实用
+    ///
+    /// 所以断言的是**顺序**而不是「全部都是单字」：一旦出现词库里的多字词，
+    /// 后面不能再冒出单字。次选那一条先挖掉，不参与这条顺序检查。
     #[test]
     fn single_key_yields_single_chars() {
         let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_scheme(Scheme::Xiaohe);
         for key in "abcdefghijklmnopqrstuvwxyz".chars() {
-            let r = lookup(&key.to_string(), 18);
+            let mut r = lookup(&key.to_string(), 18);
             assert!(!r.is_empty(), "`{key}` 应该有候选");
+            if let Some(alt) = crate::brief::alt_for(&key.to_string()) {
+                assert_eq!(r.get(1).map(|s| &**s), Some(alt), "`{key}` 次选位置不对：{r:?}");
+                r.remove(1);
+            }
             let mut word_seen = false;
             for (i, w) in r.iter().enumerate() {
                 if w.chars().count() == 1 {
