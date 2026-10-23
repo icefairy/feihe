@@ -4,10 +4,12 @@
 //! 现场编码——这样切换方案、导入导出词库都不需要重新生成数据文件。
 //!
 //! ## 小鹤双拼
-//! 声母 `zh→v`、`ch→i`、`sh→u`；零声母用「韵母首字母 + 韵母键」（`an`→`aj`）。
+//! 声母 `zh→v`、`ch→i`、`sh→u`；零声母按韵母长度分三种：
+//! 单字母重复（`a`→`aa`）、双字母保持全拼（`an`→`an`、`ai`→`ai`）、
+//! 三字母用韵母键（`ang`→`ah`）。
 //!
 //! ## 微软双拼
-//! 声母同样 `zh→v`、`ch→i`、`sh→u`；零声母用 `o` 占位（`an`→`oj`）；
+//! 声母同样 `zh→v`、`ch→i`、`sh→u`；零声母一律用 `o` 占位（`an`→`oj`）；
 //! `ing` 落在分号键 `;` 上，`ü` 落在 `y` 上。
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -175,13 +177,25 @@ fn encode_chars(scheme: Scheme, syl: &str) -> Option<(char, char)> {
     match initial {
         Some(ini) => Some((ini, key)),
         None => match scheme {
-            // 小鹤：首键取韵母首字母（只可能是 a / e / o）
+            // 小鹤的零声母按**韵母长度**分三种（官方「小鹤入门」1.1 双拼）：
+            //   单字母 a/o/e      → 零声母 + 韵母所在键   啊=aa 哦=oo 额=ee
+            //   双字母 ai/ei/ao/ou/an/en/er → 零声母 + 韵母**末**字母，表现同全拼
+            //                                爱=ai 恩=en 欧=ou 安=an 儿=er
+            //   三字母 ang/eng    → 零声母 + 韵母所在键   昂=ah 鞥=eg
+            //
+            // 注意中间那条：双字母韵母**不走韵母键**。早期版本一刀切按「首字母 +
+            // 韵母键」处理，把 `an` 算成 `aj`，于是「按钮」要打 `ajnq` 而不是
+            // `annq`，所有零声母词都错位——这是用户按官方反查工具报上来的。
             Scheme::Xiaohe => {
                 let first = b[0] as char;
                 if !matches!(first, 'a' | 'e' | 'o') {
                     return None;
                 }
-                Some((first, key))
+                if fin.len() == 2 {
+                    Some((first, fin.as_bytes()[1] as char))
+                } else {
+                    Some((first, key))
+                }
             }
             // 微软：用 o 作虚声母
             Scheme::Ms => Some(('o', key)),
@@ -279,18 +293,32 @@ mod tests {
 
     #[test]
     fn xiaohe_zero_initial() {
+        // 单字母：重复该字母
         assert_eq!(xh("a"), "aa");
-        assert_eq!(xh("ai"), "ad");
-        assert_eq!(xh("an"), "aj");
-        assert_eq!(xh("ang"), "ah");
-        assert_eq!(xh("ao"), "ac");
         assert_eq!(xh("e"), "ee");
-        assert_eq!(xh("ei"), "ew");
-        assert_eq!(xh("en"), "ef");
-        assert_eq!(xh("eng"), "eg");
-        assert_eq!(xh("er"), "er");
         assert_eq!(xh("o"), "oo");
-        assert_eq!(xh("ou"), "oz");
+        // 双字母：零声母 + 韵母末字母 = 全拼形式
+        assert_eq!(xh("ai"), "ai");
+        assert_eq!(xh("ei"), "ei");
+        assert_eq!(xh("ao"), "ao");
+        assert_eq!(xh("ou"), "ou");
+        assert_eq!(xh("an"), "an");
+        assert_eq!(xh("en"), "en");
+        assert_eq!(xh("er"), "er");
+        // 三字母：零声母 + 韵母所在键
+        assert_eq!(xh("ang"), "ah");
+        assert_eq!(xh("eng"), "eg");
+    }
+
+    /// 用户可见的硬规则：小鹤下「按钮」= `annq`（不是 `ajnq`）。
+    /// 这条被官方反查工具 react.xhup.club 验证过，别再改回去。
+    #[test]
+    fn xiaohe_button_is_annq() {
+        assert_eq!(xh("an niu"), "annq");
+        assert_eq!(xh("an quan"), "anqr");
+        assert_eq!(xh("ai qing"), "aiqk");
+        assert_eq!(xh("ou zhou"), "ouvz");
+        assert_eq!(xh("ang zang"), "ahzh");
     }
 
     #[test]

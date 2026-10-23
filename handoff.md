@@ -358,6 +358,8 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 | 中英文开关 | `GUID_COMPARTMENT_KEYBOARD_OPENCLOSE`（thread compartment）新注册 TIP 实测为 **0（关）**，需在 `Activate` 里置 1 |
 | CoreText 宿主不调 `OnTestKeyDown` | WinUI3 应用（如 Win11 记事本）直接调 `OnKeyDown`，且会送来 Ctrl / 退格等任意键 → **`OnKeyDown` 必须自己完整过滤** |
 | **小鹤声母** | **`zh→v`、`ch→i`、`sh→u`**（不是 z/c/s）。韵母 `ui` 也在 `v` 键上，与 zh 复用。`shi→ui`、`zhong→vs`、`chi→ii`、`shui→uv`、`zhui→vv` |
+| **小鹤零声母** | **按韵母长度分三种**，不是一刀切：① 单字母 `a/o/e` 重复（`aa`/`oo`/`ee`）；② **双字母 `ai/ei/ao/ou/an/en/er` 保持全拼形式**（`ai`/`an`/`en`/`ou`）；③ 三字母 `ang/eng` 用韵母键（`ah`/`eg`）。所以「按钮」= **`annq`**。<br>⚠ 本项目早期把②也按「首字母 + 韵母键」算（`an→aj`），所有零声母词编码都错位，用户拿官方反查工具对出来的。依据：百度百科「小鹤双拼」/ 看云「小鹤入门 1.1 双拼」 |
+| 小鹤反查工具 | `http://react.xhup.club/search`，官方反查。**编码有疑问先查它**，别凭直觉 |
 | Win11 记事本 | `C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_*\Notepad.exe`，WinUI3 应用，走 CoreText 通道，对 TIP 支持比传统 Win32 严格 |
 | TIP 分类 | 只注册 `{34745C63...}`(KEYBOARD) 不够；WinUI3/UWP 应用还需 `{13A016DF-560B-46CD-947A-4C3AF1E0E35D}`(IMMERSIVESUPPORT) |
 | 用户键盘列表位置 | `HKCU\Control Panel\International\User Profile\zh-Hans-CN`，值 `0804:{CLSID}{PROFILE}` = 顺序 DWORD |

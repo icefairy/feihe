@@ -1738,22 +1738,27 @@ mod tests {
         config::set_pinyin_mode(false);
     }
 
-    /// 零声母词的可达性回归：`an` 在小鹤里是 `a` + 韵母键 `j` = `aj`，
-    /// 所以「按钮」= `ajnq`，不是按全拼直觉敲的 `annq`。
-    /// 这类词最容易「以为词库缺词」，其实是编码记错了，用测试把正确码钉住。
+    /// 零声母词的可达性回归。
+    ///
+    /// 小鹤的零声母按韵母长度分三种，**双字母韵母保持全拼形式**：
+    /// `an` → `an`（不是 `aj`）、`ai` → `ai`、`ou` → `ou`。
+    /// 所以「按钮」= `annq`。
+    ///
+    /// 这条早期实现错了（一刀切按「首字母 + 韵母键」，把 `an` 算成 `aj`），
+    /// 用户拿官方反查工具对出来才发现的。用测试把正确码钉死，别再漂回去。
     #[test]
     fn zero_initial_words_are_reachable() {
         let _g = lock();
         dict::set_scheme(Scheme::Xiaohe);
         config::set_pinyin_mode(false);
 
-        assert_eq!(FeiheTextService::syllables_ds("ajnq"), vec!["aj", "nq"]);
+        assert_eq!(FeiheTextService::syllables_ds("annq"), vec!["an", "nq"]);
 
-        // 硬编码一个，把「零声母 an → aj」这条用户可见规则钉死
-        let list = dict::lookup("ajnq", 30);
+        // 硬编码一个，把「零声母 an → an」这条用户可见规则钉死
+        let list = dict::lookup("annq", 30);
         assert!(
             list.iter().any(|w| w.as_ref() == "按钮"),
-            "ajnq 应出「按钮」，实际候选 {:?}",
+            "annq 应出「按钮」，实际候选 {:?}",
             list.iter().take(6).collect::<Vec<_>>()
         );
 
