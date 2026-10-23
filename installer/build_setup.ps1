@@ -11,13 +11,18 @@
     powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
     powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1 -SkipBuild   # 只重打包
     powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1 -NsisDir "D:\soft\nsis"
+    powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1 -SelfTest    # 真装一遍再校验
 
   产物：dist\Feihe-Setup-<版本>.exe
 #>
 param(
     [string]$NsisDir = 'D:\soft\nsis',
     [switch]$SkipBuild,
-    [switch]$AllowPersonalDict
+    [switch]$AllowPersonalDict,
+    # 端到端自检：用 SELFTEST 宏额外打一个「不提权、装到 %TEMP%」的安装包，
+    # 静默装一次，再把落地的两个 DLL 和 target\ 里的比对 SHA256。
+    # 不加这个开关时，正式包的内容和以前完全一致。
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,21 +97,29 @@ if (-not $hasBom) {
     [System.IO.File]::WriteAllText($nsi, $text, (New-Object System.Text.UTF8Encoding($true)))
 }
 
-Push-Location $PSScriptRoot
-try {
-    # /D 选项前面不能有空格，路径不要带尾反斜杠
-    $nsiLog = & $makensis `
-        "/DOUTDIR=$dist" `
-        "/DSRCDIR=$(Join-Path $repo 'target')" `
-        '-V3' `
-        'feihe.nsi' 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $nsiLog | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-        throw "makensis 失败（$LASTEXITCODE），上面是编译器输出"
+# makensis 调用抽成函数：正式包和自检包只差一个 /DSELFTEST 宏和输出目录
+function Invoke-Makensis([string]$OutDir, [switch]$SelfTestMode) {
+    $extra = @()
+    if ($SelfTestMode) { $extra += '/DSELFTEST' }
+    Push-Location $PSScriptRoot
+    try {
+        # /D 选项前面不能有空格，路径不要带尾反斜杠
+        $log = & $makensis `
+            "/DOUTDIR=$OutDir" `
+            "/DSRCDIR=$(Join-Path $repo 'target')" `
+            '-V3' `
+            @extra `
+            'feihe.nsi' 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $log | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+            throw "makensis 失败（$LASTEXITCODE），上面是编译器输出"
+        }
+    } finally {
+        Pop-Location
     }
-} finally {
-    Pop-Location
 }
+
+Invoke-Makensis -OutDir $dist
 
 # ── 4. 报告 ─────────────────────────────────────────────────────
 $setup = Join-Path $dist "Feihe-Setup-$version.exe"
@@ -116,3 +129,42 @@ $mb = [math]::Round((Get-Item $setup).Length / 1MB, 2)
 Write-Host ''
 Write-Host "[setup] OK -> $setup ($mb MB)" -ForegroundColor Green
 Write-Host '        双击运行即可（会弹 UAC 提权）。'
+
+# ── 5. 端到端自检（可选）────────────────────────────────────────
+# 为什么需要：安装包曾经因为用 CopyFiles 部署（运行时拷贝、源路径是构建机路径）
+# 而打出一个 192 KB 的空壳，但 makensis 完全没报错。光看大小、光看编译日志
+# 都发现不了，必须真装一次再比对字节。
+if ($SelfTest) {
+    Write-Step '端到端自检：静默安装到 %TEMP% 并比对 SHA256'
+    $tmpDist = Join-Path $env:TEMP 'feihe-selftest-dist'
+    New-Item -ItemType Directory -Force -Path $tmpDist | Out-Null
+    Invoke-Makensis -OutDir $tmpDist -SelfTestMode
+
+    $probe = Join-Path $tmpDist "Feihe-Setup-$version.exe"
+    if (-not (Test-Path $probe)) { throw "自检包未生成：$probe" }
+
+    # 自检包用 RequestExecutionLevel user + InstallDir $TEMP\feihe-selftest，
+    # 所以 /S 能在非交互 shell 里跑完，不弹 UAC、不碰 HKLM。
+    $installDir = Join-Path $env:TEMP 'feihe-selftest'
+    if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+    $p = Start-Process -FilePath $probe -ArgumentList '/S' -Wait -PassThru
+    if ($p.ExitCode -ne 0) { throw "自检安装返回 $($p.ExitCode)" }
+
+    $pairs = @(
+        @{ Name = '64 位'; Deployed = (Join-Path $installDir 'feihe.dll');   Source = $dll64 },
+        @{ Name = '32 位'; Deployed = (Join-Path $installDir 'feihe32.dll'); Source = $dll32 }
+    )
+    foreach ($pr in $pairs) {
+        if (-not (Test-Path $pr.Deployed)) { throw "$($pr.Name) DLL 没落地：$($pr.Deployed)" }
+        $h1 = (Get-FileHash $pr.Deployed -Algorithm SHA256).Hash
+        $h2 = (Get-FileHash $pr.Source   -Algorithm SHA256).Hash
+        if ($h1 -ne $h2) {
+            throw "$($pr.Name) DLL 校验不一致`n  装机: $h1`n  构建: $h2"
+        }
+        Write-Host ("  {0} feihe{1}.dll  {2}  OK" -f $pr.Name, $(if ($pr.Name -eq '64 位') { '' } else { '32' }), $h1.Substring(0, 16)) -ForegroundColor Green
+    }
+
+    Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $tmpDist -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host '[setup] 自检通过：安装包内容与构建产物逐字节一致' -ForegroundColor Green
+}

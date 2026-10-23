@@ -45,11 +45,24 @@ Unicode true
 !define DLL32 "${SRCDIR}\i686-pc-windows-gnullvm\release\feihe.dll"
 
 ; ── 编译器属性 ──────────────────────────────────────────────────
+;
+; `SELFTEST` 由 build_setup.ps1 -SelfTest 传入：把提权降到 user、装到临时目录，
+; 这样能在 CI / 非交互 shell 里跑一次「真装一遍再比对 SHA256」。
+; 正式包绝不开这个开关——RequestExecutionLevel user 装不进 ProgramFiles，
+; 也写不了 HKLM 注册表。
+!ifdef SELFTEST
+  !define INSTALL_ROOT "$TEMP\feihe-selftest"
+  !define REQ_LEVEL "user"
+!else
+  !define INSTALL_ROOT "$PROGRAMFILES64\Feihe"
+  !define REQ_LEVEL "admin"
+!endif
+
 Name "${APP_NAME}"
 OutFile "${OUTDIR}\Feihe-Setup-${APP_VER}.exe"
-InstallDir "$PROGRAMFILES64\Feihe"
+InstallDir "${INSTALL_ROOT}"
 InstallDirRegKey HKLM "${UNINST_KEY}" "InstallLocation"
-RequestExecutionLevel admin
+RequestExecutionLevel "${REQ_LEVEL}"
 SetCompressor /SOLID lzma
 SetCompressorDictSize 32
 ShowInstDetails show
@@ -163,6 +176,9 @@ Section "主程序" SecMain
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   ; ── 注册（COM + CTF TIP 双视图 + 用户键盘列表）──
+  ; 自检模式跳过：它没有管理员权限，也不该改动本机真实输入法列表。
+  ; 自检只验证「两个 DLL 有没有被完整、正确地内嵌并落到 $INSTDIR」。
+  !ifndef SELFTEST
   DetailPrint "注册 COM / TSF 组件…"
   StrCpy $R7 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\install_tip.ps1" -DllPath "$INSTDIR\feihe.dll" -DllPath32 "$INSTDIR\feihe32.dll"'
   Call RunPs
@@ -199,6 +215,7 @@ Section "主程序" SecMain
   ; GetSize 以 KB 返回，$0 = 低 32 位、$1 = 高 32 位。DLL 只有几 MB，$0 够用。
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" "$0"
+  !endif
 SectionEnd
 
 ; ── 卸载 ────────────────────────────────────────────────────────

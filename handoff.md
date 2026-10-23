@@ -216,32 +216,53 @@
 它的零声母规则（必须 a/e/o 开头）正好是普通话的真实约束，比微软双拼「用 o 占位」更严格。
 `ng`/`hm`/`hng` 这类叹词会被拒掉——它们几乎不出现在连续输入里，但会制造大量假边界。
 
-## 边打边上屏（`maybe_split` + `EditOp::Split`）
+## 不自动上屏（`maybe_split` / `try_segment`）
 
-**触发条件**（三个都要满足）：
-1. 能切出**至少 2 个**音节（`syllables().len() >= 2`）
-2. 整串一个候选都没有
-3. 不是辅助码态、不是 `\` 快捷输入
+**只有显式动作才写文档**：空格、数字、回车、标点。敲字母永远只改组合串。
 
-满足时先试**分词模式**（`split_segments_units`，见下节）；切不出多段再退回
-**拆分上屏**：`longest_prefix_units` 按音节边界递减找最长能出候选的前缀，
-提交它的第一个候选，剩下的音节 `concat()` 作为新组合串。找不到就留给用户退格。
+早期版本有「边打边上屏」：整串没候选时，把左边能匹配的部分直接上屏、
+剩下的编码开新一轮（`EditOp::Split`）。设计初衷是「别挂着一串没人可选的字母」，
+实际是灾难——用户打 `viuiq` 想输入「指示器」，屏幕上凭空出现「只是」，
+后面的 `qi` 又变成一个新的单字组合。用户原话：
 
-**为什么必须判「音节完整」**：小鹤 `vhsjl` 是 5 个字符 = 2.5 个音节，第三个音节的
-韵母还没敲。此时拆会把用户正在输入的内容强行上屏，体验极差。
+> 我没有敲空格就不应该上屏任何字或者词，应该让我可以挨个选
 
-**实现要点**：`EditOp::Split` 在同一个 edit session 里做两件事——
-先 `EndComposition` 把左边换成实际的字，再立刻 `StartComposition` 建新组合。
-`EndComposition` 会**同步回调** `OnCompositionTerminated → clear_state()`，
-把 `code` / `candidates` 清空。所以新 `code` 必须在 `EndComposition` **之后**赋值，
-赋值前清空正好是无害的。`pending_op` 在 `run_edit_session` 开头已被 take，
-不会被 sink 的重入清掉。
+`EditOp::Split` 已整个删除。现在 `maybe_split` 只做一件事：切成多段、进分词模式。
+切不出来就什么都不做，等用户继续敲或退格。
 
-`split_segments_units` / `longest_prefix_units` 都把「有没有候选」抽象成
-`impl Fn(&str) -> bool` 谓词，就是为了单元测试能注入假词典——否则测试要去改
-进程级的 `SCHEME` / `pinyin_mode`，和 dict.rs 的测试并行跑会互相篡改
-（实测踩过：`ms_scheme_lookup` 把 scheme 改成 Ms，导致小鹤码查不到）。
-`dict::tests::SCHEME_LOCK` 是两边共用的那把锁。
+### 触发条件
+
+音节完整（双拼偶数长度 / 全拼能切出合法音节）、至少 2 个音节、整串候选为空、
+不是辅助码态、不是 `\` 快捷输入。
+
+### `plan_segments`（纯函数）
+
+分段决策抽成 `FeiheTextService::plan_segments(code, has)`，不碰 `self`。
+原因是 `#[implement]` 生成的 `FeiheTextService_Impl` **在测试里构造不出来**
+（windows-rs 只生成 `From<Foo> for IInterface`，没有 `From<Foo> for Foo_Impl`），
+所以状态机没法拿实例测，决策必须做成纯函数才能覆盖。
+
+策略：先按「每段都能出候选」做 DP；DP 失败（某个音节词库里完全没有）就退到逐音节。
+逐音节可能有个别段空着，但至少用户看得见、能退格——总比替他上屏强。
+
+### 分词模式下敲编码键
+
+`on_segment_key` 遇到编码键**延长编码并重新分段**，不 commit：
+
+```rust
+self.code.borrow_mut().push(ch);
+self.segments.borrow_mut().clear();
+self.refresh();
+if !self.try_segment(&prev) { self.update_composition(); }
+```
+
+`prev` 是上一轮的 `(段码, 已选词)`，重新分段时**段码没变就沿用**——
+否则用户选完第一段再往下打，选择会被冲掉。
+
+老逻辑是「整体上屏 + 键交给应用」，长句打到一半屏幕上就凭空出现半句话，
+后面那个字母还会被当普通字符插进文档。
+
+标点走 `_ =>` 分支整体上屏，这是主流输入法的通行做法，也是长句的自然结束方式。
 
 ## 分词模式（长句逐段选词）
 
@@ -254,7 +275,8 @@
 - `refresh()` 在分词态下只查**当前段**的候选，并把选中项对齐到该段已选的词
 - `←`/`→` 移段（`seg_idx`），`1-9` 换词（`confirm_segment`），空格确认并前移，
   回车整体上屏（`commit_segments`），退格退出（`exit_segment_mode`）
-- 其他键：先整体上屏，键再交给应用
+- 编码键：**延长编码、重新分段，不上屏**（`prev` 段码未变则保留已选词）
+- 其他键（标点、Tab 等）：整体上屏，键再交给应用
 
 ## 手动分隔（`;`）
 
@@ -412,7 +434,7 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 - [x] 全拼兜底（`config::pinyin_mode()` + 独立的全拼索引）
 - [x] 回车原样上屏编码（`commit_raw`，快捷输入例外）
 - [x] 整码优先（`dict::search` 两段查，`exact_end`）
-- [x] 边打边上屏 / 分词模式（`maybe_split` + `EditOp::Split` + `segments`）
+- [x] 分词模式（`maybe_split` + `try_segment` + `segments`，**不自动上屏**）
 - [x] 全拼智能分隔（`split_pinyin` 的 DP + `is_syllable`）
 - [x] `;` 手动分隔（微软双拼改用 `'`）
 - [x] 32 位 DLL（`i686-pc-windows-gnullvm` + Wow6432Node 双份注册）

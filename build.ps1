@@ -18,7 +18,7 @@
 #
 # 产物：
 #   target\x86_64-pc-windows-gnullvm\release\feihe.dll   (64 位, Machine=0x8664)
-#   target\i686-pc-windows-gnu\release\feihe.dll         (32 位, Machine=0x014c)
+#   target\i686-pc-windows-gnullvm\release\feihe.dll    (32 位, Machine=0x014c)
 #
 # 为什么要两个 DLL：in-proc COM 的位数必须和宿主进程一致。
 #   64 位宿主（资源管理器、TextInputHost、64 位 Office）只加载 64 位 DLL；

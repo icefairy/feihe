@@ -48,8 +48,6 @@ enum EditOp {
     Commit(String),
     /// 不建 composition，直接在光标处插入文本（全角标点、软键盘符号）
     Insert(String),
-    /// 把组合串左边能匹配的部分上屏，剩下的编码开一个新的组合串
-    Split { commit: String, rest: String },
     /// 清空组合串，结束 composition
     Cancel,
 }
@@ -297,6 +295,44 @@ impl FeiheTextService {
         }
     }
 
+    /// 把分段选择拼成上屏文本。纯函数，理由同 `plan_segments`。
+    ///
+    /// 空段必须兜底：`plan_segments` 退到逐音节时，个别音节可能查不到候选，
+    /// 直接拼 `word` 会把它**静默吞掉**——用户敲了 3 个音节只得到 2 个字，
+    /// 而且屏幕上没有任何提示。先按段码再查一次，仍然没有就上屏段码本身
+    /// （和 `commit_raw` 一个口径：宁可让用户看见自己敲了什么）。
+    fn merge_segments(segs: &[Segment]) -> String {
+        segs.iter()
+            .map(|s| {
+                if !s.word.is_empty() {
+                    return s.word.clone();
+                }
+                FeiheTextService::lookup_any(&s.code, 1)
+                    .first()
+                    .map(|w| w.to_string())
+                    .unwrap_or_else(|| s.code.clone())
+            })
+            .collect()
+    }
+
+    /// 把编码切成若干段。纯函数，不碰 `self`——分段策略是长句输入的核心决策，
+    /// 必须能单测（`_Impl` 在 windows-rs 里构造不出来，没法拿实例测）。
+    ///
+    /// 先按「每段都能出候选」做 DP；DP 失败（某个音节词库里完全没有）就退到逐音节。
+    /// 返回空 Vec 表示音节不完整（还没打完），调用方应「再等等」。
+    fn plan_segments(code: &str, has: impl Fn(&str) -> bool) -> Vec<String> {
+        let units = FeiheTextService::syllables(code);
+        if units.len() < 2 {
+            return Vec::new();
+        }
+        let codes = FeiheTextService::split_segments_units(&units, has);
+        if codes.len() >= 2 {
+            codes
+        } else {
+            units
+        }
+    }
+
     /// 把音节序列切成多段，要求**每一段都能出候选**。
     /// 返回空 Vec 表示无法完整切分（调用方应退回别的策略）。
     ///
@@ -351,22 +387,6 @@ impl FeiheTextService {
     fn split_segments(code: &str) -> Vec<String> {
         let units = Self::syllables(code);
         Self::split_segments_units(&units, |p| !Self::lookup_any(p, 1).is_empty())
-    }
-
-    /// 找出最长的、能出候选的前缀占多少个音节；找不到返回 0。
-    ///
-    /// 只按音节边界递减，所以双拼下切点一定落在偶数位、全拼下一定落在
-    /// 合法音节之间——不会把 `zhuan` 切成 `zhu`+`an` 这种半截音节。
-    fn longest_prefix_units(units: &[String], has: impl Fn(&str) -> bool) -> usize {
-        if units.len() < 2 {
-            return 0;
-        }
-        for k in (1..units.len()).rev() {
-            if has(&units[..k].concat()) {
-                return k;
-            }
-        }
-        0
     }
 
     /// 是不是 Shift 键本身。宿主可能报 VK_SHIFT(0x10)，也可能报左右键(0xA0/0xA1)。
@@ -635,76 +655,68 @@ impl FeiheTextService_Impl {
         self.request_edit_session();
     }
 
-    /// 音节已经打完、但整串一个候选都没有时，把左边能匹配的部分先上屏。
+    /// 音节已经打完、但整串一个候选都没有时，切成多段交给用户逐段选。
     ///
-    /// 两条路，按优先级：
-    /// 1. **分词模式**——整串能切成多段且每段都有候选时，挂起来让用户逐段挑
-    ///    （`←`/`→` 移段、数字选词、空格确认、回车整体上屏）
-    /// 2. **拆分上屏**——切不出多段时，把左边能匹配的部分直接上屏，剩下的开新一轮
+    /// **这里绝不上屏。** 早期版本在这条路上加了「拆分上屏」：把左边能匹配的
+    /// 部分直接提交、剩下的编码开新一轮。那是替用户做决定——他敲 `viuiq`
+    /// 想打「指示器」，屏幕上却凭空出现「只是」，后面的 `qi` 又变成一个新的
+    /// 单字组合。用户的原话：「我没有敲空格就不应该上屏任何字或者词」。
     ///
-    /// 这就是主流输入法的「边打边上屏」：打 `vhsjlisi`，词库里没有「张三李四」，
-    /// 但不能就这么挂着一串没人可选的字母。
+    /// 现在只有显式动作（空格 / 数字 / 回车 / 标点）才会把字写进文档。
     ///
-    /// 只在**音节完整**（双拼偶数长度 / 全拼能切出合法音节）且候选为空时触发，
-    /// 否则用户每敲一个声母就被打断一次。
+    /// 触发条件：音节完整（双拼偶数长度 / 全拼能切出合法音节）、至少 2 个音节、
+    /// 整串候选为空。切不出多段就什么都不做，等用户继续敲或退格。
     fn maybe_split(&self) {
+        self.try_segment(&[]);
+    }
+
+    /// 尝试进入分词模式。成功返回 `true`（已 refresh + 更新组合串）。
+    ///
+    /// `prev` 是上一轮的分段选择：继续敲字重新分段时，如果某一段的码没变，
+    /// 就沿用用户已经选过的词。否则「选完第一段再往下打」会把选择冲掉。
+    fn try_segment(&self, prev: &[(String, String)]) -> bool {
         if self.assist_active.get() {
-            return;
+            return false;
         }
         let code = self.code.borrow().clone();
         if code.starts_with(quick::PREFIX) {
-            return; // 快捷输入不拆
+            return false; // 快捷输入不拆
         }
         if !self.candidates.borrow().is_empty() {
-            return; // 有候选，正常走
-        }
-        // 音节还没打完（双拼奇数长度 / 全拼切不出合法音节）→ 再等等
-        let units = FeiheTextService::syllables(&code);
-        if units.len() < 2 {
-            return;
+            return false; // 有候选，正常走
         }
         let has = |p: &str| !FeiheTextService::lookup_any(p, 1).is_empty();
+        let codes = FeiheTextService::plan_segments(&code, has);
+        if codes.len() < 2 {
+            return false;
+        }
 
-        // 1) 先试分词模式（全拼和双拼都支持，音节边界由 syllables 决定）
-        let codes = FeiheTextService::split_segments_units(&units, has);
-        if codes.len() >= 2 {
-            let segments: Vec<Segment> = codes
-                .iter()
-                .map(|c| Segment {
-                    code: c.clone(),
-                    word: FeiheTextService::lookup_any(c, 1)
+        let segments: Vec<Segment> = codes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let word = match prev.get(i) {
+                    Some((pc, w)) if pc == c => w.clone(),
+                    _ => FeiheTextService::lookup_any(c, 1)
                         .first()
                         .map(|s| s.to_string())
                         .unwrap_or_default(),
-                })
-                .collect();
-            *self.segments.borrow_mut() = segments;
-            self.seg_idx.set(0);
-            self.refresh();
-            self.update_composition();
-            crate::trace!("segment mode: {} segments from '{code}'", codes.len());
-            return;
-        }
+                };
+                Segment {
+                    code: c.clone(),
+                    word,
+                }
+            })
+            .collect();
 
-        // 2) 退回拆分上屏：最长可出候选的音节前缀
-        let cut = FeiheTextService::longest_prefix_units(&units, has);
-        if cut == 0 {
-            // 一个音节都匹配不上（用户打了串不存在的东西），留给退格处理
-            return;
-        }
-        let prefix: String = units[..cut].concat();
-        let Some(word) = FeiheTextService::lookup_any(&prefix, 1)
-            .first()
-            .map(|s| s.to_string())
-        else {
-            return;
-        };
-        let rest: String = units[cut..].concat();
-        crate::trace!("split: commit '{word}', rest '{rest}'");
-        self.pending_op
-            .borrow_mut()
-            .replace(EditOp::Split { commit: word, rest });
-        self.request_edit_session();
+        let n = segments.len();
+        *self.segments.borrow_mut() = segments;
+        // 光标留在原来的段上（首次进入是 0），越界就夹到末段
+        self.seg_idx.set(self.seg_idx.get().min(n - 1));
+        self.refresh();
+        self.update_composition();
+        crate::trace!("segment mode: {n} segments from '{code}'");
+        true
     }
 
     /// 分词模式下确认当前段的第 `sel` 个候选（越界退第一个），光标后移一段；
@@ -734,14 +746,11 @@ impl FeiheTextService_Impl {
         }
     }
 
-    /// 分词模式整体上屏：把所有段已选的词拼起来提交
+    /// 分词模式整体上屏：把所有段已选的词拼起来提交。
+    ///
+    /// 空段兜底交给 `merge_segments`。
     fn commit_segments(&self) {
-        let text: String = self
-            .segments
-            .borrow()
-            .iter()
-            .map(|s| s.word.as_str())
-            .collect();
+        let text = FeiheTextService::merge_segments(&self.segments.borrow());
         self.segments.borrow_mut().clear();
         self.seg_idx.set(0);
         if text.is_empty() {
@@ -761,7 +770,7 @@ impl FeiheTextService_Impl {
     }
 
     /// 分词模式的按键处理。`←`/`→` 移段，数字选词，空格确认，回车上屏，
-    /// 退格退出，其余键整体上屏后原样交给应用。
+    /// 退格退出，编码键延长编码并重新分段，标点等其他键整体上屏后原样交给应用。
     fn on_segment_key(&self, vk: u8) -> Result<BOOL> {
         let n = self.segments.borrow().len();
         match vk {
@@ -809,7 +818,39 @@ impl FeiheTextService_Impl {
                 self.cancel();
                 Ok(BOOL::from(true))
             }
-            // 别的键（含编码键）：先整体上屏，键再交给应用
+            // 编码键：接着往下打就**延长编码、重新分段**，不能整体上屏。
+            //
+            // 这是长句输入的关键：用户打「指示器」+「在哪」会一路敲 `viuiqizdnc`，
+            // 中途进来分词模式后如果按老逻辑「先整体上屏再把键交给应用」，
+            // 屏幕上就会凭空出现半句话，后面那个字母还会被当成普通字符插进去。
+            v if FeiheTextService::is_code_key(v) => {
+                let Some(ch) = FeiheTextService::code_char(v) else {
+                    return Ok(BOOL::from(true));
+                };
+                if ch == FeiheTextService::SEP
+                    && !FeiheTextService::can_insert_sep(&self.code.borrow())
+                {
+                    return Ok(BOOL::from(true));
+                }
+                // 记下已选的词，重新分段时码没变的段沿用
+                let prev: Vec<(String, String)> = self
+                    .segments
+                    .borrow()
+                    .iter()
+                    .map(|s| (s.code.clone(), s.word.clone()))
+                    .collect();
+
+                self.code.borrow_mut().push(ch);
+                self.segments.borrow_mut().clear();
+                self.refresh();
+                // 新编码可能整串就有候选了（或音节还没打完），那就退出分词模式
+                if !self.try_segment(&prev) {
+                    self.update_composition();
+                }
+                Ok(BOOL::from(true))
+            }
+            // 其他键（标点、Tab 之类）：整体上屏，键再交给应用。
+            // 标点上屏是主流输入法的通行做法，也是长句的自然结束方式。
             _ => {
                 self.commit_segments();
                 Ok(BOOL::from(false))
@@ -923,9 +964,9 @@ impl FeiheTextService {
 impl FeiheTextService_Impl {
     /// 在光标处开一个新的组合串，文本取 `composition_text()`。
     ///
-    /// `EditOp::Start` 和 `EditOp::Split` 都要用——拆分时上一个组合刚结束，
-    /// 必须在同一个 edit session 里把新的建起来，否则文档会留在
-    /// 「字已上屏、光标悬空」的状态。
+    /// 只在 `EditOp::Start` 里用。注意组合串一旦 `EndComposition`，文档里那串字
+    /// 就落定了——所以任何「继续往下打」的路径都必须走 `EditOp::Update`
+    /// 改现有组合，绝不能靠「结束旧的 + 开新的」来模拟。
     unsafe fn begin_composition(&self, context: &ITfContext, ec: u32) -> Result<()> {
         let text = self.composition_text();
         let Ok(range) = caret_range(context, ec) else {
@@ -1395,30 +1436,6 @@ impl FeiheTextService_Impl {
                     range.Collapse(ec, TF_ANCHOR_END)?;
                     put_caret(&context, ec, &range);
                 }
-                EditOp::Split { commit, rest } => {
-                    crate::trace!("edit: Split('{commit}', rest '{rest}')");
-                    // 1) 结束当前组合，把左边这段换成实际的字
-                    let comp = self.composition.borrow_mut().take();
-                    if let Some(comp) = comp {
-                        let r = comp.GetRange()?;
-                        r.SetText(ec, 0, &to_utf16(&commit))?;
-                        r.Collapse(ec, TF_ANCHOR_END)?;
-                        put_caret(&context, ec, &r);
-                        // EndComposition 会同步回调 OnCompositionTerminated → clear_state()，
-                        // 我们的 code / candidates 会被清空。没关系，下面本来就要重设。
-                        let _ = comp.EndComposition(ec);
-                    }
-                    // 2) 用剩下的编码立刻开一个新的组合串
-                    *self.code.borrow_mut() = rest;
-                    self.assist.borrow_mut().clear();
-                    self.assist_active.set(false);
-                    self.selected.set(0);
-                    self.page.set(0);
-                    self.refresh();
-                    if self.begin_composition(&context, ec).is_err() {
-                        self.clear_state();
-                    }
-                }
                 EditOp::Cancel => {
                     crate::trace!("edit: Cancel");
                     let comp = self.composition.borrow_mut().take();
@@ -1679,23 +1696,77 @@ mod tests {
         assert_eq!(FeiheTextService::syllables_ds("vhsj'"), vec!["vh", "sj"]);
     }
 
+    /// 长句分段决策。`viuiqi`（指示器）这种「整串没候选」的输入，
+    /// 必须切成多段让用户逐段选，**不能替他上屏**。
+    #[test]
+    fn plan_segments_splits_long_input() {
+        // 假词典：只要 `viui`(只是) 和 `qi`(其) 有词
+        let has = |p: &str| matches!(p, "viui" | "qi");
+        assert_eq!(FeiheTextService::plan_segments("viuiqi", has), vec!["viui", "qi"]);
+
+        // 音节没打完（双拼奇数长度）→ 空，调用方「再等等」
+        assert!(FeiheTextService::plan_segments("viuiq", has).is_empty());
+
+        // 单音节不拆
+        assert!(FeiheTextService::plan_segments("vi", has).is_empty());
+    }
+
+    /// DP 要求「每段都能出候选」，某个音节词库里完全没有时会整串失败。
+    /// 这时退到逐音节——可能有个别段空着，但至少看得见、能退格，不替他上屏。
+    #[test]
+    fn plan_segments_falls_back_to_single_syllables() {
+        // `ui` 查不到，`vi`/`qi` 有 → DP 覆盖不了整串
+        let has = |p: &str| matches!(p, "vi" | "qi");
+        assert_eq!(
+            FeiheTextService::plan_segments("viuiqi", has),
+            vec!["vi", "ui", "qi"]
+        );
+    }
+
+    /// 分段不能吞字：拼回去必须还是原编码。
+    #[test]
+    fn plan_segments_preserves_every_char() {
+        let has = |p: &str| matches!(p, "vhsj" | "li" | "vh" | "sj");
+        let segs = FeiheTextService::plan_segments("vhsjli", has);
+        assert!(segs.len() >= 2, "got {segs:?}");
+        assert_eq!(segs.concat(), "vhsjli");
+    }
+
+    #[test]
+    fn merge_segments_keeps_empty_segment_visible() {
+        let _g = lock();
+        config::set_pinyin_mode(false);
+        dict::set_scheme(Scheme::Xiaohe);
+        let seg = |code: &str, word: &str| Segment {
+            code: code.to_string(),
+            word: word.to_string(),
+        };
+        // 正常段：直接拼已选的词
+        assert_eq!(
+            FeiheTextService::merge_segments(&[seg("vhsj", "张三"), seg("li", "李")]),
+            "张三李"
+        );
+        // 空段但段码查得到：补查回来，不能吞
+        let first = FeiheTextService::lookup_any("li", 1)
+            .first()
+            .map(|s| s.to_string())
+            .expect("li 至少有一个候选");
+        let got = FeiheTextService::merge_segments(&[seg("vhsj", "张三"), seg("li", "")]);
+        assert_eq!(got, format!("张三{first}"));
+        // 空段且段码也查不到：上屏段码本身，至少让用户看见敲了什么
+        // （段码得现找——`zzzz` 这种看着像乱码的其实是合法双拼码，能查出「走走」）
+        let dead = ["qqqq", "vvvv", "bbbb", "pppp", "mmmm"]
+            .into_iter()
+            .find(|c| FeiheTextService::lookup_any(c, 1).is_empty())
+            .expect("至少要有一个查不到候选的段码");
+        let got = FeiheTextService::merge_segments(&[seg("vhsj", "张三"), seg(dead, "")]);
+        assert_eq!(got, format!("张三{dead}"));
+    }
+
     #[test]
     fn query_code_strips_separator() {
         assert_eq!(FeiheTextService::query_code("ni'hao").as_ref(), "nihao");
         assert_eq!(FeiheTextService::query_code("vhsj").as_ref(), "vhsj");
-    }
-
-    #[test]
-    fn longest_prefix_units_respects_syllables() {
-        let has = |p: &str| matches!(p, "vhsj" | "vh");
-        let units = FeiheTextService::syllables_ds("vhsjzz");
-        // vhsj(2 个音节) 能出候选 → 切在 2
-        assert_eq!(FeiheTextService::longest_prefix_units(&units, has), 2);
-        // 只有一个音节时不拆
-        assert_eq!(
-            FeiheTextService::longest_prefix_units(&FeiheTextService::syllables_ds("vh"), has),
-            0
-        );
     }
 
     #[test]
