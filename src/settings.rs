@@ -1,10 +1,13 @@
-//! 设置窗：双拼方案 / 辅助码方案 / 皮肤 / 全角 / 浮窗跟随 / 词库管理
+//! 设置窗：输入模式 / 双拼方案 / 辅助码 / 皮肤 / 字形 / 全角 / 浮窗跟随 / 词库管理
 //!
 //! 用原生 BUTTON / STATIC 控件，不做自绘——设置窗是低频交互，系统控件自带键盘
 //! 导航和辅助功能支持，比自绘划算。代价是不跟随皮肤配色（只影响这一个窗口）。
 //!
 //! 单选按钮靠 Win32 的 `WS_GROUP` 自动分组互斥：每组第一个按钮带 `WS_GROUP`，
 //! 组在下一个带 `WS_GROUP` 的控件处结束。所以创建顺序必须和视觉顺序一致。
+//!
+//! 「皮肤」「全拼/双拼」原来在状态浮窗上，后来挪到这里：它们改一次就长期不变，
+//! 占浮窗宽度不值得。浮窗只留随时要按的开关。
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 
@@ -16,6 +19,8 @@ use windows::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 };
 use windows::Win32::UI::Controls::Dialogs::*;
+// EnableWindow 在 windows-rs 里归到了 KeyboardAndMouse 模块（跟着 user32 的分组走）
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::assist::AssistMode;
@@ -27,10 +32,14 @@ use crate::statusbar;
 
 const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 
+/// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
+/// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const H: i32 = 424;
+const CLIENT_H: i32 = 472;
 
 // 控件 ID
+const ID_MODE_DS: i32 = 161;
+const ID_MODE_FULL: i32 = 162;
 const ID_SCHEME_XH: i32 = 101;
 const ID_SCHEME_MS: i32 = 102;
 const ID_ASSIST_OFF: i32 = 111;
@@ -39,6 +48,8 @@ const ID_ASSIST_XH: i32 = 113;
 const ID_SKIN_LIGHT: i32 = 121;
 const ID_SKIN_DARK: i32 = 122;
 const ID_SKIN_EYE: i32 = 123;
+const ID_HANZI_SIMP: i32 = 171;
+const ID_HANZI_TRAD: i32 = 172;
 const ID_FULLWIDTH: i32 = 131;
 const ID_FOLLOW: i32 = 132;
 const ID_STATS: i32 = 141;
@@ -162,6 +173,8 @@ unsafe fn set_text(parent: HWND, id: i32, text: &str) {
 /// 按当前配置刷新所有控件的勾选状态与词库统计
 unsafe fn sync(h: HWND) {
     let cfg = config::get();
+    set_checked(h, ID_MODE_DS, !cfg.pinyin_mode);
+    set_checked(h, ID_MODE_FULL, cfg.pinyin_mode);
     set_checked(h, ID_SCHEME_XH, cfg.scheme == Scheme::Xiaohe);
     set_checked(h, ID_SCHEME_MS, cfg.scheme == Scheme::Ms);
     set_checked(h, ID_ASSIST_OFF, cfg.assist_mode == AssistMode::Off);
@@ -170,8 +183,17 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_SKIN_LIGHT, cfg.skin == Skin::Light);
     set_checked(h, ID_SKIN_DARK, cfg.skin == Skin::Dark);
     set_checked(h, ID_SKIN_EYE, cfg.skin == Skin::Eye);
+    set_checked(h, ID_HANZI_SIMP, !cfg.traditional);
+    set_checked(h, ID_HANZI_TRAD, cfg.traditional);
     set_checked(h, ID_FULLWIDTH, cfg.fullwidth);
     set_checked(h, ID_FOLLOW, cfg.bar_follow);
+
+    // 全拼模式下「双拼方案」没有意义，灰掉而不是隐藏——隐藏会让窗口内容跳动
+    for id in [ID_SCHEME_XH, ID_SCHEME_MS] {
+        if let Ok(ctl) = GetDlgItem(Some(h), id) {
+            let _ = EnableWindow(ctl, !cfg.pinyin_mode);
+        }
+    }
 
     let (total, user, scheme) = dict::stats();
     set_text(
@@ -231,6 +253,8 @@ fn pick_file(h: HWND, save: bool) -> Option<std::path::PathBuf> {
 
 unsafe fn on_command(h: HWND, id: i32) {
     match id {
+        ID_MODE_DS => config::set_pinyin_mode(false),
+        ID_MODE_FULL => config::set_pinyin_mode(true),
         ID_SCHEME_XH => apply_scheme(Scheme::Xiaohe),
         ID_SCHEME_MS => apply_scheme(Scheme::Ms),
         ID_ASSIST_OFF => config::update(|c| c.assist_mode = AssistMode::Off),
@@ -239,6 +263,8 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_SKIN_LIGHT => config::update(|c| c.skin = Skin::Light),
         ID_SKIN_DARK => config::update(|c| c.skin = Skin::Dark),
         ID_SKIN_EYE => config::update(|c| c.skin = Skin::Eye),
+        ID_HANZI_SIMP => config::update(|c| c.traditional = false),
+        ID_HANZI_TRAD => config::update(|c| c.traditional = true),
         ID_FULLWIDTH => {
             let on = checked(GetDlgItem(Some(h), ID_FULLWIDTH).unwrap_or_default());
             config::update(|c| c.fullwidth = on);
@@ -315,6 +341,11 @@ unsafe fn on_command(h: HWND, id: i32) {
 
 unsafe fn build(h: HWND) {
     let mut y = 16;
+    label(h, "输入模式", 16, y, 90, 0);
+    radio(h, "双拼", 110, y - 2, 70, ID_MODE_DS, true);
+    radio(h, "全拼", 190, y - 2, 70, ID_MODE_FULL, false);
+
+    y += 40;
     label(h, "双拼方案", 16, y, 90, 0);
     radio(h, "小鹤双拼", 110, y - 2, 100, ID_SCHEME_XH, true);
     radio(h, "微软双拼", 220, y - 2, 100, ID_SCHEME_MS, false);
@@ -332,7 +363,12 @@ unsafe fn build(h: HWND) {
     radio(h, "护眼", 270, y - 2, 70, ID_SKIN_EYE, false);
 
     y += 40;
-    check(h, "全角标点 / 全角字符", 16, y - 2, 220, ID_FULLWIDTH);
+    label(h, "字形", 16, y, 90, 0);
+    radio(h, "简体", 110, y - 2, 70, ID_HANZI_SIMP, true);
+    radio(h, "繁体", 190, y - 2, 70, ID_HANZI_TRAD, false);
+
+    y += 40;
+    check(h, "全角标点（，。、；等）", 16, y - 2, 220, ID_FULLWIDTH);
 
     y += 30;
     check(h, "状态浮窗跟随光标（默认固定在屏幕右下角，可拖动）", 16, y - 2, 420, ID_FOLLOW);
@@ -345,18 +381,28 @@ unsafe fn build(h: HWND) {
     push(h, "导出词库…", 128, y, 104, 28, ID_EXPORT);
     push(h, "编译成二进制", 240, y, 128, 28, ID_COMPILE);
 
-    y += 40;
+    y += 38;
     label(h, "导入格式：每行「词<TAB>全拼」，例如：你好<TAB>ni hao", 16, y, 428, ID_NOTE);
 
     // 快捷输入说明。码表从 quick 模块取，避免文档和实现对不上。
     let quick = crate::quick::commands()
         .iter()
-        .map(|(k, name)| format!("\\{k} {name}"))
+        .map(|(k, name)| format!("{}{k} {name}", crate::quick::PREFIX))
         .collect::<Vec<_>>()
         .join(" · ");
-    label(h, &format!("快捷输入：{quick}"), 16, 306, 428, 0);
+    label(h, &format!("快捷输入：{quick}"), 16, y + 26, 428, 0);
 
-    push(h, "关闭", W - 106, 348, 90, 30, ID_CLOSE);
+    // `、` 和 `|` 是最容易被问到的两个键，直接写在设置里省得去翻文档
+    label(
+        h,
+        "标点：全角标点开启时 \\ 输出「、」；Shift+\\ 输出「|」",
+        16,
+        y + 48,
+        428,
+        0,
+    );
+
+    push(h, "关闭", W - 106, CLIENT_H - 40, 90, 30, ID_CLOSE);
 }
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -420,6 +466,27 @@ fn load_icon() -> Option<HICON> {
     }
 }
 
+/// 窗口样式（创建和反算尺寸必须用同一份，否则算出来的高度对不上）
+const STYLE: WINDOW_STYLE = WINDOW_STYLE(
+    WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0,
+);
+
+/// 由客户区尺寸反算窗口尺寸。标题栏和边框高度随 DPI / 主题变，写死窗口高度
+/// 会在高 DPI 下把最下面那排控件截掉。
+unsafe fn window_size(client_w: i32, client_h: i32) -> (i32, i32) {
+    let mut rc = RECT {
+        left: 0,
+        top: 0,
+        right: client_w,
+        bottom: client_h,
+    };
+    if AdjustWindowRectEx(&mut rc, STYLE, false, WINDOW_EX_STYLE(0)).is_err() {
+        // 反算失败就按 1:1 用，宁可挤一点也不要开不出窗口
+        return (client_w, client_h);
+    }
+    (rc.right - rc.left, rc.bottom - rc.top)
+}
+
 unsafe fn create() -> Option<HWND> {
     let hinst = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
     let icon = load_icon();
@@ -434,15 +501,16 @@ unsafe fn create() -> Option<HWND> {
     };
     RegisterClassW(&wc);
 
+    let (win_w, win_h) = window_size(W, CLIENT_H);
     let h = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         CLASS_NAME,
         w!("飞鹤输入法 · 设置"),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        STYLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
-        W,
-        H,
+        win_w,
+        win_h,
         None,
         None,
         Some(HINSTANCE(hinst.0)),
@@ -490,15 +558,6 @@ pub fn open() {
         let _ = SetForegroundWindow(h);
         sync(h);
     }
-}
-
-/// 别处改了配置（比如状态栏换肤）时同步控件
-pub fn notify_config_changed() {
-    let h = hwnd();
-    if h.is_invalid() {
-        return;
-    }
-    unsafe { sync(h) };
 }
 
 pub fn destroy() {

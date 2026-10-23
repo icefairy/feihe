@@ -395,14 +395,18 @@ impl FeiheTextService {
     }
 
     /// 全角标点映射（只处理不带 Shift 的那一排键）。
-    /// Shift 组合（`?` `:` `"` 等）交给应用，避免和我们自己算的字符对不上。
+    /// Shift 组合（`?` `:` `|` 等）交给应用，避免和我们自己算的字符对不上。
+    ///
+    /// `\` → `、` 是照搜狗的习惯（微软拼音把 `、` 放在 `/` 上）。两个键都给 `、`
+    /// 不冲突，反而是两拨用户都能用。注意 `\` 原来是快捷输入的引导符，引导符
+    /// 已经挪到 `` ` ``（见 `is_code_key`）——不然 `、` 根本打不出来。
     fn fullwidth_punct(vk: u8) -> Option<char> {
         let ch = match vk {
             v if v == VK_OEM_COMMA.0 as u8 => '，',
             v if v == VK_OEM_PERIOD.0 as u8 => '。',
             v if v == VK_OEM_1.0 as u8 => '；',
             v if v == VK_OEM_2.0 as u8 => '、',
-            v if v == VK_OEM_3.0 as u8 => '·',
+            v if v == VK_OEM_5.0 as u8 => '、',
             v if v == VK_OEM_4.0 as u8 => '【',
             v if v == VK_OEM_6.0 as u8 => '】',
             v if v == VK_OEM_7.0 as u8 => '’',
@@ -413,16 +417,34 @@ impl FeiheTextService {
         Some(ch)
     }
 
+    /// 这个键在当前配置下要不要**自己**输出全角标点。
+    ///
+    /// 两个门：用户开了「全角标点」、且没按 Shift（Shift 组合如 `?` `:` `|`
+    /// 交给应用自己算，免得我们算的和键盘布局对不上）。
+    /// 把这两个门收在一处，是因为「没在组合态」和「正在组合态」两条路都要用，
+    /// 分开写必然有一边漏掉。
+    fn fullwidth_punct_for(vk: u8) -> Option<char> {
+        if !config::get().fullwidth || Self::shift_down() {
+            return None;
+        }
+        Self::fullwidth_punct(vk)
+    }
+
     /// 该虚拟键是否属于当前方案的编码键。
     /// 双拼：小鹤只有字母；微软双拼的 `ing` 落在分号键上，所以还要放行 VK_OEM_1。
     /// 全拼：只有字母。
-    /// 另外都接受手动分隔键（见 `is_separator_key`）和快捷输入的 `\`。
+    /// 另外都接受手动分隔键（见 `is_separator_key`）和快捷输入的引导符 `` ` ``。
     fn is_code_key(vk: u8) -> bool {
         if vk.is_ascii_uppercase() {
             return true;
         }
-        // 快捷输入的引导符 `\`
-        if vk == VK_OEM_5.0 as u8 {
+        // Shift 组合不参与编码：`Shift+\` 要输出 `|`，`Shift+`` ` `` 要输出 `~`，
+        // 这些都得原样交给应用。字母不受影响（上面已经返回 true 了）。
+        if Self::shift_down() {
+            return false;
+        }
+        // 快捷输入的引导符 `` ` ``
+        if vk == VK_OEM_3.0 as u8 {
             return true;
         }
         // 微软双拼的 `ing` 在分号键
@@ -438,7 +460,7 @@ impl FeiheTextService {
         if vk.is_ascii_uppercase() {
             return Some((vk as char).to_ascii_lowercase());
         }
-        if vk == VK_OEM_5.0 as u8 {
+        if vk == VK_OEM_3.0 as u8 {
             return Some(quick::PREFIX);
         }
         if vk == VK_OEM_1.0 as u8 && !config::pinyin_mode() && dict::scheme() == Scheme::Ms {
@@ -539,12 +561,15 @@ impl FeiheTextService {
             let cur = self.seg_idx.get().min(segs.len() - 1);
             let mut s = String::new();
             for (i, seg) in segs.iter().enumerate() {
+                // 组合串要显示「将来会写进文档的样子」，否则开了繁体之后
+                // 预览是简体、上屏是繁体，看着像 bug
+                let word = crate::zhconv::to_traditional(&seg.word);
                 if i == cur {
                     s.push('[');
-                    s.push_str(&seg.word);
+                    s.push_str(&word);
                     s.push(']');
                 } else {
-                    s.push_str(&seg.word);
+                    s.push_str(&word);
                 }
             }
             return s;
@@ -618,7 +643,16 @@ impl FeiheTextService_Impl {
     }
 
     fn commit_current(&self) {
-        let word = self.current_word();
+        self.commit_with("");
+    }
+
+    /// 提交当前候选，并在后面粘上一段文本（通常是全角标点）。
+    ///
+    /// 必须合成**一个** `EditOp`：`pending_op` 只有一个槽位，连着发 `Commit` 和
+    /// `Insert` 会把前一个冲掉，结果是字没上屏、只剩标点。
+    fn commit_with(&self, suffix: &str) {
+        let mut word = self.current_word();
+        word.push_str(suffix);
         self.pending_op.borrow_mut().replace(EditOp::Commit(word));
         self.request_edit_session();
         self.clear_state();
@@ -742,15 +776,17 @@ impl FeiheTextService_Impl {
             self.refresh();
             self.update_composition();
         } else {
-            self.commit_segments();
+            self.commit_segments("");
         }
     }
 
     /// 分词模式整体上屏：把所有段已选的词拼起来提交。
     ///
-    /// 空段兜底交给 `merge_segments`。
-    fn commit_segments(&self) {
-        let text = FeiheTextService::merge_segments(&self.segments.borrow());
+    /// 空段兜底交给 `merge_segments`。`suffix` 用来粘全角标点——必须和正文合成
+    /// 一个 `EditOp`，否则标点会把正文那个待处理的 op 冲掉。
+    fn commit_segments(&self, suffix: &str) {
+        let mut text = FeiheTextService::merge_segments(&self.segments.borrow());
+        text.push_str(suffix);
         self.segments.borrow_mut().clear();
         self.seg_idx.set(0);
         if text.is_empty() {
@@ -801,7 +837,7 @@ impl FeiheTextService_Impl {
             }
             // 回车：整体上屏
             0x0D => {
-                self.commit_segments();
+                self.commit_segments("");
                 Ok(BOOL::from(true))
             }
             // 1-9：选当前段第 n 个候选
@@ -851,8 +887,14 @@ impl FeiheTextService_Impl {
             }
             // 其他键（标点、Tab 之类）：整体上屏，键再交给应用。
             // 标点上屏是主流输入法的通行做法，也是长句的自然结束方式。
+            // 全角标点自己粘上去并吞键，理由同普通组合态。
             _ => {
-                self.commit_segments();
+                if let Some(ch) = FeiheTextService::fullwidth_punct_for(vk) {
+                    let mut buf = [0u8; 4];
+                    self.commit_segments(ch.encode_utf8(&mut buf));
+                    return Ok(BOOL::from(true));
+                }
+                self.commit_segments("");
                 Ok(BOOL::from(false))
             }
         }
@@ -1134,7 +1176,12 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             crate::trace!("TestKeyDown vk=0x{vk:02x}: composing -> true");
             return Ok(BOOL::from(true));
         }
-        let take = FeiheTextService::is_code_key(vk);
+        // 除了编码键，**全角标点键也必须认**。经典宿主（记事本、Word）里
+        // OnTestKeyDown 返回 FALSE 就不会派发 OnKeyDown，我们连看都看不到这个键，
+        // 全角标点开关等于失效。返回 TRUE 只是「让我看一眼」，OnKeyDown 里
+        // 该拒绝的照样返回 FALSE，键最终还是会交给应用。
+        let take = FeiheTextService::is_code_key(vk)
+            || FeiheTextService::fullwidth_punct_for(vk).is_some();
         crate::trace!("TestKeyDown vk=0x{vk:02x} -> {take}");
         Ok(BOOL::from(take))
     }
@@ -1209,12 +1256,10 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             }
 
             // 全角标点：自己插字，不建组合串
-            if config::get().fullwidth && !FeiheTextService::shift_down() {
-                if let Some(ch) = FeiheTextService::fullwidth_punct(vk) {
-                    let mut buf = [0u8; 4];
-                    self.insert_direct(ch.encode_utf8(&mut buf));
-                    return Ok(BOOL::from(true));
-                }
+            if let Some(ch) = FeiheTextService::fullwidth_punct_for(vk) {
+                let mut buf = [0u8; 4];
+                self.insert_direct(ch.encode_utf8(&mut buf));
+                return Ok(BOOL::from(true));
             }
             return Ok(BOOL::from(false));
         }
@@ -1304,8 +1349,16 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 self.maybe_split();
                 Ok(BOOL::from(true))
             }
-            // 其他键：先提交，再把键还给应用
+            // 其他键：先提交，再把键还给应用。
+            //
+            // 全角标点例外——不能把键还给应用，应用会插半角。自己粘上去，
+            // 并且要吞掉这个键（返回 true），否则用户会得到「，,」两个字符。
             _ => {
+                if let Some(ch) = FeiheTextService::fullwidth_punct_for(vk) {
+                    let mut buf = [0u8; 4];
+                    self.commit_with(ch.encode_utf8(&mut buf));
+                    return Ok(BOOL::from(true));
+                }
                 self.commit_current();
                 Ok(BOOL::from(false))
             }
@@ -1415,6 +1468,9 @@ impl FeiheTextService_Impl {
                 }
                 EditOp::Commit(text) => {
                     crate::trace!("edit: Commit('{text}')");
+                    // 简繁转换只在这一个出口做：候选里存的永远是词库原文（简体），
+                    // 显示层和上屏层各自转。这样切换字形不需要重建任何索引。
+                    let text = crate::zhconv::to_traditional(&text);
                     let comp = self.composition.borrow_mut().take();
                     if let Some(comp) = comp {
                         let r = comp.GetRange()?;
@@ -1429,6 +1485,9 @@ impl FeiheTextService_Impl {
                 }
                 EditOp::Insert(text) => {
                     crate::trace!("edit: Insert('{text}')");
+                    // 标点、软键盘符号转换是空操作（它们本来就不在简繁映射里），
+                    // 但快捷输入的日期/星期文本要跟着走，所以统一在这里过一遍
+                    let text = crate::zhconv::to_traditional(&text);
                     let Ok(range) = caret_range(&context, ec) else {
                         return Ok(());
                     };
@@ -1575,19 +1634,37 @@ mod tests {
         assert!(FeiheTextService::code_allowed("nihc"));
         assert!(!FeiheTextService::code_allowed("nih\u{1}"));
         assert!(!FeiheTextService::code_allowed("ni\u{8}c"));
-        // 快捷输入的 `\` + 字母是合法的
-        assert!(FeiheTextService::code_allowed("\\rq"));
-        assert!(!FeiheTextService::code_allowed("\\r1"));
+        // 快捷输入的引导符 + 字母是合法的
+        assert!(FeiheTextService::code_allowed("`rq"));
+        assert!(!FeiheTextService::code_allowed("`r1"));
+        // 旧的 `\` 引导符已经让给顿号，不再是编码字符
+        assert!(!FeiheTextService::code_allowed("\\rq"));
     }
 
     #[test]
     fn fullwidth_punct_only_for_unshifted_keys() {
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_COMMA.0 as u8), Some('，'));
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_PERIOD.0 as u8), Some('。'));
-        // 反斜杠现在是快捷输入引导符，不再映射顿号
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_5.0 as u8), None);
+        // 顿号两个键都给：`\`（搜狗习惯）和 `/`（微软拼音习惯）
+        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_5.0 as u8), Some('、'));
+        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_2.0 as u8), Some('、'));
+        // 反引号现在是快捷输入引导符，不再是间隔号
+        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
         assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
+    }
+
+    #[test]
+    fn backslash_and_backquote_keys_are_split() {
+        // `\` 不再进编码：中文+全角标点时它输出「、」，Shift 组合交给应用出「|」
+        assert!(!FeiheTextService::is_code_key(VK_OEM_5.0 as u8));
+        assert_eq!(FeiheTextService::code_char(VK_OEM_5.0 as u8), None);
+        // `` ` `` 接管快捷输入引导符
+        assert!(FeiheTextService::is_code_key(VK_OEM_3.0 as u8));
+        assert_eq!(
+            FeiheTextService::code_char(VK_OEM_3.0 as u8),
+            Some(crate::quick::PREFIX)
+        );
     }
 
     /// 一个小词典，模拟「vhsjli = 张三 + 李」但整串无候选的场景
@@ -1778,7 +1855,7 @@ mod tests {
         assert!(!FeiheTextService::can_insert_sep(""));
         assert!(!FeiheTextService::can_insert_sep("vhsj'"));
         assert!(!FeiheTextService::can_insert_sep("vhs"));
-        assert!(!FeiheTextService::can_insert_sep("\\rq"));
+        assert!(!FeiheTextService::can_insert_sep("`rq"));
         // 完整音节之后可以
         assert!(FeiheTextService::can_insert_sep("vhsj"));
         // 全拼不限制位置（音节不定长，交给 DP 判断）

@@ -19,6 +19,7 @@ mod softkbd;
 mod statusbar;
 mod textservice;
 mod theme;
+mod zhconv;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;

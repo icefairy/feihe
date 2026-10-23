@@ -1,6 +1,9 @@
 //! 状态浮窗：输入法的那条小横条
 //!
-//! 五个按钮：中/英、全/半、符号软键盘、皮肤、设置。
+//! 四个按钮：中/英、全/半、符号软键盘、设置。
+//!
+//! 皮肤和「全拼/双拼」曾经也在这里，后来挪进设置窗了——它们都是**低频、改了
+//! 就长期不变**的东西，占着浮窗宽度不划算。浮窗只留「随时要按」的开关。
 //!
 //! 窗口是 `WS_POPUP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST`，
 //! 在宿主进程的 UI 线程上创建——和候选窗同一套路子。**不抢焦点**是硬要求：
@@ -42,26 +45,22 @@ const TIMER_MS: u32 = 300;
 enum Btn {
     Mode,
     Width,
-    Pinyin,
     Symbols,
-    Skin,
     Settings,
 }
 
 /// (按钮, 宽度)
-const LAYOUT: [(Btn, i32); 6] = [
+const LAYOUT: [(Btn, i32); 4] = [
     (Btn::Mode, 34),
     (Btn::Width, 34),
-    (Btn::Pinyin, 44),
     (Btn::Symbols, 44),
-    (Btn::Skin, 44),
     (Btn::Settings, 44),
 ];
 
-const WIDTH: i32 = PAD * 2 + 34 + 34 + 44 + 44 + 44 + 44;
+const WIDTH: i32 = PAD * 2 + 34 + 34 + 44 + 44;
 
-fn button_rects() -> [(Btn, RECT); 6] {
-    let mut out = [(Btn::Mode, RECT::default()); 6];
+fn button_rects() -> [(Btn, RECT); 4] {
+    let mut out = [(Btn::Mode, RECT::default()); 4];
     let mut x = PAD;
     for (i, (btn, w)) in LAYOUT.iter().enumerate() {
         out[i] = (
@@ -313,10 +312,14 @@ unsafe fn paint(h: HWND) {
         }
         let (label, color) = match btn {
             Btn::Mode => {
-                if chinese {
-                    ("中", p.on)
-                } else {
+                // 繁体模式没有单独的按钮（浮窗要瘦），用这个按钮的字兼作提示：
+                // 英文态显示「英」，中文态按字形显示「中」/「繁」。宽度不变。
+                if !chinese {
                     ("英", p.dim)
+                } else if config::get().traditional {
+                    ("繁", p.on)
+                } else {
+                    ("中", p.on)
                 }
             }
             Btn::Width => {
@@ -326,16 +329,7 @@ unsafe fn paint(h: HWND) {
                     ("半", p.dim)
                 }
             }
-            Btn::Pinyin => {
-                // 显示的是「当前模式」，和 中/半 一致；激活态用强调色
-                if config::pinyin_mode() {
-                    ("全拼", p.on)
-                } else {
-                    ("双拼", p.dim)
-                }
-            }
             Btn::Symbols => ("符号", p.text),
-            Btn::Skin => ("皮肤", p.text),
             Btn::Settings => ("设置", p.text),
         };
         font::text_center(hdc, r, label, color);
@@ -366,27 +360,11 @@ unsafe fn on_click(idx: usize) {
             config::update(|c| c.fullwidth = !c.fullwidth);
             crate::trace!("bar: fullwidth -> {}", config::get().fullwidth);
         }
-        Btn::Pinyin => {
-            let next = !config::pinyin_mode();
-            config::set_pinyin_mode(next);
-            crate::trace!("bar: pinyin mode -> {next}");
-        }
         Btn::Symbols => {
             let h = hwnd();
             let mut rc = RECT::default();
             let _ = GetWindowRect(h, &mut rc);
             softkbd::toggle(rc.left, rc.bottom + 4);
-        }
-        Btn::Skin => {
-            let next = match config::get().skin {
-                config::Skin::Light => config::Skin::Dark,
-                config::Skin::Dark => config::Skin::Eye,
-                config::Skin::Eye => config::Skin::Light,
-            };
-            config::update(|c| c.skin = next);
-            crate::trace!("bar: skin -> {}", next.label());
-            settings::notify_config_changed();
-            crate::candidate::refresh_theme();
         }
         Btn::Settings => settings::open(),
     }
