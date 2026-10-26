@@ -763,11 +763,13 @@ impl FeiheTextService {
             let code = self.segments.borrow()[idx].code.clone();
             let word = self.segments.borrow()[idx].word.clone();
             let list = FeiheTextService::lookup_any(&code, candidate_limit(&code));
-            // 选中项对齐到这一段当前选中的词，左右移动时不会跳回第一项
+            // 选中项对齐到这一段当前选中的词，左右移动时不会跳回第一项。
+            // 页号也要跟着算出来：`sel` 可能落在第二页（「鹤」在 `he` 的第 12 位），
+            // 只把 `selected` 设成 12 会让高亮框跑到页外，翻页也从错的页起翻。
             let sel = list.iter().position(|w| **w == word).unwrap_or(0);
             self.candidates.borrow_mut().clone_from(&list);
-            self.selected.set(sel);
-            self.page.set(0);
+            self.selected.set(sel % candidate::PAGE_SIZE);
+            self.page.set(sel / candidate::PAGE_SIZE);
             return;
         }
 
@@ -1094,12 +1096,36 @@ impl FeiheTextService_Impl {
         true
     }
 
+    /// 退格：整串**只有一个候选**时，不删字母，改成切成段逐字选。
+    ///
+    /// 这是用户按搜狗手感要求的入口：打 `zuci` 出来「组词」，想再造一个「祖祠」，
+    /// 以前只能用 `←` 硬拐进分词模式，退格却是「删一个字母」——一个键干两件事才对。
+    ///
+    /// 为什么要求「候选恰好一个」而不是「能拆就拆」：退格最常见的用法仍然是改错，
+    /// 满屏候选时把它劫持成「逐字选」，用户改个错要按三次退格。只有整串已经**唯一**
+    /// 命中一个词（`zuci`→组词）时，「这个码被一个词占满了」才成立，逐字选才有意义。
+    fn backspace_into_segments(&self) -> bool {
+        if !self.segments.borrow().is_empty() {
+            return false;
+        }
+        if self.candidates.borrow().len() != 1 {
+            return false;
+        }
+        if !self.try_segment(&[], true) {
+            return false;
+        }
+        // 从第一个字开始，按顺序往右选
+        self.seg_idx.set(0);
+        self.refresh();
+        self.update_composition();
+        true
+    }
+
     /// `←` / `→`：能拆就进分词模式并在段间移动，拆不了才退化成页内移动。
     ///
     /// 这是「用左右键一个字一个字选」的入口，也是**同码第二个自造词唯一能做出来的
     /// 路径**：`limkyr` 已经学会「李明远」之后整串就有候选，`try_segment` 的老条件
-    /// （候选为空才拆）永远不成立，用户只能删掉编码重来——而那正是用户报的
-    /// 「输入整码再退格就没法操作了，退格只删字母」的由来。所以这里传 `force`。
+    /// （候选为空才拆）永远不成立，用户只能删掉编码重来。所以这里传 `force`。
     ///
     /// 单音节的码（`de`、`ni`）拆不开，原样保留页内移动的老手感：这类码本来
     /// 就没有「哪个字」可选，只有「哪个候选」可选。
@@ -1115,8 +1141,12 @@ impl FeiheTextService_Impl {
         true
     }
 
-    /// 分词模式下确认当前段的第 `sel` 个候选（越界退第一个），光标后移一段；
-    /// 已经是最后一段就整体上屏。
+    /// 分词模式下确认当前段的第 `sel` 个候选，光标后移一段；已经是最后一段就整体上屏。
+    ///
+    /// `sel` 是**全表下标**（`页号 * PAGE_SIZE + 页内序号`），和 `pick` 一致。
+    /// 这里曾经收页内序号，于是分词态翻页后按数字键，命中的永远是第一页那个字：
+    /// 用户打 `fwhe` 拆成 `[飞][鹤]`，翻到第二页点「鹤」，上屏的却是第一页的「合」。
+    /// 单字（不分词）走 `pick`，那条路径一直是对的，所以 bug 只在组词时出现。
     fn confirm_segment(&self, sel: usize) {
         let n = self.segments.borrow().len();
         if n == 0 {
@@ -1318,9 +1348,9 @@ impl FeiheTextService_Impl {
                 }
                 Ok(BOOL::from(true))
             }
-            // 空格：确认当前段第一个候选
+            // 空格：确认当前段**高亮**的那个候选（和普通态 `commit_current` 同义）
             0x20 => {
-                self.confirm_segment(0);
+                self.confirm_segment(self.page.get() * candidate::PAGE_SIZE + self.selected.get());
                 Ok(BOOL::from(true))
             }
             // 回车：原样上屏字母，和普通组合态一个语义
@@ -1328,9 +1358,11 @@ impl FeiheTextService_Impl {
                 self.commit_raw_segments("");
                 Ok(BOOL::from(true))
             }
-            // 1-9：选当前段第 n 个候选
+            // 1-9：选当前段第 n 个候选（翻过页就要带上页偏移）
             0x31..=0x39 => {
-                self.confirm_segment((vk - 0x30) as usize - 1);
+                self.confirm_segment(
+                    self.page.get() * candidate::PAGE_SIZE + (vk - 0x30) as usize - 1,
+                );
                 Ok(BOOL::from(true))
             }
             // 退格：先把当前段拆成单字（组词），拆不动再退一个音节
@@ -1409,6 +1441,10 @@ impl FeiheTextService_Impl {
             }
             self.refresh();
             self.update_composition();
+            return;
+        }
+        // 整串唯一命中一个词：退格不删字母，改成逐字选（再造一个同码词）
+        if self.backspace_into_segments() {
             return;
         }
         let empty = {
@@ -1554,8 +1590,9 @@ impl FeiheTextService_Impl {
             return;
         }
         if !self.segments.borrow().is_empty() {
-            // 分词模式：确认当前段并跳到下一段（最后一段则整体上屏）
-            self.confirm_segment(index);
+            // 分词模式：确认当前段并跳到下一段（最后一段则整体上屏）。
+            // `index` 是页内序号，`confirm_segment` 收全表下标——翻过页就必须补上页偏移。
+            self.confirm_segment(self.page.get() * candidate::PAGE_SIZE + index);
         } else {
             // 普通模式的 `pick` 是 1 基（数字键 1-9），这里补 1
             self.pick(index + 1);
@@ -2411,6 +2448,46 @@ mod tests {
         assert!(none.is_empty(), "乱给了：{none:?}");
     }
 
+    /// 用户报「翻页选字上屏了第一页的字」的那个码，数据层面重现一遍。
+    ///
+    /// `fwhe` 切成 `[飞][鹤]`，而「鹤」在 `he` 的**第二页第 3 位**（下标 11）。
+    /// `confirm_segment` 当年把数字键当页内序号用，按 3 取到的是 `list[2]`「何」，
+    /// 也就是第一页那个字。这条测试不测 UI，只钉住「这个场景确实是跨页的」——
+    /// 哪天词库变了、「鹤」挪到第一页，这条会失败，提醒我们把验证清单里的手动步骤改掉。
+    #[test]
+    fn fwhe_splits_with_he_on_second_page() {
+        let has = |p: &str| !FeiheTextService::lookup_any(p, 1).is_empty();
+        assert_eq!(FeiheTextService::plan_segments("fwhe", has), ["fw", "he"]);
+
+        let he = FeiheTextService::lookup_any("he", 45);
+        let pos = he
+            .iter()
+            .position(|w| w.as_ref() == "鹤")
+            .expect("he 的候选里应该有 鹤");
+        assert!(
+            pos >= candidate::PAGE_SIZE,
+            "鹤 应该在第二页（当前下标 {pos}），否则这条用例失去意义"
+        );
+        // 翻页后按的第 n 个键 → 全表下标 = 页偏移 + n - 1
+        let page = pos / candidate::PAGE_SIZE;
+        assert_eq!(page, 1, "鹤 应该在第二页");
+    }
+
+    /// 用户报的「zuci 只有组词一个候选，想再造祖祠」：判据是候选恰好 1 条、
+    /// 且能切成两段。`backspace_into_segments` 就卡这两个条件。
+    #[test]
+    fn zuci_unique_candidate_is_splittable() {
+        let has = |p: &str| !FeiheTextService::lookup_any(p, 1).is_empty();
+        assert_eq!(FeiheTextService::lookup_any("zuci", 45).len(), 1, "zuci 应该只有一个候选");
+        assert_eq!(FeiheTextService::plan_segments("zuci", has), ["zu", "ci"]);
+
+        // 两段的候选里都得有用户要的字，否则「切成段」也拼不出祖祠
+        let zu = FeiheTextService::lookup_any("zu", 45);
+        let ci = FeiheTextService::lookup_any("ci", 45);
+        assert!(zu.iter().any(|w| w.as_ref() == "祖"), "zu 应该有 祖");
+        assert!(ci.iter().any(|w| w.as_ref() == "祠"), "ci 应该有 祠");
+    }
+
     /// 不弹窗模式下候选要拼进组合串：没有候选窗，这是用户唯一能看到候选的地方。
     #[test]
     fn no_popup_hint_lists_current_page() {
@@ -3161,4 +3238,3 @@ mod tests {
         assert!(!FeiheTextService::is_shift(0x0D));
     }
 }
-

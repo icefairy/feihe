@@ -2,8 +2,8 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.2** ｜ 安装包 1.58 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
-不联网、不弹窗、无账号 ｜ 161 项单元测试
+**当前版本 0.2.3** ｜ 安装包 1.58 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
+不联网、不弹窗、无账号 ｜ 168 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
 > 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
@@ -342,7 +342,20 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 
 `Tab` 进入**辅助码**筛选（组合串会显示成 `de b` 这种形式），再按 `Tab` 退出。
 辅助码方案在设置里选：自然码辅助码（1 键，取部首声母，如 的→白→`b`）或
-小鹤音形（2 键，首末部件，如 打→扌+丁→`sd`）。关掉时 `Tab` 原样还给应用。
+小鹤音形（2 键，取首末部件，如 带→带上+巾→`fj`、打→扌+丁→`fd`）。关掉时 `Tab`
+原样还给应用。
+
+小鹤那一列用的是**官方码**（`react.xhup.club` 反查出来是什么就是什么），不是自己
+推算的。早先按 IDS 部件分解推过一版，和官方只有 12% 一致——官方有「带上 / 寿上 /
+具上 / 既左」这类专用字根，还有「孰大优先 / 相交不拆 / 插隔不取」这些得看笔顺才
+判得了的规则，推不出来。码错了不会报错，只会让你筛出一片空白，所以宁可先抓下来
+入库（`tools/xhup_cache.txt`，随仓库走）也不猜。
+
+打法示例（小鹤音形）：`dd` → `Tab` → `f` → `j`，第一位就是「带」。
+
+码表覆盖词库里全部 8007 个字（小鹤 7866 个，其余 141 个是「亻 / 冖 / 卍 / 艹」这类
+只作部件或极冷僻的字，官方库本身没有码）。表 72 KB，压进 DLL 之后 64 位主程序
+3706 → 3745 KB，安装包没变（还是 1.58 MB，压缩后溢不出来）。
 
 ## 快捷输入（日期 / 时间 / 农历 / 干支 / 节气）
 
@@ -586,7 +599,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示，共 161 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 168 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -626,7 +639,7 @@ unregister.cmd    :: 全部移除
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.2.2.exe
+# 产物：dist\Feihe-Setup-0.2.3.exe
 ```
 
 `build_setup.ps1` 做四件事：
@@ -729,11 +742,14 @@ src/theme.rs          皮肤调色板（浅色 / 深色 / 护眼）
 src/font.rs           自绘窗口共用字体 + 填充/描边/文字居中
 src/insert.rs         任意窗口往文档写文本、读写中英开关（同步 edit session）
 src/config.rs         配置读写（%APPDATA%\Feihe\config.ini）
-src/assist.rs         辅助码查表（自然码 / 小鹤音形）
-src/assist.txt        辅助码表（3739 字，gen_assist.py 生成，勿手改）
+src/assist.rs         辅助码查表（自然码 / 小鹤音形，多码用 | 分隔任一命中）
+src/assist.txt        辅助码表（gen_assist.py 生成，勿手改）
 tools/gen_dict.py     基础词库生成器（拉雾凇拼音 rime-ice，按词频取前 N 条）
 tools/import_sogou.py 搜狗词库导入器（解析本机搜狗用户词库 → user_dict.txt）
-tools/gen_assist.py   辅助码表生成器（Unihan 部首 + cjkvi-ids 部件分解）
+tools/gen_assist.py   辅助码表生成器（自然码：Unihan 部首；小鹤：官方码表缓存）
+tools/fetch_xhup.py   小鹤官方形码抓取器（增量，结果存 tools/xhup_cache.txt，随仓库走）
+tools/xhup_cache.txt  小鹤官方形码缓存（字<TAB>形码，8000+ 字，勿手改）
+tools/assist_overrides.txt  辅助码人工修正（优先级最高，改完重跑 gen_assist.py）
 tools/gen_brief2.py   二简码表生成器（按 dict.txt 拼音算两键码，--check 只比对）
 tools/smoke_com.py    COM 骨架冒烟测试（ctypes 直调 DllGetClassObject）
 shim/loadtest.c       位数无关的 DLL 冒烟测试（LoadLibrary + DllGetClassObject + CreateInstance）
@@ -909,17 +925,19 @@ rime-ice 是「书面语料」词表，缺一批日常真的会打的词：电�
 | `_icebase.yaml` | 15.8 MB | `tools/gen_dict.py` | 下次跑会自动重下（镜像可达） |
 | `_ice8105.yaml` | 0.1 MB | `gen_dict.py`、`import_sogou.py` | 同上 |
 | `_pinyin_data.txt` | 1.0 MB | `gen_dict.py`（GB2312 补字取音） | 自动重下（`pinyin-data` 的 `pinyin.txt`，多镜像） |
-| `_ids.txt` | 2.1 MB | `tools/gen_assist.py` | 可重下（见下） |
+| `_ids.txt` | 2.1 MB | **无人引用** | 死文件，可删（辅助码改成官方码之后不再需要 IDS） |
 | `_unihan.zip` | 8.0 MB | `tools/gen_assist.py` | **别删**：unicode.org 目前连不上，删了就没法重生成自然码辅助码 |
 | `_luna.yaml` | 0.8 MB | **无人引用** | 死文件，可删 |
 | `_kmandarin.txt` | 0.9 MB | **无人引用** | 死文件，可删 |
 
-两个辅助码数据源**没有下载代码**，得手工放到仓库根目录：
+Unihan 没有下载代码，得手工放到仓库根目录：
 
 ```text
 https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip          -> _unihan.zip
-https://raw.githubusercontent.com/cjkvi/cjkvi-ids/master/ids.txt  -> _ids.txt
 ```
+
+小鹤形码不在这里：它是 `tools/fetch_xhup.py` 抓官方接口的结果，存在
+`tools/xhup_cache.txt` 并**提交进仓库**（不是缓存，是数据源），换机器不用重抓。
 
 ## 导入本机搜狗拼音的词库
 

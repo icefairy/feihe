@@ -231,7 +231,7 @@
 
 <header>
   <div class="wrap hero">
-    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.2.2</b></span>
+    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.2.3</b></span>
     <h1>一个只有几 MB 的<br><span class="thin">双拼输入法</span></h1>
     <p class="lede">
       飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼（含一简 26 字 + 二简 370 词），词库在构建期预编码成
@@ -463,7 +463,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <span class="c"># 3. 打安装包（发布模式，排除本机个人词库）</span>
 <span class="p">powershell</span> -ExecutionPolicy Bypass -File installer\build_setup.ps1
-<span class="c"># → dist\Feihe-Setup-0.2.2.exe</span></pre>
+<span class="c"># → dist\Feihe-Setup-0.2.3.exe</span></pre>
 
     <div class="grid" style="margin-top:20px">
       <div class="card">
@@ -504,7 +504,7 @@ rustup target add i686-pc-windows-gnullvm
       <div>外挂式输入（键盘钩子 + 注入进程，反作弊会判成外挂）</div>
     </div>
     <p class="sub" style="margin-top:26px">
-      已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形、智能分词选词（退格可拆词）、
+      已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形（形码用官方码表）、智能分词选词（退格可拆词、整串唯一候选时退格直接进逐字）、
       候选窗鼠标点选、一级简码（<code>d</code> 出「的」，次选 <code>d;</code> 出「打」）、二级简码（<code>nd</code> 出「难道」，370 条两键词）、手动置顶（<code>Ctrl</code>+数字，或右键点候选——多页签程序里 <code>Ctrl+1..9</code> 被抢走时用这个）、
       全屏游戏 UILess（候选交给游戏自绘）、候选窗有全屏自动检测（游戏 / 演示时自动收起，不用改设置）、
       易错词读音标注 + 错音容错（<code>zhongqing</code> 也能打出「重庆 chóng qìng」）、
@@ -517,7 +517,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <footer>
   <div class="wrap row">
-    <span>飞鹤输入法 v0.2.2 · Rust + windows-rs · Windows TSF</span>
+    <span>飞鹤输入法 v0.2.3 · Rust + windows-rs · Windows TSF</span>
     <a href="https://github.com/icefairy/feihe">源码</a>
     <a href="https://github.com/icefairy/feihe/blob/main/README.md">文档</a>
     <a href="https://github.com/icefairy/feihe/blob/main/handoff.md">实现笔记</a>

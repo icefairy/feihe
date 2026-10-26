@@ -624,10 +624,7 @@ fn collect(
     // 去重用的短列表：候选最多 limit 条，线性扫比建 HashSet 划算（也免了分配）
     let mut seen: Vec<&str> = Vec::with_capacity(limit.min(16));
 
-    let pass = |w: &str| -> bool {
-        assist_prefix.is_empty()
-            || assist::code_of_word(w, mode).is_some_and(|c| c.starts_with(assist_prefix))
-    };
+    let pass = |w: &str| -> bool { assist::word_matches(w, mode, assist_prefix) };
 
     // 1) 用户词库优先。常态是 mmap 的 user.bin（和 base.bin 同一条零解析路径，
     //    多进程共享页缓存）；只有 bin 缺失或比 txt 旧时才退回堆索引。
@@ -1080,6 +1077,64 @@ pub(crate) mod tests {
         assert_eq!(uniq.len(), r.len(), "duplicate candidates: {r:?}");
     }
 
+    /// 辅助码必须**按官方码**命中：用户是拿小鹤反查工具对出来的码来敲的。
+    ///
+    /// 带 = 双拼 dd + 形码 fj（官方全码 ddfj，拆「带上 / 巾」）。这一条同时看住了
+    /// 两件事：table 里存的是官方码、筛选路径按首字算。曾经这两件事都不成立——
+    /// 推算码给的是 sj，用户敲 fj 直接筛空，看起来就是「辅助码没生效」。
+    #[test]
+    fn xiaohe_assist_hits_official_code() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+
+        let first_key = lookup_filtered("dd", "f", AssistMode::Xiaohe, 45);
+        assert!(
+            first_key.iter().any(|w| &**w == "带"),
+            "带 应该命中首形 f，实际 {first_key:?}"
+        );
+
+        let full = lookup_filtered("dd", "fj", AssistMode::Xiaohe, 45);
+        assert_eq!(
+            full.first().map(|w| w.as_ref()),
+            Some("带"),
+            "dd + fj 第一位必须是 带，实际 {full:?}"
+        );
+    }
+
+    /// 自然码辅助码：带 → 部首 巾 → j
+    #[test]
+    fn ziranma_assist_hits_radical() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        let r = lookup_filtered("dd", "j", AssistMode::Ziranma, 45);
+        assert!(r.iter().any(|w| &**w == "带"), "自然码 dd + j 应该出 带，实际 {r:?}");
+    }
+
+    /// 码表本身不许有垃圾：每位都是 a-z、长度 1~2（自然码 1 位、小鹤 2 位），
+    /// 多音字多位用 `|` 分隔，`-` 表示这个方案查不到。
+    ///
+    /// 写错的码不会报错，只会让筛选**静默失效**——用户敲对了也一片空白，
+    /// 所以只能在这一层拦住。小鹤列现在来自官方接口（`tools/xhup_cache.txt`），
+    /// 生成脚本改坏 / 缓存被手改，都会在这里掉下来。
+    #[test]
+    fn assist_table_format_is_sane() {
+        let ok = |code: &str| {
+            code == "-"
+                || code
+                    .split('|')
+                    .all(|one| !one.is_empty() && one.len() <= 2 && one.chars().all(|c| c.is_ascii_lowercase()))
+        };
+        let bad: Vec<&str> = assist::RAW
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+            .filter(|l| {
+                let cols: Vec<&str> = l.split('\t').collect();
+                cols.len() < 3 || cols[1..].iter().any(|code| !ok(code))
+            })
+            .collect();
+        assert!(bad.is_empty(), "辅助码表格式异常：{bad:?}");
+    }
+
     #[test]
     fn assist_filter_narrows() {
         let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1106,8 +1161,8 @@ pub(crate) mod tests {
             lookup_filtered("de", "", AssistMode::Off, 5000).len(),
             all.len()
         );
-        // 小鹤音形：的→bs，用 bs 精确筛只剩「的」系
-        let xh = lookup_filtered("de", "bs", AssistMode::Xiaohe, 5000);
+        // 小鹤音形：的→白(b) + 勺(u) = bu，用 bu 精确筛只剩「的」系
+        let xh = lookup_filtered("de", "bu", AssistMode::Xiaohe, 5000);
         assert!(xh.iter().any(|w| &**w == "的"), "expected 的 in xiaohe {xh:?}");
         assert!(xh.len() < all.len());
     }

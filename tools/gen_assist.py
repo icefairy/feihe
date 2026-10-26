@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
 """生成辅助码表 src/assist.txt
 
-两套方案，都是「部件 → 声母定键」，区别是取几个部件：
+两套方案：
 
-- 自然码辅助码：取**部首**，1 键。数据源 Unihan `kRSUnicode`（部首序号）
-- 小鹤音形：取**首部件 + 末部件**，2 键。数据源 cjkvi-ids 的 IDS 分解
+- **自然码辅助码**：取**部首**，1 键。数据源 Unihan `kRSUnicode`（部首序号）
+  → 部首读音首字母。例：的→白→`b`、想→心→`x`、打→手→`s`
+- **小鹤音形**：取首部件 + 末部件，2 键。数据源是**官方码**，已抓在
+  `tools/xhup_cache.txt`（`tools/fetch_xhup.py` 生成），这里只做合并。
 
-字根键位按小鹤官方规则「多数采用声母定键，即字根的声母就是键位」
-（见 形 = 双拼 xk + 首形 开(k) + 末形 撇(p) = xkkp）。
+小鹤这一列**不再自己推算**。曾经按 IDS 部件分解 + 声母定键算过，实测和官方码
+只有 12% 一致（1772 字抽样）——官方有「带上 / 寿上 / 具上 / 既左 / 余下」这类
+专用字根，还有「孰大优先 / 相交不拆 / 插隔不取」这些必须靠笔顺几何才能判的规则，
+IDS 树推不出来。码错了不会报错，只会让用户筛出空候选，比没有辅助码更糟。
 
-输出格式（UTF-8，按字排序）：
+人工修正走 `tools/assist_overrides.txt`（`字<TAB>自然码<TAB>小鹤`，缺的列写 `-`），
+优先级最高，改动不会被重跑覆盖。
+
+输出格式（UTF-8，按字排序，缺失用 `-` 占位）：
 
     字<TAB>自然码辅助码<TAB>小鹤形码
 
-缺失的用 `-` 占位。只输出我们词库里出现过的字，文件很小。
+小鹤列可能是多位（`fj|gs`，多音字官方给不同形码），运行时任一位命中即可。
 
 用法：
-    python tools/gen_assist.py                # 全量（需要 _unihan.zip 和 _ids.txt）
-    python tools/gen_assist.py --no-ids       # 只生成自然码那列
+    python tools/fetch_xhup.py            # 先把官方形码抓齐（增量，只补新字）
+    python tools/gen_assist.py            # 再生成
+    python tools/gen_assist.py --strict   # 有字缺码就报错退出（发布前用）
 """
 
 import io
@@ -27,9 +35,10 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UNIHAN_ZIP = os.path.join(ROOT, "_unihan.zip")
-IDS_TXT = os.path.join(ROOT, "_ids.txt")
+XHUP_CACHE = os.path.join(ROOT, "tools", "xhup_cache.txt")
+OVERRIDES = os.path.join(ROOT, "tools", "assist_overrides.txt")
 OUT = os.path.join(ROOT, "src", "assist.txt")
-DICTS = [os.path.join(ROOT, "src", "dict.txt"), os.path.join(ROOT, "src", "user_dict.txt")]
+SRC = os.path.join(ROOT, "src")
 
 # 康熙部首 1..214 的拼音首字母，按部首序号排列，每行 10 个便于核对。
 #   1 一(y)      2 丨(gǔn)   3 丶(zhǔ)   4 丿(piě)   5 乙(y)    6 亅(jué)
@@ -92,181 +101,115 @@ assert len(RAD_INITIAL) == 214, f"部首表应有 214 项，实际 {len(RAD_INIT
 
 
 def parse_unihan():
-    """返回 (字 -> 部首序号, 字 -> 拼音首字母)"""
+    """返回 字 -> 部首序号"""
     radical = {}
-    mandarin = {}
     if not os.path.exists(UNIHAN_ZIP):
         sys.exit(f"缺少 {UNIHAN_ZIP}")
     with zipfile.ZipFile(UNIHAN_ZIP) as z:
         for name in z.namelist():
-            if name.endswith("Unihan_IRGSources.txt"):
-                for line in io.TextIOWrapper(z.open(name), encoding="utf-8"):
-                    if line.startswith("#"):
-                        continue
-                    parts = line.rstrip("\n").split("\t")
-                    if len(parts) < 3 or parts[1] != "kRSUnicode":
-                        continue
-                    cp = int(parts[0][2:], 16)
-                    # 值形如 "9.0" 或 "9.0'"，可能多组用空格分隔；带 ' 的是简化部首形
-                    num = parts[2].split()[0].split(".")[0].rstrip("'")
-                    try:
-                        n = int(num)
-                    except ValueError:
-                        continue
-                    if 1 <= n <= 214:
-                        radical.setdefault(chr(cp), n)
-            elif name.endswith("Unihan_Readings.txt"):
-                for line in io.TextIOWrapper(z.open(name), encoding="utf-8"):
-                    if line.startswith("#"):
-                        continue
-                    parts = line.rstrip("\n").split("\t")
-                    if len(parts) < 3 or parts[1] != "kMandarin":
-                        continue
-                    cp = int(parts[0][2:], 16)
-                    py = parts[2].split()[0]
-                    # 去掉声调符号，取首字母
-                    letters = "".join(c for c in py if c.isascii() and c.isalpha())
-                    if letters:
-                        mandarin.setdefault(chr(cp), letters[0].lower())
-    return radical, mandarin
-
-
-# IDS 运算符 → 参与拆分的子部件个数
-IDS_OPS = {
-    "\u2ff0": 2, "\u2ff1": 2, "\u2ff2": 3, "\u2ff3": 3,
-    "\u2ff4": 2, "\u2ff5": 2, "\u2ff6": 2, "\u2ff7": 2,
-    "\u2ff8": 2, "\u2ff9": 2, "\u2ffa": 2, "\u2ffb": 2,
-}
-
-
-def parse_one(s):
-    """解析一个完整 IDS 表达式，返回它消耗的字符数。"""
-    if not s:
-        return 0
-    n = IDS_OPS.get(s[0])
-    if not n:
-        return 1
-    i, cnt = 1, 0
-    while i < len(s) and cnt < n:
-        i += parse_one(s[i:])
-        cnt += 1
-    return i
-
-
-def split_top(s):
-    """把 IDS 表达式拆成顶层部件列表；不是 IDS 就返回单元素。"""
-    if not s:
-        return []
-    n = IDS_OPS.get(s[0])
-    if not n:
-        return [s]
-    parts, i = [], 1
-    while i < len(s) and len(parts) < n:
-        used = parse_one(s[i:])
-        parts.append(s[i:i + used])
-        i += used
-    return parts
-
-
-def first_leaf(s):
-    """最左侧的叶子部件。"""
-    if not s:
-        return None
-    if s[0] in IDS_OPS:
-        return first_leaf(s[1:])
-    return s[0]
-
-
-def last_leaf(s):
-    """最右侧的叶子部件。"""
-    parts = split_top(s)
-    if not parts:
-        return None
-    return last_leaf(parts[-1]) if parts[-1][0] in IDS_OPS else parts[-1][0]
-
-
-def parse_ids():
-    """返回 字 -> 顶层部件列表"""
-    table = {}
-    if not os.path.exists(IDS_TXT):
-        return table
-    with io.open(IDS_TXT, encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("#"):
+            if not name.endswith("Unihan_IRGSources.txt"):
                 continue
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 2:
-                continue
-            try:
+            for line in io.TextIOWrapper(z.open(name), encoding="utf-8"):
+                if line.startswith("#"):
+                    continue
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 3 or parts[1] != "kRSUnicode":
+                    continue
                 cp = int(parts[0][2:], 16)
-            except ValueError:
-                continue
-            # 格式：U+XXXX<TAB>字<TAB>IDS
-            ids = (parts[2] if len(parts) >= 3 else parts[1]).strip()
-            if not ids or ids == parts[1].strip():
-                continue
-            table.setdefault(chr(cp), ids)
-    return table
+                # 值形如 "9.0" 或 "9.0'"，可能多组用空格分隔；带 ' 的是简化部首形
+                num = parts[2].split()[0].split(".")[0].rstrip("'")
+                try:
+                    n = int(num)
+                except ValueError:
+                    continue
+                if 1 <= n <= 214:
+                    radical.setdefault(chr(cp), n)
+    return radical
 
 
-def load_dict_chars():
+def dict_chars():
+    """词库里出现过的字（现在按首字筛就够，全收着将来按末字筛也用得上）"""
     chars = set()
-    for path in DICTS:
-        if not os.path.exists(path):
+    for name in sorted(os.listdir(SRC)):
+        if not name.endswith(".txt"):
             continue
-        with io.open(path, encoding="utf-8") as f:
+        if not (name.startswith("dict") or name.startswith("extra")
+                or name.startswith("user_dict")):
+            continue
+        with io.open(os.path.join(SRC, name), encoding="utf-8-sig") as f:
             for line in f:
                 line = line.rstrip("\n")
                 if not line or line.startswith("#"):
                     continue
-                word = line.split("\t")[0]
-                chars.update(word)
+                word = line.split("\t")[0].strip()
+                if word:
+                    chars.update(word)
     return chars
 
 
+def load_table(path):
+    """读 `字<TAB>列1<TAB>列2` 形式的两列/三列表；文件不存在返回空 dict。"""
+    table = {}
+    if not os.path.exists(path):
+        return table
+    with io.open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[0].strip():
+                table[parts[0].strip()] = [p.strip() for p in parts[1:]]
+    return table
+
+
 def main():
-    radical, mandarin = parse_unihan()
-    ids = {} if "--no-ids" in sys.argv else parse_ids()
-    chars = load_dict_chars()
-    print(f"词库字符数: {len(chars)}")
-    print(f"Unihan 部首覆盖: {len(radical)}   拼音覆盖: {len(mandarin)}   IDS 覆盖: {len(ids)}")
+    radical = parse_unihan()
+    chars = dict_chars()
+    xhup = load_table(XHUP_CACHE)
+    over = load_table(OVERRIDES)
+    print(f"词库字符数: {len(chars)}   Unihan 部首: {len(radical)}   "
+          f"小鹤官方码: {len(xhup)}   人工修正: {len(over)}")
 
     rows = []
     hit_zrm = hit_xh = 0
+    missing_xh = []
     for ch in sorted(chars):
-        # 自然码：部首声母
-        zrm = "-"
-        n = radical.get(ch)
-        if n:
-            zrm = RAD_INITIAL[n - 1]
+        zrm = RAD_INITIAL[radical[ch] - 1] if ch in radical else "-"
+        xh = (xhup.get(ch) or ["-"])[0]
+        # 人工修正覆盖一切
+        if ch in over:
+            cols = over[ch]
+            zrm = cols[0] if cols else zrm
+            if len(cols) > 1 and cols[1]:
+                xh = cols[1]
+        if zrm != "-":
             hit_zrm += 1
-
-        # 小鹤音形：首部件 + 末部件，声母定键
-        xh = "-"
-        expr = ids.get(ch, "")
-        if expr:
-            a, b = first_leaf(expr), last_leaf(expr)
-            ka = mandarin.get(a) if a else None
-            kb = mandarin.get(b) if b else None
-            if ka and kb:
-                xh = ka + kb
-                hit_xh += 1
-
-        if zrm == "-" and xh == "-":
+        if xh and xh != "-":
+            hit_xh += 1
+        else:
+            missing_xh.append(ch)
+        if zrm == "-" and (not xh or xh == "-"):
             continue
         rows.append((ch, zrm, xh))
 
     with io.open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write("# 辅助码表，由 tools/gen_assist.py 生成，勿手改\n")
-        f.write("# 字<TAB>自然码辅助码<TAB>小鹤形码\n")
+        f.write("# 字<TAB>自然码辅助码<TAB>小鹤形码（多位用 | 分隔）\n")
         for ch, zrm, xh in rows:
             f.write(f"{ch}\t{zrm}\t{xh}\n")
 
     size = os.path.getsize(OUT)
     print(f"写出 {OUT}: {len(rows)} 条, {size} bytes")
-    print(f"  自然码有码: {hit_zrm}   小鹤形码: {hit_xh}")
+    print(f"  自然码有码 {hit_zrm}/{len(chars)}   小鹤有码 {hit_xh}/{len(chars)}")
+    if missing_xh:
+        print(f"  小鹤缺码 {len(missing_xh)} 个：{''.join(missing_xh[:30])}"
+              f"{'…' if len(missing_xh) > 30 else ''}")
+        if "--strict" in sys.argv:
+            sys.exit("小鹤列有缺码，先跑 tools/fetch_xhup.py 补齐（或加 overrides）")
+
     print("\n抽样：")
-    for probe in ("的", "你", "好", "是", "中", "形", "鹤", "想", "打"):
+    for probe in ("带", "打", "的", "鹤", "形", "一", "想"):
         row = next((r for r in rows if r[0] == probe), None)
         print(f"  {probe}: 自然码={row[1] if row else '缺'}  小鹤={row[2] if row else '缺'}")
 
