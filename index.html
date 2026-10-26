@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.59 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.61 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -231,7 +231,7 @@
 
 <header>
   <div class="wrap hero">
-    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.2.7</b></span>
+    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.3.0</b></span>
     <h1>一个只有几 MB 的<br><span class="thin">双拼输入法</span></h1>
     <p class="lede">
       飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼（含一简 26 字 + 二简 370 词），词库在构建期预编码成
@@ -268,7 +268,7 @@
           <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
         </thead>
         <tbody>
-          <tr><td>安装包</td><td class="me">1.59 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>安装包</td><td class="me">1.61 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
           <tr><td>装完占用</td><td class="me">约 6.5 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
           <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
           <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
@@ -351,7 +351,8 @@
       <div class="card">
         <h3>不写临时文件</h3>
         <p>运行期不留诊断日志、不往 <code>%TEMP%</code> 写 trace。磁盘上只有
-          <code>%APPDATA%\Feihe</code> 下的 <code>config.ini</code> 和 <code>freq.txt</code>。</p>
+          安装目录（默认 <code>%LOCALAPPDATA%\Feihe</code>）里的 <code>config.ini</code>、
+          <code>freq.txt</code>、<code>phrases.txt</code>——压缩这个目录就是完整备份。</p>
       </div>
       <div class="card">
         <h3>简繁零体积</h3>
@@ -463,7 +464,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <span class="c"># 3. 打安装包（发布模式，排除本机个人词库）</span>
 <span class="p">powershell</span> -ExecutionPolicy Bypass -File installer\build_setup.ps1
-<span class="c"># → dist\Feihe-Setup-0.2.7.exe</span></pre>
+<span class="c"># → dist\Feihe-Setup-0.3.0.exe</span></pre>
 
     <div class="grid" style="margin-top:20px">
       <div class="card">
@@ -517,7 +518,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <footer>
   <div class="wrap row">
-    <span>飞鹤输入法 v0.2.7 · Rust + windows-rs · Windows TSF</span>
+    <span>飞鹤输入法 v0.3.0 · Rust + windows-rs · Windows TSF</span>
     <a href="https://github.com/icefairy/feihe">源码</a>
     <a href="https://github.com/icefairy/feihe/blob/main/README.md">文档</a>
     <a href="https://github.com/icefairy/feihe/blob/main/handoff.md">实现笔记</a>

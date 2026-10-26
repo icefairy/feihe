@@ -35,7 +35,7 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 674;
+const CLIENT_H: i32 = 696;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -64,6 +64,7 @@ const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
 const ID_PIN_HINT: i32 = 143;
 const ID_PIN_RESET: i32 = 144;
+const ID_DATA_DIR: i32 = 145;
 const ID_IMPORT: i32 = 151;
 const ID_EXPORT: i32 = 152;
 const ID_CLOSE: i32 = 153;
@@ -208,7 +209,17 @@ unsafe fn sync(h: HWND) {
     set_text(
         h,
         ID_LEARN_HINT,
-        &format!("已记 {learned} 个词频 · {phrases} 个自造词（%APPDATA%\\Feihe\\）"),
+        &format!("已记 {learned} 个词频 · {phrases} 个自造词"),
+    );
+    // 数据目录写出来，用户才知道该备份哪个文件夹。装到只读目录时会回落
+    // `%APPDATA%\Feihe`，这里显示的永远是**真实在用**的那个路径。
+    set_text(
+        h,
+        ID_DATA_DIR,
+        &format!(
+            "数据目录：{}（压缩这个文件夹即备份）",
+            config::dir().display()
+        ),
     );
     // 条目少的时候直接把「码→词」列出来，用户不用去翻文件
     let pinned = crate::pin::list();
@@ -530,6 +541,10 @@ unsafe fn build(h: HWND) {
 
     y += 40;
     label(h, "", 16, y, 428, ID_STATS);
+
+    // 数据目录：备份时要压的就是这个文件夹
+    y += 22;
+    label(h, "", 16, y, 428, ID_DATA_DIR);
 
     y += 34;
     push(h, "导入词库…", 16, y, 104, 28, ID_IMPORT);

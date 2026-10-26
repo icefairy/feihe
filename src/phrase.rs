@@ -24,15 +24,25 @@
 //! 只会觉得是 bug。所以这里存**全拼**，查询时按当前方案现场编码——和小鹤/微软
 //! 双拼、全拼三种索引都对得上，切方案、开全拼模式照样能打出来。
 //!
+//! ## 排序：次数优先于「新学的」
+//!
+//! 早期只有「列表顺序 = 新学的在前」。同一个码下造过几个词时，那个结果就是
+//! 「最后造的永远第一」，哪怕另一个你天天用——`jia yi bing ding` 下堆着
+//! 甲乙丙丁 / 甲乙丙定 / 家乙丙丁，谁最后造谁压上面，这不是学习，是掷骰子。
+//!
+//! 现在每条记录带次数：同一码内**次数高的在前，次数相同才比新旧**。次数来自
+//! 每次 `learn`（分词上屏同一串词会再学一次），所以常用的自造词会自己浮上去。
+//!
 //! ## 文件
 //!
-//! `%APPDATA%\Feihe\phrases.txt`，每行 `词<TAB>全拼`，越靠前越新：
+//! `phrases.txt`，每行 `词<TAB>全拼[<TAB>次数]`，顺序是「最近学的在前」：
 //!
 //! ```text
 //! # 飞鹤输入法自造词组
-//! 李明远<TAB>li ming yuan
+//! 李明远	li ming yuan	7
 //! ```
 //!
+//! 第三列可选：老文件只有两列，读进来当作 1 次，下次写回时补上。
 //! 和 `freq.txt` / `pinned.txt` 一个风格：能看、能手改、能删。删掉整个文件
 //! 就是「忘掉所有自造词」。
 
@@ -45,10 +55,17 @@ use crate::shuangpin::{self, Scheme};
 /// 2000 条对一个每天都打字的人也是好几年的量。
 const MAX_ENTRIES: usize = 2000;
 
+/// 单条次数封顶。自造词不存在「饱和后塌成平局」的问题（同一码下一般只有两三个），
+/// 这里只是防手改出一个天文数字。
+const MAX_COUNT: u32 = 1000;
+
+#[derive(Clone)]
 struct Entry {
     word: Box<str>,
     /// 音节用空格分隔的全拼（`li ming yuan`）
     pinyin: Box<str>,
+    /// 被拼出来（上屏）的次数。同码内排序靠它，见模块文档。
+    n: u32,
 }
 
 /// 表：条目按「最近学的在前」排，外加三张按码升序的索引（和 `dict::Overlay` 同构）。
@@ -96,21 +113,28 @@ impl Table {
         }
     }
 
-    /// 这个码（**整码**，不是前缀）下学过的词，新学的在前。
+    /// 这个码（**整码**，不是前缀）下学过的词，要出候选的顺序。
     ///
     /// 只认整码：前缀查询时把半个码的候选混进来，用户看到的是「我还没打完它就出来了」，
     /// 而且会和正常的自动切分打架。
+    ///
+    /// 顺序是「次数高的在前，次数相同按新旧（entries 顺序）」——后者由索引本身
+    /// 的次序保证（`build` 里是同码内保持 entries 顺序）。
     fn words_with_code(&self, which: Idx, code: &str) -> Vec<String> {
         let arr = self.index(which);
         let start = arr.partition_point(|(c, _)| c.as_ref() < code);
-        let mut out = Vec::new();
+        let mut hits: Vec<(u32, u32)> = Vec::new(); // (次数, entries 下标)
         for (c, i) in &arr[start..] {
             if c.as_ref() != code {
                 break;
             }
-            out.push(self.entries[*i as usize].word.to_string());
+            hits.push((self.entries[*i as usize].n, *i));
         }
-        out
+        // 稳定排序：次数相同就保持索引顺序（= 新的在前）
+        hits.sort_by_key(|&(n, i)| (std::cmp::Reverse(n), i));
+        hits.iter()
+            .map(|(_, i)| self.entries[*i as usize].word.to_string())
+            .collect()
     }
 }
 
@@ -122,7 +146,7 @@ pub fn file() -> std::path::PathBuf {
     crate::config::dir().join("phrases.txt")
 }
 
-/// 解析 `词<TAB>全拼` 文本。抽成纯函数才能单测（真文件读写会碰 APPDATA）。
+/// 解析 `词<TAB>全拼[<TAB>次数]` 文本。抽成纯函数才能单测（真文件读写会碰 APPDATA）。
 fn parse(text: &str) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
     for line in text.lines() {
@@ -130,9 +154,16 @@ fn parse(text: &str) -> Vec<Entry> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some((w, py)) = line.split_once('\t') else {
+        let mut it = line.split('\t');
+        let (Some(w), Some(py)) = (it.next(), it.next()) else {
             continue;
         };
+        // 第三列次数是可选的：老文件只有两列，读进来当 1 次
+        let n = it
+            .next()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(1)
+            .clamp(1, MAX_COUNT);
         let (w, py) = (w.trim(), py.trim());
         if w.is_empty() || py.is_empty() {
             continue;
@@ -145,6 +176,7 @@ fn parse(text: &str) -> Vec<Entry> {
         out.push(Entry {
             word: w.into(),
             pinyin: py.into(),
+            n,
         });
     }
     out.truncate(MAX_ENTRIES);
@@ -200,7 +232,10 @@ pub fn words_for(code: &str, pinyin: bool) -> Vec<String> {
     t.words_with_code(which, code)
 }
 
-/// 记一个新词。同一个词再记一次只是把它挪到最前面（下次优先出它）。
+/// 记一个新词（或再记一次已有的词）。
+///
+/// 已有同词时**累加次数**并挪到最前面（同次数时它就该排前面，因为刚用过）；
+/// 新词从 1 次开始。次数才是同码内的主要排序依据，见模块文档。
 ///
 /// 写盘策略和 `pin` 一样：**先读盘、再改、再写盘**。自造词是低频事件（一个人
 /// 一天也不会造几个），每次整读整写完全不是问题，换来的是多进程之间不互相覆盖。
@@ -211,21 +246,49 @@ pub fn learn(word: &str, pinyin: &str) {
     if shuangpin::encode_pinyin(Scheme::Xiaohe, pinyin).is_none() {
         return;
     }
-    let mut entries = load_from_disk();
-    entries.retain(|e| e.word.as_ref() != word);
-    entries.insert(
-        0,
-        Entry {
-            word: word.into(),
-            pinyin: pinyin.into(),
-        },
-    );
-    entries.truncate(MAX_ENTRIES);
-
-    let table = Table::build(entries);
-    if let Ok(mut g) = TABLE.write() {
-        *g = Some(table);
-    }
+    // 整个「合并磁盘 → 累加 → 前插」都在写锁内完成。
+    //
+    // 基线取**内存表**而不是磁盘：本进程刚学的词可能还没落盘（写盘失败，或者
+    // 安装目录被设成只读），只读磁盘会让次数永远停在 1。磁盘那份再并进来，
+    // 同词取较大次数——和其它进程写的那份对齐。
+    //
+    // 不能「先锁里取快照、锁外算、再锁里覆盖」：两个线程同时学词时后写的会
+    // 把先写的条目整份冲掉，而症状是「我刚造的词怎么又没了」——正是这个模块
+    // 要解决的问题本身。
+    with_table(|t| {
+        let mut at: std::collections::HashMap<String, usize> = t
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.word.to_string(), i))
+            .collect();
+        for e in load_from_disk() {
+            match at.get(e.word.as_ref()).copied() {
+                Some(i) => t.entries[i].n = t.entries[i].n.max(e.n),
+                None => {
+                    at.insert(e.word.to_string(), t.entries.len());
+                    t.entries.push(e);
+                }
+            }
+        }
+        let mut n = 1;
+        if let Some(i) = at.get(word).copied() {
+            n = t.entries[i].n.saturating_add(1).min(MAX_COUNT);
+            t.entries.remove(i);
+        }
+        t.entries.insert(
+            0,
+            Entry {
+                word: word.into(),
+                pinyin: pinyin.into(),
+                n,
+            },
+        );
+        t.entries.truncate(MAX_ENTRIES);
+        // 索引要按新顺序重建，`entries` 直接搬过去，不再 clone 一份
+        let entries = std::mem::take(&mut t.entries);
+        *t = Table::build(entries);
+    });
     write_now();
 }
 
@@ -253,11 +316,13 @@ fn write_now() {
     }
     let text = with_table(|t| {
         let mut s = String::with_capacity(t.entries.len() * 24 + 64);
-        s.push_str("# 飞鹤输入法自造词组\n# 格式：词<TAB>全拼（删掉本文件即清空）\n");
+        s.push_str("# 飞鹤输入法自造词组\n# 格式：词<TAB>全拼<TAB>次数（第三列可省略，省略即 1 次；删掉本文件即清空）\n");
         for e in &t.entries {
             s.push_str(&e.word);
             s.push('\t');
             s.push_str(&e.pinyin);
+            s.push('\t');
+            s.push_str(&e.n.to_string());
             s.push('\n');
         }
         s
@@ -318,7 +383,66 @@ mod tests {
         Entry {
             word: w.into(),
             pinyin: py.into(),
+            n: 1,
         }
+    }
+
+    fn ent_n(w: &str, py: &str, n: u32) -> Entry {
+        Entry {
+            word: w.into(),
+            pinyin: py.into(),
+            n,
+        }
+    }
+
+    /// 第三列次数可选：老文件只有两列，读进来当 1 次；乱写的值按 1 次处理，
+    /// **不能因此把词丢掉**（用户手改过就该手改，别静默删数据）。
+    #[test]
+    fn parses_optional_count_column() {
+        let v = parse("新的\tli ming yuan\t7\n旧的\tjia yi bing ding\n坏值\tjia yi bing wu\tabc\n");
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0].n, 7);
+        assert_eq!(v[1].n, 1, "省略第三列 = 1 次");
+        assert_eq!(v[2].n, 1, "第三列乱写也要保住这个词");
+    }
+
+    /// 同一个词再学一次要累加次数，不是纯重排——否则「用了很多次」这个信息丢了。
+    #[test]
+    fn repeated_learn_accumulates_count() {
+        learn("甲乙丙己", "jia yi bing ji");
+        learn("甲乙丙己", "jia yi bing ji");
+        learn("甲乙丙己", "jia yi bing ji");
+        let n = with_table(|t| {
+            t.entries
+                .iter()
+                .find(|e| e.word.as_ref() == "甲乙丙己")
+                .map(|e| e.n)
+        });
+        assert_eq!(n, Some(3));
+    }
+
+    /// 同码两个自造词：**用得多的在前**，而不是最后造的在最前。
+    ///
+    /// 这是本模块加次数的全部理由。只有「新学的在前」时，最后造的那个永远压着
+    /// 另一个，等于没有学习。
+    #[test]
+    fn more_used_phrase_ranks_first() {
+        learn("甲乙丙戊", "jia yi bing wu");
+        learn("家乙丙戊", "jia yi bing wu"); // 后造，但只用过 1 次
+        learn("甲乙丙戊", "jia yi bing wu"); // 再学一次 → 2 次
+        let got = words_for("jiayibingwu", true);
+        assert_eq!(got.first().map(|s| s.as_str()), Some("甲乙丙戊"));
+    }
+
+    /// 同码、同次数时按「新学的在前」——刚造的那个本来就该先出。
+    #[test]
+    fn same_count_keeps_newest_first() {
+        let t = Table::build(vec![
+            ent_n("甲乙丙庚", "jia yi bing geng", 2),
+            ent_n("家乙丙庚", "jia yi bing geng", 2),
+        ]);
+        let got = t.words_with_code(Idx::Flat, "jiayibinggeng");
+        assert_eq!(got, vec!["甲乙丙庚", "家乙丙庚"]);
     }
 
     #[test]

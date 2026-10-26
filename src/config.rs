@@ -1,15 +1,32 @@
-//! 配置持久化：`%APPDATA%\Feihe\config.ini`
+//! 配置持久化：`<安装目录>\config.ini`
 //!
 //! 手写 `key=value` 解析，不引 serde——配置项就十来个，没必要为此拉一个依赖进来。
 //! 每个进程各有一份内存副本，`Activate` 时重新读取；设置窗口改完立即写盘，
 //! 其它进程下次激活时自然生效。
+//!
+//! ## 数据放在安装目录（而不只是配置）
+//!
+//! `config.ini` / `freq.txt` / `phrases.txt` / `pinned.txt` 全部和 DLL 同目录。
+//! 理由很实际：**压缩一份安装目录就是完整备份**，换机、重装、拷给第二台电脑
+//! 都是一次复制。这也是安装器把默认位置从 `Program Files` 挪到
+//! `%LOCALAPPDATA%\Feihe` 的原因——`Program Files` 对普通进程只读，写进去会被
+//! UAC 重定向到 `VirtualStore`（32 位）或者直接失败（64 位），「备份目录」就成了
+//! 假象。
+//!
+//! 万一有人装到了只读目录（或者从只读介质运行），`resolve_dir` 会检测可写性并
+//! 回落到 `%APPDATA%\Feihe`——宁可数据存在别处，也不能每次改设置都静默失败。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
 
 use crate::assist::AssistMode;
 use crate::shuangpin::Scheme;
+use windows::Win32::System::LibraryLoader::{
+    GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+};
 
 /// 候选窗 / 状态浮窗在什么情况下不弹。
 ///
@@ -249,8 +266,92 @@ pub fn set_pinyin_mode(on: bool) {
 }
 
 pub fn dir() -> PathBuf {
+    DATA_DIR.get_or_init(resolve_dir).clone()
+}
+
+/// 数据目录只解析一次：`dir()` 在热路径上（`freq::file()` 每次上屏都要拼路径），
+/// 每次都去问 DLL 路径 + 试写文件太贵。
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// 旧位置：`%APPDATA%\Feihe`。
+pub fn legacy_dir() -> PathBuf {
     let base = std::env::var("APPDATA").unwrap_or_else(|_| "C:\\".to_string());
     PathBuf::from(base).join("Feihe")
+}
+
+/// 决定数据目录：优先「DLL 所在目录」，不可写就回落 `%APPDATA%\Feihe`。
+fn resolve_dir() -> PathBuf {
+    let fallback = legacy_dir();
+    // 测试进程按老规矩走 APPDATA：否则会读到 target\debug 下的文件，而且
+    // 「首次运行迁移」会把用户真实的配置拷进构建目录。
+    if cfg!(test) {
+        return fallback;
+    }
+    let Some(exe_dir) = module_dir() else {
+        return fallback;
+    };
+    if !writable(&exe_dir) {
+        return fallback;
+    }
+    migrate(&fallback, &exe_dir);
+    exe_dir
+}
+
+/// 本 DLL 所在目录（不是宿主 EXE 的目录）。
+fn module_dir() -> Option<PathBuf> {
+    unsafe {
+        let mut m = windows::Win32::Foundation::HMODULE::default();
+        let addr = module_dir as *const core::ffi::c_void;
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            windows::core::PCWSTR(addr as *const u16),
+            &mut m,
+        )
+        .ok()?;
+        let mut buf = [0u16; 1024];
+        let n = GetModuleFileNameW(Some(m), &mut buf) as usize;
+        if n == 0 || n >= buf.len() {
+            return None;
+        }
+        PathBuf::from(String::from_utf16_lossy(&buf[..n]))
+            .parent()
+            .map(Path::to_path_buf)
+    }
+}
+
+/// 目录能不能写。真写一个文件再删掉——查 ACL 不可靠（`Program Files` 的实际
+/// 权限取决于组策略，`readonly` 属性也不代表 ACL）。
+fn writable(d: &Path) -> bool {
+    if !d.is_dir() {
+        return false;
+    }
+    let probe = d.join(".write-probe");
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// 老位置 → 新位置的一次性搬移（复制，不删原件）。
+///
+/// 只在**新位置还没有 config.ini** 时动手：已经有配置说明用户已经在新位置跑过，
+/// 再拷一次会把后来的改动冲掉。用复制不用移动——搬到一半失败（磁盘满、权限）
+/// 时老数据还在，用户不会两头落空。
+fn migrate(from: &Path, to: &Path) {
+    if to.join("config.ini").exists() || from == to {
+        return;
+    }
+    let _ = std::fs::create_dir_all(to);
+    for name in ["config.ini", "freq.txt", "phrases.txt", "pinned.txt"] {
+        let src = from.join(name);
+        let dst = to.join(name);
+        if src.exists() && !dst.exists() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
 }
 
 fn path() -> PathBuf {

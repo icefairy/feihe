@@ -105,16 +105,26 @@ if (Test-Path $asBase) {
     Write-Host "  Assemblies base not found (skipped)."
 }
 
-# -- 5. Per-user TIP leftovers ----------------------------------------
-$hkcuTip = "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid"
-if (Test-Path $hkcuTip) {
-    Remove-Item $hkcuTip -Recurse -Force
-    Write-Host "  removed HKCU TIP key"
-} else {
-    Write-Host "  HKCU TIP key not found (already clean)."
+# -- 5. Per-user COM + TIP definition ---------------------------------
+# v0.3.0 起安装是用户级的：CLSID 和 CTF\TIP 都写在 HKCU，所以清理也必须清 HKCU。
+# 两个视图都要扫（32 位宿主读 Wow6432Node 那份），漏一个就会留下指向已删除
+# DLL 的注册项 —— 症状是「卸载了，但切到飞鹤时宿主直接崩」。
+foreach ($view in @(
+    @{ Name = '64'; Tip = 'HKCU:\SOFTWARE\Microsoft\CTF\TIP';             Cls = 'HKCU:\SOFTWARE\Classes\CLSID' },
+    @{ Name = '32'; Tip = 'HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'; Cls = 'HKCU:\SOFTWARE\Classes\Wow6432Node\CLSID' }
+)) {
+    foreach ($path in @((Join-Path $view.Tip $Clsid), (Join-Path $view.Cls $Clsid))) {
+        if (Test-Path $path) {
+            Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  removed HKCU entry ($($view.Name)-bit): $path"
+        } else {
+            Write-Host "  HKCU ($($view.Name)-bit) not found (already clean)."
+        }
+    }
 }
 
-# -- 6. Machine-wide COM + TIP definition (needs Administrator) --------
+
+# -- 6. 旧版本的机器级残留（尽力清理，没有管理员权限会跳过）-----------
 # 64-bit view and 32-bit view (Wow6432Node) are both registered by install_tip.ps1,
 # so both must be swept here — a leftover 32-bit entry would keep a stale DLL alive
 # for 32-bit hosts after uninstall.

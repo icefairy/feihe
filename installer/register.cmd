@@ -1,27 +1,24 @@
 @echo off
-REM Feihe IME - register (run as Administrator)
+REM Feihe IME - register (per-user, NO Administrator required)
 REM Prerequisite: feihe.dll built by build.ps1
 REM
-REM Deploys BOTH architectures:
-REM   feihe.dll   (64-bit) -> registered in HKLM\SOFTWARE\Classes\CLSID
-REM   feihe32.dll (32-bit) -> registered in HKLM\SOFTWARE\Classes\Wow6432Node\CLSID
+REM Deploys BOTH architectures into %LOCALAPPDATA%\Feihe and registers them in HKCU:
+REM   feihe.dll   (64-bit) -> HKCU\SOFTWARE\Classes\CLSID
+REM   feihe32.dll (32-bit) -> HKCU\SOFTWARE\Classes\Wow6432Node\CLSID
 REM In-proc COM requires the DLL bitness to match the host process, so a 64-bit
 REM Explorer and a 32-bit Office need two different files behind the same CLSID.
+REM
+REM User-level on purpose: the DLL runs inside normal-integrity apps and must be
+REM able to write config.ini / freq.txt next to itself (that is the whole point of
+REM "compress the install folder to back it up"). %ProgramFiles% is read-only for
+REM those processes and UAC would silently redirect writes to VirtualStore.
 setlocal
 
 set "SRC64=%~dp0..\target\x86_64-pc-windows-gnullvm\release\feihe.dll"
 set "SRC32=%~dp0..\target\i686-pc-windows-gnullvm\release\feihe.dll"
-set "DESTDIR=%ProgramFiles%\Feihe"
+set "DESTDIR=%LOCALAPPDATA%\Feihe"
 set "DEST64=%DESTDIR%\feihe.dll"
 set "DEST32=%DESTDIR%\feihe32.dll"
-
-REM --- Administrator check ---
-fltmc >nul 2>&1
-if errorlevel 1 (
-  echo [ERROR] Administrator privileges required.
-  echo         Right-click this file and choose "Run as administrator".
-  exit /b 1
-)
 
 if not exist "%SRC64%" (
   echo [ERROR] %SRC64% not found.

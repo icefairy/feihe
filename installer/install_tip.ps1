@@ -1,10 +1,11 @@
 ﻿<#
-  Feihe IME - install / register (requires Administrator).
+  Feihe IME - install / register (per-user, NO Administrator required).
 
   What it does:
-    1. COM registration (HKLM\SOFTWARE\Classes\CLSID\{...}) pointing at a STABLE dll path.
+    1. COM registration (HKCU\SOFTWARE\Classes\CLSID\{...}) pointing at a STABLE dll path.
+       HKCU 优先于 HKLM，所以用户级注册能覆盖旧版本留下的机器级条目。
        32-bit host 走 Wow6432Node 那一份（见下方 DllPath32 说明）。
-    2. HKLM CTF TIP definition (Category / Item / LanguageProfile)，32 位视图镜像一份。
+    2. HKCU CTF TIP definition (Category / Item / LanguageProfile)，32 位视图镜像一份。
     3. Adds Feihe to the CURRENT USER keyboard list via input.dll!InstallLayoutOrTip.
     4. Verifies the result and falls back to a direct registry write if needed.
     5. Restarts ctfmon so a freshly deployed DLL takes effect without sign-out.
@@ -20,9 +21,9 @@
   DllPath32（可选）——32 位宿主支持：
     in-proc COM 的位数必须和宿主一致，所以 64/32 位要各自一份 DLL。
     给 -DllPath32 时本脚本会额外写：
-      HKLM\SOFTWARE\Classes\Wow6432Node\CLSID\{CLSID}\InprocServer32 -> feihe32.dll
-      HKLM\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\{CLSID}            (镜像)
-    ⚠ HKLM\SOFTWARE\Microsoft\CTF\TIP 是被 WOW64 重定向的（不在共享键列表里），
+      HKCU\SOFTWARE\Classes\Wow6432Node\CLSID\{CLSID}\InprocServer32 -> feihe32.dll
+      HKCU\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\{CLSID}            (镜像)
+    ⚠ HKCU\SOFTWARE\Microsoft\CTF\TIP 是被 WOW64 重定向的（不在共享键列表里），
       32 位进程读的是 Wow6432Node 那份，所以 TIP 定义必须写两遍。
 
   This file is UTF-8 WITH BOM on purpose: PowerShell 5.1 needs the BOM to read the
@@ -36,9 +37,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ── 必须是 64 位 PowerShell ──────────────────────────────────────
-# 本脚本要同时写两个注册表视图：HKLM\SOFTWARE\Classes\CLSID（64 位视图）
-# 和 HKLM\SOFTWARE\Classes\Wow6432Node\CLSID（32 位视图）。
-# 如果自己就跑在 32 位 PowerShell 里，WOW64 会把 HKLM\SOFTWARE\Classes 重定向到
+# 本脚本要同时写两个注册表视图：HKCU\SOFTWARE\Classes\CLSID（64 位视图）
+# 和 HKCU\SOFTWARE\Classes\Wow6432Node\CLSID（32 位视图）。
+# 如果自己就跑在 32 位 PowerShell 里，WOW64 会把 HKCU\SOFTWARE\Classes 重定向到
 # Wow6432Node，于是我们写的 "Wow6432Node\..." 会变成 Wow6432Node\Wow6432Node\...，
 # 32 位宿主反而查不到。而 NSIS / 32 位 cmd 启动 powershell 时拿到的正是 32 位实例，
 # 所以这里自动切到 64 位实例重跑。
@@ -97,7 +98,7 @@ function Set-RegValue {
 
 # -- 1 & 2. COM + CTF TIP 注册（同一份逻辑跑两遍：64 位视图 / 32 位视图）-----
 #
-# 参数化的原因：WOW64 把 HKLM\SOFTWARE\Classes 和 HKLM\SOFTWARE\Microsoft\CTF\TIP
+# 参数化的原因：WOW64 把 HKCU\SOFTWARE\Classes 和 HKCU\SOFTWARE\Microsoft\CTF\TIP
 # 都重定向了（CTF 只有 SystemShared 是共享键）。64 位宿主查前者，32 位宿主查
 # Wow6432Node 那份，两边必须各自有一套完整的 CLSID + TIP 定义。
 function Register-TipView {
@@ -157,13 +158,13 @@ function Register-TipView {
 
 $script:IconDll = $DllPath
 
-Register-TipView -ClassesRoot 'HKLM:\SOFTWARE\Classes' `
-                 -CtfTipRoot  'HKLM:\SOFTWARE\Microsoft\CTF\TIP' `
+Register-TipView -ClassesRoot 'HKCU:\SOFTWARE\Classes' `
+                 -CtfTipRoot  'HKCU:\SOFTWARE\Microsoft\CTF\TIP' `
                  -Dll         $DllPath
 
 if ($DllPath32) {
-    Register-TipView -ClassesRoot 'HKLM:\SOFTWARE\Classes\Wow6432Node' `
-                     -CtfTipRoot  'HKLM:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP' `
+    Register-TipView -ClassesRoot 'HKCU:\SOFTWARE\Classes\Wow6432Node' `
+                     -CtfTipRoot  'HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP' `
                      -Dll         $DllPath32
     Write-Host "[com] 32-bit host support enabled"
 } else {
@@ -280,6 +281,27 @@ foreach ($dll in $dlls) {
     if (Test-Path -LiteralPath $old) {
         Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
         if (-not (Test-Path -LiteralPath $old)) { Write-Host "[tip] removed $old" }
+    }
+}
+
+# -- 6. 尽力清理旧版本留下的机器级条目 ------------------------------
+# v0.3.0 之前是管理员安装，CLSID/TIP 写在 HKLM、DLL 在 Program Files。现在改成
+# 用户级：HKCU 的条目优先，旧的 HKLM 条目不会再生效，但留着会指向一个已经不存在的
+# 路径（升级安装时 Program Files 那份还在，反而可能被 32 位宿主加载到旧 DLL）。
+# 没有管理员权限就删不掉 —— 静默跳过，绝不能因此让安装失败。
+foreach ($view in @(
+    @{ Name = '64'; Tip = 'HKLM:\SOFTWARE\Microsoft\CTF\TIP';             Cls = 'HKLM:\SOFTWARE\Classes\CLSID' },
+    @{ Name = '32'; Tip = 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'; Cls = 'HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID' }
+)) {
+    foreach ($path in @((Join-Path $view.Tip $Clsid), (Join-Path $view.Cls $Clsid))) {
+        if (Test-Path $path) {
+            try {
+                Remove-Item $path -Recurse -Force -ErrorAction Stop
+                Write-Host "[legacy] removed machine-wide entry ($($view.Name)-bit): $path"
+            } catch {
+                Write-Host "[legacy] 保留旧机器级条目（无管理员权限）：$path" -ForegroundColor DarkGray
+            }
+        }
     }
 }
 

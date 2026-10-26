@@ -2,8 +2,12 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.7** ｜ 安装包 1.59 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
-不联网、不弹窗、无账号 ｜ 179 项单元测试
+**当前版本 0.3.0** ｜ 安装包 1.61 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
+不联网、不弹窗、无账号 ｜ 185 项单元测试 ｜ 用户级安装，不需要 UAC
+
+> 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
+> `freq.txt`、`phrases.txt`、`pinned.txt`。**压缩一份安装目录就是完整备份**，
+> 换机、重装直接拷回去。
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
 > 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
@@ -211,7 +215,7 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 > 只能在桌面窗口里先钉好。
 
 优先级：**手动置顶 > 一简首选 > 一简次选（占第 2 位）> 二简首选 > 自造词 > 动态词频 > 静态词频**。置顶记录在
-`%APPDATA%\Feihe\pinned.txt`（`编码<TAB>词`），可手改、可整删；设置窗能看能清空。
+`<安装目录>\pinned.txt`（`编码<TAB>词`），可手改、可整删；设置窗能看能清空。
 
 > 置顶**不受 `limit` 截断限制**：词排到第 90 名以外也能被钉上来，这是它和
 > 动态词频最本质的区别（后者只能重排「已经在候选列表里」的词）。
@@ -234,7 +238,7 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 段码拼起来等于用户敲的那串、词库里本来没有。任何一条不满足就不记——自动分词沿用默认
 候选时不该往表里灌重复数据。
 
-记录在 `%APPDATA%\Feihe\phrases.txt`（`词<TAB>全拼`，越靠前越新），删掉即全忘；
+记录在 `<安装目录>\phrases.txt`（`词<TAB>全拼<TAB>次数`，第三列可省）。**同码多个词按次数排**，次数相同才比新旧——早期只有「新学的在前」，等于最后造的永远压着常用的那个，删掉即全忘；
 设置窗的「动态调频」一栏显示条数并支持一键清空。关掉动态调频就不再记新词。
 
 **同一个码可以挂多个词。** 学会「李明远」（`limkyr`）之后，再想用同一个码造「李明源」
@@ -459,7 +463,7 @@ Shift 组合里**只有字母由飞鹤处理**（直接上屏大写，见上面�
 
 **动态词频**：你实际选了哪个词，下次它就往前排。静态词频来自 rime-ice 的通用语料，
 解决不了「我的高频词」——医生打「诊断」、程序员打「函数」，在通用语料里都排不到前面。
-学习记录存在 `%APPDATA%\Feihe\freq.txt`（纯文本 `码<TAB>词<TAB>次数`，删掉即重置，
+学习记录存在 `<安装目录>\freq.txt`（纯文本 `码<TAB>词<TAB>次数`，删掉即重置，
 设置窗里也有「重置」按钮）。只学「从候选里选中的词」，回车原样上屏、快捷输入、
 软键盘符号都不学。排序是**稳定排序**，键是 `(码长, 学习次数)`：
 
@@ -476,7 +480,13 @@ Shift 组合里**只有字母由飞鹤处理**（直接上屏大写，见上面�
 （同词取较大值，不相加），切输入法时再按 mtime 拉取别的进程学到的词。多进程这块
 为什么这么设计、以及删除操作为什么不能走合并，见 `handoff.md`「动态词频」。
 
-配置存在 `%APPDATA%\Feihe\config.ini`，改完立即生效（同一进程内即时，其它已打开
+**上限与淘汰**：最多 5 万条记录、单条最多 1000 次。满了不是「拒收新词」（早期版本就是
+这么写的，表现是「用半年突然不灵了」——表里全是一次的旧记录，新词永远学不进来），
+而是按 `(次数, 最久没动)` 淘汰最弱的 1/8。单条次数到顶时**全表减半**（`(n+1)/2`，
+1 次不会减成 0），相对顺序一根不动——比把次数钉死在 1000 强，否则几个高频词都顶到
+上限之后，排序就塌成平局，学习等于失效。
+
+配置存在 `<安装目录>\config.ini`，改完立即生效（同一进程内即时，其它已打开
 的应用要重新切一下输入法）。文件里带 `config_ver`；老配置（v1 把全角标点默认成关）
 会一次性迁移成全角标点开——之后再手动关掉不会被改回去。
 
@@ -616,7 +626,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 179 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 185 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -636,27 +646,45 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ## 安装 / 卸载
 
-**需要管理员**（要写 HKLM 的 COM 注册与 CTF TIP 定义）：
+安装包是**用户级**的（`RequestExecutionLevel user`），默认装到 `%LOCALAPPDATA%\Feihe`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
+# 产物：dist\Feihe-Setup-0.3.0.exe
+```
+
+不弹 UAC 的原因不只是「省一步」：输入法的 DLL 跑在记事本 / Word / 浏览器这些普通权限
+进程里，它们写不了 `Program Files`。而 0.3.0 起配置和词频都存在安装目录，装到
+`Program Files` 的话写入会被 UAC 重定向到 `VirtualStore`（32 位宿主）或直接失败
+（64 位宿主），「压缩目录即备份」就变成假象。注册表也全部走 HKCU（COM CLSID + CTF TIP），
+卸载同样不需要提权。
+
+开发期也可以直接用脚本（同样不需要管理员）：
 
 ```cmd
 cd installer
-register.cmd      :: 部署 DLL 到 C:\ProgramData\Feihe\ + 注册 COM/TIP + 加入当前用户键盘列表
+register.cmd      :: 初始化个人词库 + 注册 COM/TIP + 加入当前用户键盘列表
 unregister.cmd    :: 全部移除
 ```
 
 安装后到 `设置 → 时间和语言 → 语言和区域 → 中文(简体) → 语言选项 → 键盘` 里应出现「飞鹤拼音」，
 用 `Win+Space` 或 `Ctrl+Shift` 切换。**若列表未刷新，注销重登一次**（输入法列表由 shell 缓存）。
 
+**从 0.2.x 升级**：旧版装在 `C:\Program Files\Feihe` 且注册在 HKLM。新版装到
+`%LOCALAPPDATA%\Feihe`、注册在 HKCU（优先级高于 HKLM），所以装完直接生效；
+`config.ini` / `freq.txt` / `phrases.txt` / `pinned.txt` 会在首次启动时从
+`%APPDATA%\Feihe` **自动复制**过来（复制不删原件）。旧目录可以在「程序和功能」里卸掉。
+
 注册链路上踩过的坑（DLL 部署到稳定路径、User Profile 不是 `SortOrder`、`input.dll` 没有
 `UninstallLayoutOrTip`、隐藏的 `Enable = 0`）都记在 `handoff.md`「关键事实」里。
 
 ## 打安装包（NSIS）
 
-开发期用 `register.cmd` 就够；要发给别人则用安装包，一键装到 `C:\Program Files\Feihe`：
+开发期用 `register.cmd` 就够；要发给别人则用安装包，一键装到 `%LOCALAPPDATA%\Feihe`（用户级，不需要 UAC）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.2.7.exe
+# 产物：dist\Feihe-Setup-0.3.0.exe
 ```
 
 `build_setup.ps1` 做四件事：
@@ -758,7 +786,7 @@ src/zhconv.rs         简繁转换（LCMapStringEx + LCMAP_TRADITIONAL_CHINESE�
 src/theme.rs          皮肤调色板（浅色 / 深色 / 护眼）
 src/font.rs           自绘窗口共用字体 + 填充/描边/文字居中
 src/insert.rs         任意窗口往文档写文本、读写中英开关（同步 edit session）
-src/config.rs         配置读写（%APPDATA%\Feihe\config.ini）
+src/config.rs         配置读写（安装目录下 config.ini）
 src/assist.rs         辅助码查表（自然码 / 小鹤音形，多码用 | 分隔任一命中）
 src/assist.txt        辅助码表（gen_assist.py 生成，勿手改）
 tools/gen_dict.py     基础词库生成器（拉雾凇拼音 rime-ice，按词频取前 N 条）
@@ -901,8 +929,8 @@ rime-ice 是「书面语料」词表，缺一批日常真的会打的词：电�
 
 | 文件 | 角色 |
 | --- | --- |
-| `%APPDATA%\Feihe\user_dict.txt` | **源文件**，人可读、可手改、可导出（`词<TAB>全拼`） |
-| `%APPDATA%\Feihe\user.bin` | 上面那份**编译出来的 FHDB 二进制**，运行时 mmap |
+| `<安装目录>\user_dict.txt` | **源文件**（运行时拷到数据目录），人可读、可手改、可导出（`词<TAB>全拼`） |
+| `<安装目录>\user.bin` | 上面那份**编译出来的 FHDB 二进制**，运行时 mmap |
 
 设置窗里三个按钮：`导入词库…` / `导出词库…` / `编译个人词库`。**导入后会自动编译**，
 所以正常情况下你不用管 `user.bin`。
@@ -1006,7 +1034,7 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 1. **构建期**：开发机的 `src/user_dict.txt`（如果有）和 `src/dict.txt` 一起喂给
    `build.rs`，按词面去重、按码稳定排序，编成 `base.bin` 嵌进 DLL。
    发布构建（`FEIHE_NO_USER_DICT=1`）跳过前者——个人打字记录不能随包发出去。
-2. **运行期**：`%APPDATA%\Feihe\user.bin`（由 `user_dict.txt` 编译而来）单独 mmap，
+2. **运行期**：`<安装目录>\user.bin`（由 `user_dict.txt` 编译而来）单独 mmap，
    查询时**先查用户词库、再查 `base.bin`**，用户词天然排在前面，不需要合并两张表。
 
 两阶段都走 `dictbin` 的同一套零解析二分。查询成本是两次前缀区间定位，

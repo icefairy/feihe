@@ -28,7 +28,7 @@ Unicode true
 ; ── 基本信息 ────────────────────────────────────────────────────
 !define APP_NAME      "飞鹤拼音"
 !define APP_NAME_EN   "Feihe IME"
-!define APP_VER       "0.2.7"
+!define APP_VER       "0.3.0"
 !define APP_PUBLISHER "feihe"
 !define APP_URL       "https://github.com/icefairy/feihe"
 
@@ -55,27 +55,33 @@ Unicode true
 
 ; ── 编译器属性 ──────────────────────────────────────────────────
 ;
-; `SELFTEST` 由 build_setup.ps1 -SelfTest 传入：把提权降到 user、装到临时目录，
-; 这样能在 CI / 非交互 shell 里跑一次「真装一遍再比对 SHA256」。
-; 正式包绝不开这个开关——RequestExecutionLevel user 装不进 ProgramFiles，
-; 也写不了 HKLM 注册表。
+; **默认装到 `%LOCALAPPDATA%\Feihe`，用户级、不要管理员。**
+;
+; 为什么不是 `Program Files`：输入法的 DLL 跑在记事本 / Word / 浏览器这些普通
+; 权限进程里，它们写不了 `Program Files`。而本版本起 config.ini / freq.txt /
+; phrases.txt / pinned.txt 全都放在安装目录，目标是「压缩一份目录即备份」——
+; 装到 `Program Files` 的话，写入会被 UAC 重定向到 VirtualStore（32 位宿主）或者
+; 直接失败（64 位宿主），备份就成了假象，而且「有时能存有时不能存」最难查。
+;
+; 用户级安装的连带好处：不需要 UAC，注册表全在 HKCU（含 CTF TIP），
+; 卸载不需要提权，多用户各装各的互不干扰。
+;
+; `SELFTEST` 由 build_setup.ps1 -SelfTest 传入：装到临时目录，验证「真装一遍
+; 再比对 SHA256」而不碰用户真实安装。
 !ifdef SELFTEST
   !define INSTALL_ROOT "$TEMP\feihe-selftest"
-  !define REQ_LEVEL "user"
 !else
-  !define INSTALL_ROOT "$PROGRAMFILES64\Feihe"
-  !define REQ_LEVEL "admin"
+  !define INSTALL_ROOT "$LOCALAPPDATA\Feihe"
 !endif
+!define REQ_LEVEL "user"
 
 Name "${APP_NAME}"
 OutFile "${OUTDIR}\Feihe-Setup-${APP_VER}.exe"
 InstallDir "${INSTALL_ROOT}"
-; 自检模式不读注册表里的旧安装路径。
-; 否则本机装过正式包（InstallLocation=C:\Program Files\Feihe）之后，自检包会被
-; 注册表覆盖成往 Program Files 装 —— 没有管理员权限 → 静默失败 → 退出码还是 0，
-; 表现为「自检说装完了但文件不在」。这个坑踩过一次。
+; 自检模式不读注册表里的旧安装路径，否则会被本机真实安装覆盖。
+; 正式包优先读 HKCU，其次读旧版写下的 HKLM（从 Program Files 升级过来的用户）。
 !ifndef SELFTEST
-  InstallDirRegKey HKLM "${UNINST_KEY}" "InstallLocation"
+  InstallDirRegKey HKCU "${UNINST_KEY}" "InstallLocation"
 !endif
 RequestExecutionLevel "${REQ_LEVEL}"
 SetCompressor /SOLID lzma
@@ -84,7 +90,7 @@ ShowInstDetails show
 ShowUninstDetails show
 BrandingText "${APP_NAME} ${APP_VER} — 小鹤双拼 / 全拼 输入法"
 
-VIProductVersion "0.2.7.0"
+VIProductVersion "0.3.0.0"
 VIAddVersionKey /LANG=2052 "ProductName"     "${APP_NAME}"
 VIAddVersionKey /LANG=2052 "FileDescription" "${APP_NAME} 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion"     "${APP_VER}"
@@ -283,20 +289,20 @@ Section "主程序" SecMain
   ${EndIf}
 
   ; ── 控制面板「程序和功能」条目 ──
-  WriteRegStr   HKLM "${UNINST_KEY}" "DisplayName"     "${APP_NAME}"
-  WriteRegStr   HKLM "${UNINST_KEY}" "DisplayVersion"  "${APP_VER}"
-  WriteRegStr   HKLM "${UNINST_KEY}" "Publisher"       "${APP_PUBLISHER}"
-  WriteRegStr   HKLM "${UNINST_KEY}" "URLInfoAbout"    "${APP_URL}"
-  WriteRegStr   HKLM "${UNINST_KEY}" "DisplayIcon"     "$INSTDIR\feihe.dll,-101"
-  WriteRegStr   HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr   HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
-  WriteRegStr   HKLM "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
-  WriteRegDWORD HKLM "${UNINST_KEY}" "NoModify" 1
-  WriteRegDWORD HKLM "${UNINST_KEY}" "NoRepair" 1
+  WriteRegStr   HKCU "${UNINST_KEY}" "DisplayName"     "${APP_NAME}"
+  WriteRegStr   HKCU "${UNINST_KEY}" "DisplayVersion"  "${APP_VER}"
+  WriteRegStr   HKCU "${UNINST_KEY}" "Publisher"       "${APP_PUBLISHER}"
+  WriteRegStr   HKCU "${UNINST_KEY}" "URLInfoAbout"    "${APP_URL}"
+  WriteRegStr   HKCU "${UNINST_KEY}" "DisplayIcon"     "$INSTDIR\feihe.dll,-101"
+  WriteRegStr   HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr   HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegStr   HKCU "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
 
   ; GetSize 以 KB 返回，$0 = 低 32 位、$1 = 高 32 位。DLL 只有几 MB，$0 够用。
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
-  WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" "$0"
+  WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
   !endif
 SectionEnd
 
@@ -323,7 +329,16 @@ Section "Uninstall"
   Delete "$INSTDIR\使用帮助.md"
   Delete "$INSTDIR\*.old"
   Delete "$INSTDIR\uninstall.exe"
+
+  ; 用户数据**故意保留**：config.ini / freq.txt / phrases.txt / pinned.txt 是用户
+  ; 自己的打字习惯，升级、重装都还要用；留在原处也让这个文件夹继续是一份完整备份。
+  ; 所以这里是 RMDir（不带 /r）——目录非空就删不掉，正是预期行为。
+  ${If} ${FileExists} "$INSTDIR\config.ini"
+    DetailPrint "保留用户数据：$INSTDIR（config.ini / freq.txt / phrases.txt / pinned.txt）"
+  ${EndIf}
   RMDir "$INSTDIR"
 
-  DeleteRegKey HKLM "${UNINST_KEY}"
+  ; 只删自己的（HKCU）。旧版写在 HKLM 的条目删不掉（没权限），
+  ; 提权失败也不该让卸载半途而废 —— 用户可以在「程序和功能」里手动清掉那条僵尸项。
+  DeleteRegKey HKCU "${UNINST_KEY}"
 SectionEnd

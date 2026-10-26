@@ -34,33 +34,77 @@
 //! 什么时候退出、`DllCanUnloadNow` 会不会被调，都不由我们说了算。
 //! 丢最多 3 秒的学习量，可以接受。
 //!
-//! 文件是纯文本 `词<TAB>次数`，和 `user_dict.txt` 一个风格：能看、能手改、能删。
+//! 文件是纯文本 `码<TAB>词<TAB>次数`，和 `user_dict.txt` 一个风格：能看、能手改、能删。
 //! 删掉整个文件就是「重置我的输入习惯」。
+//!
+//! ## 上限：淘汰最弱的，而不是关门
+//!
+//! 早期版本是「表满 5 万条就不收新词，老词照样累加」。那是错的：常年使用后表里
+//! 全是「偶然选过一次」的记录，它们永久占坑，新词再也学不进来——用户看到的是
+//! 「这功能用了半年就不灵了」，而且换台机器就好，完全没法复现。
+//!
+//! 现在满了就**按价值淘汰一批**（`evict`）：次数少的先走，次数相同的最久没动的
+//! 先走，一次砍掉 1/8 留出余量，避免每来一个新词就全表排一遍。
+//!
+//! ## 次数饱和：全表减半
+//!
+//! 单条次数封顶 `MAX_COUNT` 也有隐患：多个高频词都顶到上限之后，相对顺序塌成平局，
+//! 学习结果等于失效（退回语料顺序）。所以到顶时**全表除以 2** 而不是钉死——既腾出
+//! 空间又天然衰减，`1000 / 999` 仍然分得出先后。
+//!
+//! 磁盘上不记「最近使用」，进程内的 `seq` 重启即归零。淘汰只在表满时发生，而重启
+//! 后第一件事不会是淘汰，所以不需要把它持久化。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-/// 学习表上限。超过就不再收新词（老词照样累加），防止常年使用后无限膨胀。
+/// 学习表上限。到顶不再拒收新词，而是按价值淘汰一批（见 `evict`）。
 /// 5 万条约 700KB 内存，对一个输入法进程不算什么。
 const MAX_ENTRIES: usize = 50_000;
+
+/// 淘汰后保留的比例：砍掉 1/8 留出余量。
+///
+/// 为什么要留余量：淘汰本身要排一遍 5 万条（几毫秒）。如果每次满额只砍 1 条，
+/// 接下来每学一个新词都要再排一遍——那是把偶发的大动作变成每键都做。
+const EVICT_KEEP_NUM: usize = 7;
+const EVICT_KEEP_DEN: usize = 8;
 
 /// 两次写盘之间的最小间隔
 const FLUSH_INTERVAL: Duration = Duration::from_secs(3);
 
-/// 单次选中能贡献的最大次数。用户按住空格连打同一个词时，不至于把它顶到
-/// 一个荒谬的高度（也没必要，因为排序只看相对大小）。
+/// 单条次数封顶。到顶不是钉死，而是触发全表减半（见 `halve`），
+/// 避免多个高频词全部停在同一个数字上、排序塌成平局。
 const MAX_COUNT: u32 = 1000;
 
-/// 学习表：词 → 被选中的次数
-static TABLE: RwLock<Option<HashMap<String, u32>>> = RwLock::new(None);
+/// 一条学习记录。
+#[derive(Clone, Copy, Debug)]
+struct Ent {
+    /// 被选中的次数
+    n: u32,
+    /// 最后一次被选中的序号（进程内单调递增，**不落盘**）。
+    ///
+    /// 只服务于淘汰：表满时先砍「次数少的」，次数相同再砍「最久没动过的」。
+    /// 重启后全部归零，于是同次数的条目退化成按 key 排序——淘汰只在表满时发生，
+    /// 重启后第一件事不会是淘汰，不值得为它把时间戳写进文件。
+    seq: u64,
+}
+
+/// 学习表：`码\t词`（或老格式的 `词`）→ 记录
+static TABLE: RwLock<Option<HashMap<String, Ent>>> = RwLock::new(None);
 /// 有未落盘的改动
 static DIRTY: AtomicBool = AtomicBool::new(false);
 /// 上次写盘时间
 static LAST_FLUSH: Mutex<Option<Instant>> = Mutex::new(None);
 /// 上次读盘时文件的修改时间（用来判断别的进程有没有写过）
 static LAST_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+/// 最近使用序号。每次 `bump` 领一个，只用于淘汰排序。
+static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_seq() -> u64 {
+    SEQ.fetch_add(1, Ordering::Relaxed) + 1
+}
 
 pub fn file() -> std::path::PathBuf {
     crate::config::dir().join("freq.txt")
@@ -80,12 +124,14 @@ fn enabled() -> bool {
 /// ```
 ///
 /// 抽成纯函数才能单测（真文件读写会碰 APPDATA）。
-fn parse(text: &str) -> HashMap<String, u32> {
-    let mut out: HashMap<String, u32> = HashMap::new();
+fn parse(text: &str) -> HashMap<String, Ent> {
+    let mut out: HashMap<String, Ent> = HashMap::new();
     // 老格式的条目：词 → 次数。等所有行读完再决定它们是退休还是并进按码记录。
     let mut legacy: HashMap<String, u32> = HashMap::new();
     // 按码记录的 (键, 词)，用来把老记录的次数迁移过去
     let mut specific: Vec<(String, String)> = Vec::new();
+    // 磁盘上没有「最近使用」信息，seq 一律 0
+    let ent = |n: u32| Ent { n, seq: 0 };
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -97,7 +143,7 @@ fn parse(text: &str) -> HashMap<String, u32> {
                 let key = format!("{code}\t{word}");
                 specific.push((key.clone(), (*word).to_string()));
                 let n: u32 = n.parse().unwrap_or(1).clamp(1, MAX_COUNT);
-                out.insert(key, n);
+                out.insert(key, ent(n));
             }
             [word, n, ..] if !word.is_empty() => {
                 let n: u32 = n.parse().unwrap_or(1).clamp(1, MAX_COUNT);
@@ -111,13 +157,13 @@ fn parse(text: &str) -> HashMap<String, u32> {
     // 第一位的元凶——旧记录不退，按码记就等于白记。
     for (key, word) in &specific {
         if let Some(n) = legacy.remove(word) {
-            let cur = out.get(key).copied().unwrap_or(0);
-            out.insert(key.clone(), cur.max(n));
+            let cur = out.get(key).map(|e| e.n).unwrap_or(0);
+            out.insert(key.clone(), ent(cur.max(n)));
         }
     }
     // 没有按码记录的词，老记录照旧对全部码生效——升级不能让历史学习全废
     for (word, n) in legacy {
-        out.insert(word, n);
+        out.insert(word, ent(n));
     }
     out
 }
@@ -126,17 +172,56 @@ fn parse(text: &str) -> HashMap<String, u32> {
 ///
 /// 为什么是 max 而不是 +=：两个宿主进程（比如记事本和 Word）各自数到 5 次和 3 次，
 /// 它们描述的是同一段历史，真实次数更接近 5 而不是 8。相加会随进程数膨胀。
-fn merge_into(t: &mut HashMap<String, u32>, disk: HashMap<String, u32>) {
-    for (w, n) in disk {
+fn merge_into(t: &mut HashMap<String, Ent>, disk: HashMap<String, Ent>) {
+    for (w, e) in disk {
         match t.get_mut(&w) {
-            Some(c) => *c = (*c).max(n),
+            Some(c) => {
+                // 次数取大、seq 取大：磁盘那份 seq 是 0，不该把内存里的「新鲜度」拉回去
+                c.n = c.n.max(e.n);
+                c.seq = c.seq.max(e.seq);
+            }
             None => {
                 if t.len() >= MAX_ENTRIES {
-                    continue;
+                    evict(t);
                 }
-                t.insert(w, n);
+                t.insert(w, e);
             }
         }
+    }
+}
+
+/// 表满时按「次数少 + 最久没动」淘汰一批，而不是拒收新词。
+///
+/// 早期实现是「满了就 return」，结果是常年使用后表里全是偶然选过一次的记录，
+/// 它们永久占坑，新词再也学不进来。用户看到的不是「有个上限」，而是「这功能用
+/// 半年就不灵了」，换台机器又好了——最难查的那类故障。
+///
+/// 排序键 `(次数, seq, 键)`：次数最少的先走；次数相同砍最久没用过的；再相同按
+/// 键排序，保证多进程各自淘汰的结果一致（不然两边会砍掉不同的条目）。
+fn evict(t: &mut HashMap<String, Ent>) {
+    let keep = MAX_ENTRIES / EVICT_KEEP_DEN * EVICT_KEEP_NUM;
+    if t.len() <= keep {
+        return;
+    }
+    let mut order: Vec<(u32, u64, &str)> = t.iter().map(|(k, e)| (e.n, e.seq, k.as_str())).collect();
+    order.sort_unstable();
+    let victims: Vec<String> = order[..t.len() - keep]
+        .iter()
+        .map(|(_, _, k)| (*k).to_string())
+        .collect();
+    for k in victims {
+        t.remove(&k);
+    }
+}
+
+/// 次数封顶时全表减半，而不是把单条钉死在 `MAX_COUNT`。
+///
+/// `(n + 1) / 2` 而不是 `n / 2`：1 次的词减半后还是 1，不能减成 0（那等于把它
+/// 从表里抹掉，40 次的学习量瞬间归零）。相对顺序在减半后完全保留，
+/// 所以「谁在前面」这件事不会因为一次减半而改变。
+fn halve(t: &mut HashMap<String, Ent>) {
+    for e in t.values_mut() {
+        e.n = (e.n + 1) / 2;
     }
 }
 
@@ -153,7 +238,7 @@ fn ensure_loaded() {
     }
 }
 
-fn with_table<R>(f: impl FnOnce(&mut HashMap<String, u32>) -> R) -> R {
+fn with_table<R>(f: impl FnOnce(&mut HashMap<String, Ent>) -> R) -> R {
     ensure_loaded();
     let mut g = match TABLE.write() {
         Ok(g) => g,
@@ -183,16 +268,20 @@ pub fn bump(code: &str, word: &str) {
         return;
     }
     let key = record_key(code, word);
+    let seq = next_seq();
     with_table(|t| {
-        match t.get_mut(&key) {
-            Some(n) => *n = (*n + 1).min(MAX_COUNT),
-            None => {
-                if t.len() >= MAX_ENTRIES {
-                    return;
-                }
-                t.insert(key, 1);
+        if let Some(e) = t.get_mut(&key) {
+            e.n += 1;
+            e.seq = seq;
+            if e.n > MAX_COUNT {
+                halve(t);
             }
+            return;
         }
+        if t.len() >= MAX_ENTRIES {
+            evict(t);
+        }
+        t.insert(key, Ent { n: 1, seq });
     });
     DIRTY.store(true, Ordering::Release);
     maybe_flush();
@@ -255,20 +344,20 @@ fn flush_inner(merge_disk: bool) {
     };
     let text = with_table(|t| {
         merge_into(t, disk);
-        let mut v: Vec<(&String, &u32)> = t.iter().collect();
+        let mut v: Vec<(&String, &Ent)> = t.iter().collect();
         // 次数高的在前，人看起来更像「我的常用词」
-        v.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        v.sort_by(|a, b| b.1.n.cmp(&a.1.n).then_with(|| a.0.cmp(b.0)));
         let mut s = String::with_capacity(v.len() * 20 + 64);
         s.push_str(
             "# 飞鹤输入法动态词频\n\
              # 格式：码<TAB>词<TAB>次数（老格式「词<TAB>次数」也认，对全部码生效）\n\
              # 删掉本文件即重置\n",
         );
-        for (k, n) in v {
+        for (k, e) in v {
             // `k` 本身就是「码\t词」或老格式的「词」，所以这里直接接一个 tab 就是两种格式
             s.push_str(k);
             s.push('\t');
-            s.push_str(&n.to_string());
+            s.push_str(&e.n.to_string());
             s.push('\n');
         }
         s
@@ -333,7 +422,7 @@ pub fn refresh() {
 fn order_by(
     words: &[std::borrow::Cow<'static, str>],
     lens: &[u8],
-    table: &HashMap<String, u32>,
+    table: &HashMap<String, Ent>,
     code: &str,
 ) -> Vec<usize> {
     // 复用一个缓冲拼键（`码 + \t + 词`），避免每个候选都分配一个 String
@@ -345,11 +434,11 @@ fn order_by(
             buf.push('\t');
             buf.push_str(w);
             // 码级记录优先；老文件里只有词级的，退回去用它（对所有码生效）
-            if let Some(n) = table.get(buf.as_str()) {
-                return *n;
+            if let Some(e) = table.get(buf.as_str()) {
+                return e.n;
             }
         }
-        table.get(w).copied().unwrap_or(0)
+        table.get(w).map(|e| e.n).unwrap_or(0)
     };
     let mut order: Vec<usize> = (0..words.len()).collect();
     // 稳定排序：`sort_by_key` 保证相等元素保持原顺序，这是「不搞乱语料顺序」的前提
@@ -432,12 +521,16 @@ mod tests {
     use super::*;
     use std::borrow::Cow;
 
+    fn ent(n: u32) -> Ent {
+        Ent { n, seq: 0 }
+    }
+
     #[test]
     fn parses_counts_and_ignores_junk() {
         let t = parse("# 注释\n你好\t7\n坏行没有制表符\n\n 世界 \t 3 \n空词\t5\n\t9\n");
-        assert_eq!(t.get("你好"), Some(&7));
-        assert_eq!(t.get("世界"), Some(&3));
-        assert_eq!(t.get("空词"), Some(&5));
+        assert_eq!(t.get("你好").map(|e| e.n), Some(7));
+        assert_eq!(t.get("世界").map(|e| e.n), Some(3));
+        assert_eq!(t.get("空词").map(|e| e.n), Some(5));
         assert_eq!(t.len(), 3, "没有制表符的行、空词都要跳过");
     }
 
@@ -445,8 +538,8 @@ mod tests {
     #[test]
     fn parses_both_record_formats() {
         let t = parse("oo\t哦\t8\n重庆\t3\n");
-        assert_eq!(t.get("oo\t哦"), Some(&8));
-        assert_eq!(t.get("重庆"), Some(&3), "老格式退化成「只有词」，对所有码生效");
+        assert_eq!(t.get("oo\t哦").map(|e| e.n), Some(8));
+        assert_eq!(t.get("重庆").map(|e| e.n), Some(3), "老格式退化成「只有词」，对所有码生效");
     }
 
     /// 同一个词一旦有了「按码」的记录，老格式那条就该退休——
@@ -454,25 +547,25 @@ mod tests {
     #[test]
     fn specific_record_retires_legacy_one() {
         let t = parse("哦\t8\noo\t哦\t3\n");
-        assert_eq!(t.get("哦"), None, "老记录要退休，不能再对所有码生效");
-        assert_eq!(t.get("oo\t哦"), Some(&8), "退休前先把次数并进按码记录（取较大值）");
+        assert!(t.get("哦").is_none(), "老记录要退休，不能再对所有码生效");
+        assert_eq!(t.get("oo\t哦").map(|e| e.n), Some(8), "退休前先把次数并进按码记录（取较大值）");
         // 没有按码记录的词，老格式照旧生效
         let t = parse("重庆\t3\n");
-        assert_eq!(t.get("重庆"), Some(&3));
+        assert_eq!(t.get("重庆").map(|e| e.n), Some(3));
     }
 
     #[test]
     fn bad_count_falls_back_to_one() {
         // 手改成乱七八糟的值时，宁可当成 1 次也不丢这个词
         let t = parse("词\tabc\n另一个\t-5\n");
-        assert_eq!(t.get("词"), Some(&1));
-        assert_eq!(t.get("另一个"), Some(&1));
+        assert_eq!(t.get("词").map(|e| e.n), Some(1));
+        assert_eq!(t.get("另一个").map(|e| e.n), Some(1));
     }
 
     #[test]
     fn count_is_clamped() {
         let t = parse("词\t999999\n");
-        assert_eq!(t.get("词"), Some(&MAX_COUNT));
+        assert_eq!(t.get("词").map(|e| e.n), Some(MAX_COUNT));
     }
 
     /// 排序必须是**稳定**的：没学过的词一个都不能动。
@@ -493,8 +586,8 @@ mod tests {
     /// 同一码长内，学过的排前面（这是「动态词频」本来的意义）
     #[test]
     fn learned_word_wins_inside_same_code_length() {
-        let mut table: HashMap<String, u32> = HashMap::new();
-        table.insert("丙".into(), 5);
+        let mut table: HashMap<String, Ent> = HashMap::new();
+        table.insert("丙".into(), ent(5));
         let v = [Cow::Borrowed("甲"), Cow::Borrowed("乙"), Cow::Borrowed("丙")];
         assert_eq!(order_by(&v, &[2, 2, 2], &table, "ab"), vec![2, 0, 1]);
     }
@@ -506,8 +599,8 @@ mod tests {
     /// 读音的「哦」压在后面。
     #[test]
     fn learned_count_is_per_code() {
-        let mut table: HashMap<String, u32> = HashMap::new();
-        table.insert("oo\t哦".into(), 8);
+        let mut table: HashMap<String, Ent> = HashMap::new();
+        table.insert("oo\t哦".into(), ent(8));
         let v = [Cow::Borrowed("饿"), Cow::Borrowed("呃"), Cow::Borrowed("哦")];
         // 查 ee：oo 的记录不算数，顺序原样
         assert_eq!(order_by(&v, &[2, 2, 2], &table, "ee"), vec![0, 1, 2]);
@@ -518,8 +611,8 @@ mod tests {
     /// 老格式（只有词、没有码）继续对所有码生效，否则升级一次学习记录就白攒了
     #[test]
     fn legacy_record_applies_to_every_code() {
-        let mut table: HashMap<String, u32> = HashMap::new();
-        table.insert("哦".into(), 8);
+        let mut table: HashMap<String, Ent> = HashMap::new();
+        table.insert("哦".into(), ent(8));
         let v = [Cow::Borrowed("饿"), Cow::Borrowed("哦")];
         assert_eq!(order_by(&v, &[2, 2], &table, "ee"), vec![1, 0]);
     }
@@ -528,9 +621,9 @@ mod tests {
     /// 这是实际踩到的 bug——打了几次「程序」之后，敲 `ig` 按空格出来的是「程序」。
     #[test]
     fn shorter_code_beats_learned_word() {
-        let mut table: HashMap<String, u32> = HashMap::new();
-        table.insert("程序".into(), 99);
-        table.insert("城".into(), 7);
+        let mut table: HashMap<String, Ent> = HashMap::new();
+        table.insert("程序".into(), ent(99));
+        table.insert("城".into(), ent(7));
         let v = [Cow::Borrowed("程序"), Cow::Borrowed("成"), Cow::Borrowed("城")];
         // 程序码长 4，成/城 码长 2
         assert_eq!(order_by(&v, &[4, 2, 2], &table, "ig"), vec![2, 1, 0]);
@@ -554,37 +647,70 @@ mod tests {
     #[test]
     fn merge_takes_max_not_sum() {
         // 两个进程各数到 5 和 3，描述的是同一段历史，取 5 而不是 8
-        let mut mem: HashMap<String, u32> = HashMap::new();
-        mem.insert("诊断".into(), 5);
-        let mut disk: HashMap<String, u32> = HashMap::new();
-        disk.insert("诊断".into(), 3);
-        disk.insert("函数".into(), 2);
+        let mut mem: HashMap<String, Ent> = HashMap::new();
+        mem.insert("诊断".into(), ent(5));
+        let mut disk: HashMap<String, Ent> = HashMap::new();
+        disk.insert("诊断".into(), ent(3));
+        disk.insert("函数".into(), ent(2));
         merge_into(&mut mem, disk);
-        assert_eq!(mem.get("诊断"), Some(&5), "同词取较大值，不能相加");
-        assert_eq!(mem.get("函数"), Some(&2), "磁盘独有的词要并进来");
+        assert_eq!(mem.get("诊断").map(|e| e.n), Some(5), "同词取较大值，不能相加");
+        assert_eq!(mem.get("函数").map(|e| e.n), Some(2), "磁盘独有的词要并进来");
     }
 
     #[test]
     fn merge_keeps_memory_when_it_is_ahead() {
-        let mut mem: HashMap<String, u32> = HashMap::new();
-        mem.insert("诊断".into(), 9);
-        let mut disk: HashMap<String, u32> = HashMap::new();
-        disk.insert("诊断".into(), 4);
+        let mut mem: HashMap<String, Ent> = HashMap::new();
+        mem.insert("诊断".into(), ent(9));
+        let mut disk: HashMap<String, Ent> = HashMap::new();
+        disk.insert("诊断".into(), ent(4));
         merge_into(&mut mem, disk);
-        assert_eq!(mem.get("诊断"), Some(&9), "内存更新时不能被磁盘的旧值拉低");
+        assert_eq!(mem.get("诊断").map(|e| e.n), Some(9), "内存更新时不能被磁盘的旧值拉低");
     }
 
     #[test]
-    fn merge_respects_entry_cap() {
-        let mut mem: HashMap<String, u32> = HashMap::new();
+    fn merge_evicts_instead_of_dropping_new_words() {
+        let mut mem: HashMap<String, Ent> = HashMap::new();
         for i in 0..MAX_ENTRIES {
-            mem.insert(format!("w{i}"), 1);
+            mem.insert(format!("w{i}"), ent(1));
         }
-        let mut disk: HashMap<String, u32> = HashMap::new();
-        disk.insert("新词".into(), 1);
+        let mut disk: HashMap<String, Ent> = HashMap::new();
+        disk.insert("新词".into(), ent(1));
         merge_into(&mut mem, disk);
-        assert_eq!(mem.len(), MAX_ENTRIES, "到上限后不再收新词");
-        assert!(!mem.contains_key("新词"));
+        assert!(
+            mem.contains_key("新词"),
+            "表满了也必须把新词收进来——早期版本在这里 return，表现是「用半年就不灵了」"
+        );
+        assert!(mem.len() < MAX_ENTRIES, "淘汰要真正砍掉一批，不是原地顶住");
+    }
+
+    /// 淘汰按「次数少 → 最久没动」砍：次数高的那条必须活下来，哪怕它最老。
+    #[test]
+    fn evict_drops_lowest_counts_first() {
+        let mut t: HashMap<String, Ent> = HashMap::new();
+        for i in 0..MAX_ENTRIES - 1 {
+            // 全是 1 次的老记录：正是常年使用后表里的样子
+            t.insert(format!("w{i}"), Ent { n: 1, seq: i as u64 });
+        }
+        t.insert("常用".into(), Ent { n: 50, seq: 0 });
+        evict(&mut t);
+        assert_eq!(t.len(), MAX_ENTRIES / EVICT_KEEP_DEN * EVICT_KEEP_NUM);
+        assert!(t.contains_key("常用"), "次数高的不能被淘汰");
+        assert!(!t.contains_key("w0"), "次数最少的先走（seq 最老的也最先）");
+    }
+
+    /// 次数到顶不是钉死，而是全表减半：相对顺序一根不能动，否则「谁在前面」会变。
+    #[test]
+    fn halve_keeps_relative_order() {
+        let mut t: HashMap<String, Ent> = HashMap::new();
+        t.insert("甲".into(), Ent { n: 1001, seq: 9 });
+        t.insert("乙".into(), Ent { n: 4, seq: 2 });
+        t.insert("丙".into(), Ent { n: 1, seq: 1 });
+        halve(&mut t);
+        assert_eq!(t["甲"].n, 501, "(1001+1)/2");
+        assert_eq!(t["乙"].n, 2);
+        assert_eq!(t["丙"].n, 1, "1 次减半后还是 1，不能减成 0（那等于删掉它）");
+        // 顺序：甲 > 乙 > 丙 不变
+        assert!(t["甲"].n > t["乙"].n && t["乙"].n > t["丙"].n);
     }
 
     #[test]
