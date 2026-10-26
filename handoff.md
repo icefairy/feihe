@@ -1302,8 +1302,11 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 1. **注册逻辑不重写**。COM / CTF TIP / 用户键盘列表全部交给 `install_tip.ps1` /
    `uninstall_tip.ps1` —— 它们是唯一真相，`register.cmd` 用的也是同一份。安装包只负责
    「提权 + 拷文件 + 调脚本 + 卸载时反向调」。Pascal 里再写一套必然漂移。
-2. **装到 `%ProgramFiles%\Feihe`**，不是老的 `%ProgramData%\Feihe`。安装时尽力清理老副本
-   （`Delete /REBOOTOK` 处理被占用的）。
+2. **装到 `%LOCALAPPDATA%\Feihe`**（用户级，见「数据目录」一节），不是老的
+   `%ProgramData%\Feihe`。安装时尽力清理老副本，但**绝不用 `Delete /REBOOTOK`**——
+   它置的是 NSIS 的「需要重启」标记，完成页立刻多出一个「重启计算机」按钮，
+   用户就以为必须重启；实测只删不掉一个文件也会触发。删不掉就留着（注册项已清，
+   不会被加载），完成页另有 `MUI_FINISHPAGE_NOREBOOTSUPPORT` 兜底。
 3. **发布模式构建**（`FEIHE_NO_USER_DICT=1`）。`src/user_dict.txt` 是 5 万条个人打字记录，
    普通构建会并进 `base.bin`（86749 条 → 38024 条，DLL 7.2 MB → 3.0 MB）。
 

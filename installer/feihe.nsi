@@ -7,7 +7,7 @@
 ;    用的也是同一份。安装包只负责「提权 + 拷文件 + 调脚本 + 卸载时反向调」。
 ;    否则 Pascal 里再来一套，两份实现必然漂移。
 ; 2. 装到 Program Files（不是老的 C:\ProgramData\Feihe）。安装包该有安装包的样子，
-;    老的 ProgramData 副本会在安装时尽力清理（锁住的排到重启删）。
+;    老的 ProgramData 副本会在安装时尽力清理（删不掉的留着，不安排重启删除）。
 ; 3. 覆盖 DLL 时先 Delete 再 Rename 兜底：ctfmon / explorer 常常已经把旧 DLL
 ;    映射进进程，直接 Copy 会失败。Windows 允许**重命名**已映射的文件，
 ;    所以改名成 .old-<随机> 再拷新文件就行。后缀必须唯一——固定 `.old` 一旦被
@@ -106,7 +106,13 @@ UninstallIcon "assets\feihe.ico"
 !define MUI_ICON "assets\feihe.ico"
 !define MUI_UNICON "assets\feihe.ico"
 !define MUI_FINISHPAGE_NOAUTOCLOSE
-!define MUI_FINISHPAGE_TEXT "${APP_NAME} 已安装。$\r$\n$\r$\n用 Win+Space 或 Ctrl+Shift 切换到「${APP_NAME}」。$\r$\n$\r$\n如果输入法列表里还看不到它，请注销后重新登录（列表由 shell 缓存）。"
+; 完成页绝不提供「重启计算机」。本安装根本不需要重启电脑：DLL 是改名替换的，
+; 生效靠 install_tip.ps1 末尾重启 **ctfmon 进程**，跟系统重启无关。以前这里没管，
+; 只要有一条路径调了 Delete /REBOOTOK（旧副本删不掉就会），NSIS 就会置重启标记，
+; 完成页立刻多出一个「重启计算机」，用户看到就以为「必须重启」。
+; 这个宏是最后一道保险：就算别处再置标记，完成页也不会显示重启选项。
+!define MUI_FINISHPAGE_NOREBOOTSUPPORT
+!define MUI_FINISHPAGE_TEXT "${APP_NAME} 已安装。$\r$\n$\r$\n用 Win+Space 或 Ctrl+Shift 切换到「${APP_NAME}」。$\r$\n$\r$\n如果输入法列表里还看不到它，请注销后重新登录（列表由 shell 缓存）。不需要重启电脑。"
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
 !insertmacro MUI_PAGE_WELCOME
@@ -277,9 +283,15 @@ Section "主程序" SecMain
   ${If} $R1 != ""
   ${AndIf} $R1 != "$INSTDIR"
   ${AndIf} ${FileExists} "$R1\feihe.dll"
-    DetailPrint "清理旧位置 $R1（正在使用的排到重启后删）"
-    Delete /REBOOTOK "$R1\feihe.dll"
-    Delete /REBOOTOK "$R1\feihe32.dll"
+    ; 不用 /REBOOTOK：那会置 NSIS 的重启标记，完成页就多出「重启计算机」。
+    ; 删不掉说明旧 DLL 还被某个进程映射着——留着无害，注册项已由 install_tip.ps1
+    ; 清理，不会被再加载；重启后用户自己删掉即可，不该因此拦住本次安装。
+    DetailPrint "清理旧位置 $R1（删不掉的留着，不安排重启删除）"
+    Delete "$R1\feihe.dll"
+    Delete "$R1\feihe32.dll"
+    ${If} ${FileExists} "$R1\feihe.dll"
+      DetailPrint "  旧 DLL 仍被占用，保留在 $R1，可稍后手动删除"
+    ${EndIf}
     ; register.cmd 时代留下的改名残留形如 feihe.dll.old-141324，通配要宽一点
     Delete "$R1\*.old"
     Delete "$R1\*.old-*"
@@ -322,8 +334,15 @@ Section "Uninstall"
     ${EndIf}
   ${EndIf}
 
-  Delete /REBOOTOK "$INSTDIR\feihe.dll"
-  Delete /REBOOTOK "$INSTDIR\feihe32.dll"
+  ; 同样不用 /REBOOTOK。uninstall_tip.ps1 末尾已经杀过 ctfmon，映射一释放这里
+  ; 当场就能删；万一 32 位宿主还占着，就留着文件并说清楚——绝不能为删一个文件
+  ; 弹「要重启吗」，卸载时多这一步最招人烦。
+  Delete "$INSTDIR\feihe.dll"
+  Delete "$INSTDIR\feihe32.dll"
+  ${If} ${FileExists} "$INSTDIR\feihe.dll"
+  ${OrIf} ${FileExists} "$INSTDIR\feihe32.dll"
+    DetailPrint "[!] DLL 仍被占用，注册项已移除；重启后可手动删除 $INSTDIR"
+  ${EndIf}
   Delete "$INSTDIR\install_tip.ps1"
   Delete "$INSTDIR\uninstall_tip.ps1"
   Delete "$INSTDIR\使用帮助.md"
