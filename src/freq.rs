@@ -72,24 +72,52 @@ fn enabled() -> bool {
     crate::config::get().learn
 }
 
-/// 解析 `词<TAB>次数` 文本。抽成纯函数才能单测（真文件读写会碰 APPDATA）。
+/// 解析记录文本。两种行格式都认：
+///
+/// ```text
+/// 哦	8        旧的：只有词和次数，对**所有码**生效（兼容老文件）
+/// oo	哦	8    新的：码 + 词 + 次数
+/// ```
+///
+/// 抽成纯函数才能单测（真文件读写会碰 APPDATA）。
 fn parse(text: &str) -> HashMap<String, u32> {
-    let mut out = HashMap::new();
+    let mut out: HashMap<String, u32> = HashMap::new();
+    // 老格式的条目：词 → 次数。等所有行读完再决定它们是退休还是并进按码记录。
+    let mut legacy: HashMap<String, u32> = HashMap::new();
+    // 按码记录的 (键, 词)，用来把老记录的次数迁移过去
+    let mut specific: Vec<(String, String)> = Vec::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some((w, n)) = line.split_once('\t') else {
-            continue;
-        };
-        let (w, n) = (w.trim(), n.trim());
-        if w.is_empty() {
-            continue;
+        let cols: Vec<&str> = line.split('\t').map(str::trim).collect();
+        match cols.as_slice() {
+            [code, word, n, ..] if !code.is_empty() && !word.is_empty() => {
+                let key = format!("{code}\t{word}");
+                specific.push((key.clone(), (*word).to_string()));
+                let n: u32 = n.parse().unwrap_or(1).clamp(1, MAX_COUNT);
+                out.insert(key, n);
+            }
+            [word, n, ..] if !word.is_empty() => {
+                let n: u32 = n.parse().unwrap_or(1).clamp(1, MAX_COUNT);
+                legacy.insert((*word).to_string(), n);
+            }
+            _ => {}
         }
-        // 解析不出来按 1 算：手改坏了也不至于丢掉这个词
-        let n: u32 = n.parse().unwrap_or(1).clamp(1, MAX_COUNT);
-        out.insert(w.to_string(), n);
+    }
+    // 老格式（不带码、对**所有**码生效）退休，但次数不能白丢：并进这个词已有的
+    // 按码记录（取较大值）。否则「哦」攒的 8 次会在升级后归零，而它又是把 `ee`
+    // 第一位的元凶——旧记录不退，按码记就等于白记。
+    for (key, word) in &specific {
+        if let Some(n) = legacy.remove(word) {
+            let cur = out.get(key).copied().unwrap_or(0);
+            out.insert(key.clone(), cur.max(n));
+        }
+    }
+    // 没有按码记录的词，老记录照旧对全部码生效——升级不能让历史学习全废
+    for (word, n) in legacy {
+        out.insert(word, n);
     }
     out
 }
@@ -136,7 +164,14 @@ fn with_table<R>(f: impl FnOnce(&mut HashMap<String, u32>) -> R) -> R {
 }
 
 /// 记一次「用户选了这个词」。
-pub fn bump(word: &str) {
+///
+/// `code` 是**当时敲的码**。学习必须按「码 + 词」记，不能只按词记：
+/// 多音字一个词挂多条读音（`哦` 既有 `oo` 也有 `ee`、`重庆` 既有 chong 也有 zhong），
+/// 只按词记的话，在 `oo` 里选过的「哦」会把次数带到 `ee` 上，让一个生僻读音的字
+/// 顶掉 `ee` 下所有常用字（饿 / 呃 / 额）。用户看到的是「怎么冒出来个 哦」。
+///
+/// `code` 传空串等于「对所有码生效」，只有老格式的记录才是这样。
+pub fn bump(code: &str, word: &str) {
     if word.is_empty() || !enabled() {
         return;
     }
@@ -147,20 +182,29 @@ pub fn bump(word: &str) {
     if word.is_ascii() {
         return;
     }
-    let word = word.to_string();
+    let key = record_key(code, word);
     with_table(|t| {
-        match t.get_mut(&word) {
+        match t.get_mut(&key) {
             Some(n) => *n = (*n + 1).min(MAX_COUNT),
             None => {
                 if t.len() >= MAX_ENTRIES {
                     return;
                 }
-                t.insert(word, 1);
+                t.insert(key, 1);
             }
         }
     });
     DIRTY.store(true, Ordering::Release);
     maybe_flush();
+}
+
+/// 一条记录的键。`code` 为空时退化成「只有词」的老格式（对所有码生效）。
+fn record_key(code: &str, word: &str) -> String {
+    if code.is_empty() {
+        word.to_string()
+    } else {
+        format!("{code}\t{word}")
+    }
 }
 
 /// 到点就写盘。调用频率是「每次上屏一次」，所以这里只做两次原子读 + 一次比较。
@@ -214,10 +258,15 @@ fn flush_inner(merge_disk: bool) {
         let mut v: Vec<(&String, &u32)> = t.iter().collect();
         // 次数高的在前，人看起来更像「我的常用词」
         v.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-        let mut s = String::with_capacity(v.len() * 16 + 32);
-        s.push_str("# 飞鹤输入法动态词频\n# 格式：词<TAB>次数（删掉本文件即重置）\n");
-        for (w, n) in v {
-            s.push_str(w);
+        let mut s = String::with_capacity(v.len() * 20 + 64);
+        s.push_str(
+            "# 飞鹤输入法动态词频\n\
+             # 格式：码<TAB>词<TAB>次数（老格式「词<TAB>次数」也认，对全部码生效）\n\
+             # 删掉本文件即重置\n",
+        );
+        for (k, n) in v {
+            // `k` 本身就是「码\t词」或老格式的「词」，所以这里直接接一个 tab 就是两种格式
+            s.push_str(k);
             s.push('\t');
             s.push_str(&n.to_string());
             s.push('\n');
@@ -285,13 +334,28 @@ fn order_by(
     words: &[std::borrow::Cow<'static, str>],
     lens: &[u8],
     table: &HashMap<String, u32>,
+    code: &str,
 ) -> Vec<usize> {
+    // 复用一个缓冲拼键（`码 + \t + 词`），避免每个候选都分配一个 String
+    let mut buf = String::with_capacity(code.len() + 16);
+    let count_of = |buf: &mut String, w: &str| -> u32 {
+        if !code.is_empty() {
+            buf.clear();
+            buf.push_str(code);
+            buf.push('\t');
+            buf.push_str(w);
+            // 码级记录优先；老文件里只有词级的，退回去用它（对所有码生效）
+            if let Some(n) = table.get(buf.as_str()) {
+                return *n;
+            }
+        }
+        table.get(w).copied().unwrap_or(0)
+    };
     let mut order: Vec<usize> = (0..words.len()).collect();
     // 稳定排序：`sort_by_key` 保证相等元素保持原顺序，这是「不搞乱语料顺序」的前提
     order.sort_by_key(|&i| {
         let len = lens.get(i).copied().unwrap_or(u8::MAX);
-        let n = table.get(words[i].as_ref()).copied().unwrap_or(0);
-        (len, std::cmp::Reverse(n))
+        (len, std::cmp::Reverse(count_of(&mut buf, words[i].as_ref())))
     });
     order
 }
@@ -299,8 +363,9 @@ fn order_by(
 /// 按「码长 → 学习次数」稳定重排候选。
 ///
 /// `lens` 是每个候选的**码长**（音节数 × 2），由 `dict::collect` 一起带过来。
+/// `code` 是当前查询的码——学习记录按「码 + 词」存，见 `bump`。
 /// 长度不等长时不 panic，缺的按最大长度算（排到最后），避免一处算错就崩掉宿主。
-pub fn rank(words: &mut [std::borrow::Cow<'static, str>], lens: &[u8]) {
+pub fn rank(words: &mut [std::borrow::Cow<'static, str>], lens: &[u8], code: &str) {
     if words.len() < 2 || !enabled() {
         return;
     }
@@ -315,7 +380,7 @@ pub fn rank(words: &mut [std::borrow::Cow<'static, str>], lens: &[u8]) {
     if table.is_empty() {
         return;
     }
-    let mut perm = order_by(words, lens, table);
+    let mut perm = order_by(words, lens, table, code);
     apply_order(words, &mut perm);
 }
 
@@ -376,6 +441,26 @@ mod tests {
         assert_eq!(t.len(), 3, "没有制表符的行、空词都要跳过");
     }
 
+    /// 新格式带码，老格式（只有词）必须继续认——老用户的 freq.txt 不能一夜失效
+    #[test]
+    fn parses_both_record_formats() {
+        let t = parse("oo\t哦\t8\n重庆\t3\n");
+        assert_eq!(t.get("oo\t哦"), Some(&8));
+        assert_eq!(t.get("重庆"), Some(&3), "老格式退化成「只有词」，对所有码生效");
+    }
+
+    /// 同一个词一旦有了「按码」的记录，老格式那条就该退休——
+    /// 否则「哦」的老记录会永远把 `ee` 的第一位占着，按码记等于白记。
+    #[test]
+    fn specific_record_retires_legacy_one() {
+        let t = parse("哦\t8\noo\t哦\t3\n");
+        assert_eq!(t.get("哦"), None, "老记录要退休，不能再对所有码生效");
+        assert_eq!(t.get("oo\t哦"), Some(&8), "退休前先把次数并进按码记录（取较大值）");
+        // 没有按码记录的词，老格式照旧生效
+        let t = parse("重庆\t3\n");
+        assert_eq!(t.get("重庆"), Some(&3));
+    }
+
     #[test]
     fn bad_count_falls_back_to_one() {
         // 手改成乱七八糟的值时，宁可当成 1 次也不丢这个词
@@ -401,7 +486,7 @@ mod tests {
             Cow::Borrowed("丙"),
         ];
         // 表里没有任何词 → 顺序原样
-        rank(&mut v, &[2, 2, 2]);
+        rank(&mut v, &[2, 2, 2], "ab");
         assert_eq!(v, vec!["甲", "乙", "丙"]);
     }
 
@@ -411,7 +496,32 @@ mod tests {
         let mut table: HashMap<String, u32> = HashMap::new();
         table.insert("丙".into(), 5);
         let v = [Cow::Borrowed("甲"), Cow::Borrowed("乙"), Cow::Borrowed("丙")];
-        assert_eq!(order_by(&v, &[2, 2, 2], &table), vec![2, 0, 1]);
+        assert_eq!(order_by(&v, &[2, 2, 2], &table, "ab"), vec![2, 0, 1]);
+    }
+
+    /// 学习记录是**按码**记的：在 `oo` 里选过「哦」，不该把它的次数带到 `ee` 上。
+    ///
+    /// 这是用户报的真事——「为什么 oo 能出哦，ee 也能出哦，而且排在第一位」。
+    /// 多音字一个词挂多条读音，只按词记次数就会串味：饿 / 呃 / 额 全被一个生僻
+    /// 读音的「哦」压在后面。
+    #[test]
+    fn learned_count_is_per_code() {
+        let mut table: HashMap<String, u32> = HashMap::new();
+        table.insert("oo\t哦".into(), 8);
+        let v = [Cow::Borrowed("饿"), Cow::Borrowed("呃"), Cow::Borrowed("哦")];
+        // 查 ee：oo 的记录不算数，顺序原样
+        assert_eq!(order_by(&v, &[2, 2, 2], &table, "ee"), vec![0, 1, 2]);
+        // 查 oo：是它自己的记录，哦排第一
+        assert_eq!(order_by(&v, &[2, 2, 2], &table, "oo"), vec![2, 0, 1]);
+    }
+
+    /// 老格式（只有词、没有码）继续对所有码生效，否则升级一次学习记录就白攒了
+    #[test]
+    fn legacy_record_applies_to_every_code() {
+        let mut table: HashMap<String, u32> = HashMap::new();
+        table.insert("哦".into(), 8);
+        let v = [Cow::Borrowed("饿"), Cow::Borrowed("哦")];
+        assert_eq!(order_by(&v, &[2, 2], &table, "ee"), vec![1, 0]);
     }
 
     /// **码长优先于学习次数**：`ig` 的「成」(2 键) 不能被学过的「程序」(4 键) 顶掉。
@@ -423,7 +533,7 @@ mod tests {
         table.insert("城".into(), 7);
         let v = [Cow::Borrowed("程序"), Cow::Borrowed("成"), Cow::Borrowed("城")];
         // 程序码长 4，成/城 码长 2
-        assert_eq!(order_by(&v, &[4, 2, 2], &table), vec![2, 1, 0]);
+        assert_eq!(order_by(&v, &[4, 2, 2], &table, "ig"), vec![2, 1, 0]);
     }
 
     /// 置换重排不能丢词、不能错位（用可验证的一个环来钉）

@@ -1018,7 +1018,7 @@ impl FeiheTextService_Impl {
     /// 一简次选 `d;` 用它：要出什么由键位决定，跟候选里选中的那个没关系。
     /// 别拿 `commit_with` 顶替——那个是「当前候选 + 后缀」，会拼出「的打」。
     fn commit_literal(&self, text: &str) {
-        crate::freq::bump(text);
+        crate::freq::bump(&self.code.borrow(), text);
         self.pending_op
             .borrow_mut()
             .replace(EditOp::Commit(text.to_string()));
@@ -1034,7 +1034,8 @@ impl FeiheTextService_Impl {
         let word = self.current_word();
         // 学的是「拼上标点之前」的那个词。晚一步就会把「你好，」当成一个词记进去，
         // 而候选里永远不会有带标点的词，这条记录等于白存。
-        crate::freq::bump(&word);
+        // 码一起带上：同一个词在不同码下的次数要分开算（多音字）。
+        crate::freq::bump(&self.code.borrow(), &word);
         let mut text = word;
         text.push_str(suffix);
         self.pending_op.borrow_mut().replace(EditOp::Commit(text));
@@ -1276,7 +1277,7 @@ impl FeiheTextService_Impl {
         {
             let segs = self.segments.borrow();
             for s in segs.iter().filter(|s| s.picked && !s.word.is_empty()) {
-                crate::freq::bump(&s.word);
+                crate::freq::bump(&s.code, &s.word);
             }
         }
         text.push_str(suffix);
@@ -1302,7 +1303,7 @@ impl FeiheTextService_Impl {
         {
             let segs = self.segments.borrow();
             for s in segs.iter() {
-                crate::freq::bump(&s.word);
+                crate::freq::bump(&s.code, &s.word);
             }
         }
         // 整串记成自造词：下次同样的码打满就直接出这个词，不用再拆一遍。

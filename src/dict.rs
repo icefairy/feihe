@@ -377,7 +377,9 @@ fn search(
     // 90 名以外的词捞进来。这个限制是刻意的——真去全量扫描会让每次按键
     // 都多扫几万条，换来的收益是「某个极冷僻词被选过一次就能上第一页」，
     // 不值。
-    crate::freq::rank(&mut out, &lens);
+    // 学到的次数按「码 + 词」记：多音字同一个词挂多条读音，只按词记会让在
+    // `oo` 里选过的「哦」跑到 `ee` 的第一位，顶掉饿 / 呃 / 额。
+    crate::freq::rank(&mut out, &lens, prefix);
 
     // 自造词组：用户一段一段拼出来的、词库里本来没有的词（`limkyr`→李明远）。
     // 码打满就出，并且排在最前面——这是用户刚造的词，他下次敲这个码要的就是它。
@@ -1133,6 +1135,26 @@ pub(crate) mod tests {
             })
             .collect();
         assert!(bad.is_empty(), "辅助码表格式异常：{bad:?}");
+    }
+
+    /// 「不是简码，就该单字优先」这条不变量：`collect` 出来的码长必须**非递减**。
+    ///
+    /// 一简 / 二简 / 自造词 / 置顶是**显式**插队，都发生在 collect 之后，
+    /// 所以不在这条断言里——除此之外任何长码词跑到短码字前面都是 bug。
+    #[test]
+    fn collect_orders_short_codes_first() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for scheme in [Scheme::Xiaohe, Scheme::Ms] {
+            set_scheme(scheme);
+            for code in ["iu", "de", "dd", "ee", "oo", "he", "zuci", "fwhe"] {
+                let (words, lens) = collect(false, code, "", AssistMode::Off, 45);
+                assert!(
+                    lens.windows(2).all(|w| w[0] <= w[1]),
+                    "{scheme:?} 的 {code} 码长顺序乱了：{:?}",
+                    words.iter().zip(lens.iter()).collect::<Vec<_>>()
+                );
+            }
+        }
     }
 
     #[test]
