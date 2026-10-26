@@ -108,6 +108,12 @@ pub struct FeiheTextService {
     assist: RefCell<String>,
     /// 是否处于辅助码输入态
     assist_active: Cell<bool>,
+    /// 本次输入里用户已经拒绝过一次「3 键直出」，别再拆了。
+    ///
+    /// 没有这个位，开了开关就**永远打不出「代价」**：`dd`+`j` 被自动拆成辅助码，
+    /// 退格回到 `dd` 后再打 `j` 又被拆一次，死循环。拒绝一次就放过，直到这次
+    /// 组合结束（上屏 / Esc）——用户真想用辅助码还有 `Tab`。
+    assist_direct_denied: Cell<bool>,
     /// 当前候选，已按词频降序
     candidates: RefCell<Vec<Cow<'static, str>>>,
     /// 当前页内选中索引
@@ -152,6 +158,7 @@ impl FeiheTextService {
             code: RefCell::new(String::new()),
             assist: RefCell::new(String::new()),
             assist_active: Cell::new(false),
+            assist_direct_denied: Cell::new(false),
             candidates: RefCell::new(Vec::new()),
             selected: Cell::new(0),
             page: Cell::new(0),
@@ -176,6 +183,7 @@ impl FeiheTextService {
         self.code.borrow_mut().clear();
         self.assist.borrow_mut().clear();
         self.assist_active.set(false);
+        self.assist_direct_denied.set(false);
         self.segments.borrow_mut().clear();
         self.seg_idx.set(0);
         self.candidates.borrow_mut().clear();
@@ -341,6 +349,68 @@ impl FeiheTextService {
             }
         }
         None
+    }
+
+    /// 「3 键直出」用的命中判定：筛出的第一项必须是**单字**。
+    ///
+    /// 为什么不与 `assist_hit` 共用：3 键那一下是有歧义的（那 1 键也可能是在打下一个
+    /// 音节），要求「筛出单字」能把误伤压到很低——半截音节 `ni` + `h` 这种组合通常
+    /// 连候选都没有，而 `dd` + 部首 `j` 的第一项恰好就是单字「带」。
+    fn assist_hit_single(prefix: &str, assist: &str, mode: AssistMode) -> bool {
+        if prefix.is_empty() || assist.is_empty() {
+            return false;
+        }
+        let hit = if config::pinyin_mode() {
+            dict::lookup_pinyin_filtered(prefix, assist, mode, 1)
+        } else {
+            dict::lookup_filtered(prefix, assist, mode, 1)
+        };
+        hit.first().is_some_and(|w| w.chars().count() == 1)
+    }
+
+    /// 「3 键直出」：音形模式下敲到第 3 键就把末尾 1~2 键挪进辅助码（`ddj` → `dd`+`j`）。
+    ///
+    /// 为什么只认 3 键：双拼每个音节恰好 2 键，所以 3 键永远是「1 个完整音节 +
+    /// 1 个孤立键」；4 键可能已经是一个完整词（`ddji`），5 键可能是两个半音节，
+    /// 越长的码越不该替用户猜。**3 键这一处是唯一「猜错了也还算合理」的位置。**
+    ///
+    /// 抽成纯函数是为了能单测（`self` 里全是 COM 句柄，测试进程造不出来）。
+    fn auto_assist_split(
+        code: &str,
+        max: usize,
+        hit: impl FnMut(&str, &str) -> bool,
+    ) -> Option<(String, String)> {
+        if code.len() != 3 {
+            return None;
+        }
+        FeiheTextService::split_trailing_assist(code, max, hit)
+    }
+
+    /// 把「3 键直出」落到状态上。只动编码，候选随后由 `refresh` 统一重算。
+    ///
+    /// 拆完把 `assist_active` 置真，等价于用户自己按了一下 `Tab`：组合串显示成
+    /// `dd j`，Tab 再按一次退回（清掉辅助码）。后续字母进辅助码而不是编码——
+    /// 这是刻意的，第 4 键如果还能出词，说明用户想要的本来就不是这个开关。
+    fn auto_assist(&self) {
+        let cfg = config::get();
+        let mode = cfg.assist_mode;
+        if !cfg.assist_direct
+            || mode == AssistMode::Off
+            || config::pinyin_mode()
+            || self.assist_active.get()
+            || self.assist_direct_denied.get()
+        {
+            return;
+        }
+        let code = self.code.borrow().clone();
+        let Some((head, tail)) = FeiheTextService::auto_assist_split(&code, mode.max_keys(), |p, a| {
+            FeiheTextService::assist_hit_single(p, a, mode)
+        }) else {
+            return;
+        };
+        self.code.borrow_mut().clone_from(&head);
+        self.assist.borrow_mut().clone_from(&tail);
+        self.assist_active.set(true);
     }
 
     /// 把「按错读音打」的词追加到候选末尾（`zhongqing` → 重庆）。
@@ -1495,6 +1565,9 @@ impl FeiheTextService_Impl {
             };
             if empty {
                 self.assist_active.set(false);
+                // 用户把这键退了，说明他不是要辅助码（`ddj` 想打「代价」）。
+                // 记下来，等他重新敲 `j` 时别再自动拆一次，否则按几次退格都白搭。
+                self.assist_direct_denied.set(true);
             }
             self.refresh();
             self.update_composition();
@@ -2215,6 +2288,8 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                     }
                 } else {
                     self.assist.borrow_mut().clear();
+                    // Tab 退出 = 明确说「这键不是辅助码」，同一次输入里别再自动拆
+                    self.assist_direct_denied.set(true);
                 }
                 self.refresh();
                 self.update_composition();
@@ -2248,6 +2323,8 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                         self.code.borrow_mut().push(ch);
                     }
                 }
+                // 3 键直出：默认关，开了就在 refresh 之前把末尾那 1 键挪进辅助码
+                self.auto_assist();
                 self.refresh();
                 self.update_composition();
                 self.maybe_split();
@@ -2927,6 +3004,48 @@ mod tests {
                 "{mode:?} dd + {assist} 应该筛出「带」，实际 {hit:?}"
             );
         }
+    }
+
+    /// 「3 键直出」只认 3 键：4 键 `ddfj` 是小鹤的正常码长（2 音节 + 2 形码），
+    /// 2 键是完整音节，5 键可能是两个半音节——越长的码越不该替用户猜。
+    #[test]
+    fn auto_assist_split_only_three_keys() {
+        let always = |_: &str, _: &str| true;
+        assert_eq!(
+            FeiheTextService::auto_assist_split("ddj", 1, always),
+            Some(("dd".into(), "j".into()))
+        );
+        assert_eq!(FeiheTextService::auto_assist_split("ddfj", 2, always), None);
+        assert_eq!(FeiheTextService::auto_assist_split("dd", 1, always), None);
+        assert_eq!(FeiheTextService::auto_assist_split("dj", 1, always), None);
+        // 拆出来也筛不出东西就别拆——第 3 键原样留在编码里
+        assert_eq!(
+            FeiheTextService::auto_assist_split("ddj", 1, |_, _| false),
+            None
+        );
+    }
+
+    /// 真表验证「筛出单字」这道门槛：`dd` + `j`（自然码，部首 巾）第一项是单字，
+    /// 所以 3 键直出能落地；这条同时钉住 `ddj` → 「带」。
+    #[test]
+    fn auto_assist_split_hits_single_char() {
+        let _g = dict::tests::SCHEME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        dict::set_scheme(Scheme::Xiaohe);
+        let mode = AssistMode::Ziranma;
+        let got = FeiheTextService::auto_assist_split("ddj", mode.max_keys(), |p, a| {
+            FeiheTextService::assist_hit_single(p, a, mode)
+        });
+        assert_eq!(got, Some(("dd".into(), "j".into())));
+
+        let hit = dict::lookup_filtered("dd", "j", mode, 1);
+        assert!(
+            hit.first().is_some_and(|w| w.chars().count() == 1),
+            "第一位必须是单字，否则 3 键直出会吞掉「代价」这类词：{hit:?}"
+        );
+        let wide = dict::lookup_filtered("dd", "j", mode, 45);
+        assert!(wide.iter().any(|w| &**w == "带"), "dd + j 应该筛出「带」");
     }
 
     /// 自造词的准入规则：`li`+`mk`+`yr` → 李明远，四道门全过才记。

@@ -35,7 +35,7 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 654;
+const CLIENT_H: i32 = 674;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -45,6 +45,7 @@ const ID_SCHEME_MS: i32 = 102;
 const ID_ASSIST_OFF: i32 = 111;
 const ID_ASSIST_ZRM: i32 = 112;
 const ID_ASSIST_XH: i32 = 113;
+const ID_ASSIST_DIRECT: i32 = 114;
 const ID_SKIN_LIGHT: i32 = 121;
 const ID_SKIN_DARK: i32 = 122;
 const ID_SKIN_EYE: i32 = 123;
@@ -200,6 +201,7 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_POPUP_ALWAYS, cfg.popup == PopupMode::Always);
     set_checked(h, ID_POPUP_NEVER, cfg.popup == PopupMode::Never);
     set_checked(h, ID_READING, cfg.reading);
+    set_checked(h, ID_ASSIST_DIRECT, cfg.assist_direct);
     set_checked(h, ID_LEARN, cfg.learn);
     let learned = crate::freq::len();
     let phrases = crate::phrase::len();
@@ -229,6 +231,10 @@ unsafe fn sync(h: HWND) {
         if let Ok(ctl) = GetDlgItem(Some(h), id) {
             let _ = EnableWindow(ctl, !cfg.pinyin_mode);
         }
+    }
+    // 辅助码整个关了，「3 键直出」自然无从谈起，同样灰掉
+    if let Ok(ctl) = GetDlgItem(Some(h), ID_ASSIST_DIRECT) {
+        let _ = EnableWindow(ctl, cfg.assist_mode != AssistMode::Off && !cfg.pinyin_mode);
     }
 
     let (total, user, scheme) = dict::stats();
@@ -326,6 +332,10 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_READING => {
             let on = checked(GetDlgItem(Some(h), ID_READING).unwrap_or_default());
             config::set_reading(on);
+        }
+        ID_ASSIST_DIRECT => {
+            let on = checked(GetDlgItem(Some(h), ID_ASSIST_DIRECT).unwrap_or_default());
+            config::update(|c| c.assist_direct = on);
         }
         ID_POPUP_AUTO | ID_POPUP_ALWAYS | ID_POPUP_NEVER => {            let mode = match id {
                 ID_POPUP_ALWAYS => PopupMode::Always,
@@ -445,8 +455,17 @@ unsafe fn build(h: HWND) {
         428,
         0,
     );
+    // 「3 键直出」紧跟在辅助码说明下面：它只改「第 3 键算谁的」，是同一件事的变体
+    check(
+        h,
+        "3 键直出单字（第 3 键直接当形码，如 ddj → 带）",
+        16,
+        y + 38,
+        428,
+        ID_ASSIST_DIRECT,
+    );
 
-    y += 58; // 上面多了一行说明
+    y += 80; // 上面多了一行说明 + 一行勾选
     label(h, "皮肤", 16, y, 90, 0);
     radio(h, "浅色", 110, y - 2, 70, ID_SKIN_LIGHT, true);
     radio(h, "深色", 190, y - 2, 70, ID_SKIN_DARK, false);

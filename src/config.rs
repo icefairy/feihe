@@ -121,6 +121,15 @@ pub struct Config {
     pub popup: PopupMode,
     /// 候选窗里给易错词标注带调读音（`重庆 chóng qìng`）。见 `hint` 模块。
     pub reading: bool,
+    /// 音形「3 键直出」：第 3 键不问青红皂白先当辅助码（`ddj` → `dd` + `j` → 带）。
+    ///
+    /// 双拼每个音节恰好 2 键，**3 键必然是「1 个完整音节 + 1 个孤立键」**，
+    /// 那个孤立键有两种读法：下一个音节的首键（`ddj` 想打「代价」），或者辅助码
+    /// （`dd` + 部首 j → 带）。这两件事没法从按键流里分辨，只能选一个优先。
+    ///
+    /// 默认关：多数人敲到第 3 键是在继续打词，抢成辅助码等于把词吞掉。
+    /// 打开的人（从自然码 / 小鹤带过来的）宁愿先出单字，词可以关掉开关或退格重打。
+    pub assist_direct: bool,
 }
 
 impl Config {
@@ -143,6 +152,8 @@ impl Config {
         // 默认开：易错词的读音该让人看见，不然「重」到底读 chóng 还是 zhòng
         // 只能靠猜。不想要的人关掉即可，文字宽度会回到旧样子。
         reading: true,
+        // 默认关：3 键里那个孤立键更可能是在打下一个音节，自动拆会吞词。
+        assist_direct: false,
     };
 }
 
@@ -252,7 +263,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 6;
+const CONFIG_VER: u32 = 7;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -287,6 +298,9 @@ pub fn load() -> Config {
     //
     // 判定放在 `parse` 里（读到旧键就按上面的规则映射），这里不需要额外动作，
     // 只要 `ver < CONFIG_VER` 时重写一遍文件、把键名换成新的。
+
+    // v6 → v7：新增 `assist_direct`（音形 3 键直出）。缺省 false，不需要迁移动作——
+    // 这个开关的默认值就是「保持旧行为」，老用户升级后手感不能变。
 
     // 原子镜像必须在锁外同步：`pinyin_mode()` / `no_popup()` 是热路径，读的是原子量
     sync_mirrors(&cfg);
@@ -335,6 +349,7 @@ fn parse(text: &str) -> (Config, u32) {
             "learn" => cfg.learn = parse_bool(v),
             "popup" => cfg.popup = PopupMode::from_key(v),
             "reading" => cfg.reading = parse_bool(v),
+            "assist_direct" => cfg.assist_direct = parse_bool(v),
             // v5 及更早的键名。`no_popup=1` 是用户勾过的 → 保持「一律不弹」；
             // `0` 是默认值 → 升级到自动检测（见 `load` 里的 v5→v6 说明）。
             "no_popup" | "uileless" => {
@@ -395,7 +410,8 @@ pub fn save(cfg: &Config) {
          traditional={}\n\
          learn={}\n\
          popup={}\n\
-         reading={}\n",
+         reading={}\n\
+         assist_direct={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -407,7 +423,8 @@ pub fn save(cfg: &Config) {
         cfg.traditional as u8,
         cfg.learn as u8,
         cfg.popup.key(),
-        cfg.reading as u8
+        cfg.reading as u8,
+        cfg.assist_direct as u8
     );
     // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
     // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程
@@ -451,6 +468,10 @@ mod tests {
         assert!(cfg.fullwidth, "全新配置默认应该是中文标点");
         assert!(cfg.learn, "动态词频默认开");
         assert_eq!(cfg.popup, PopupMode::Auto, "弹窗策略默认自动");
+        assert!(
+            !cfg.assist_direct,
+            "3 键直出默认关：那 1 键更可能是在打下一个音节"
+        );
     }
 
     #[test]
@@ -462,6 +483,13 @@ mod tests {
         assert!(cfg.traditional);
         assert!(!cfg.learn);
         assert_eq!(cfg.popup, PopupMode::Never);
+        assert!(!cfg.assist_direct, "没写这个键时保持默认关");
+    }
+
+    #[test]
+    fn parses_assist_direct() {
+        let (cfg, _) = parse("assist_direct=1\n");
+        assert!(cfg.assist_direct);
     }
 
     /// v4 的键名 `uileless` 还要认：用户明确开过的开关不能在升级时丢掉。

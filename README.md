@@ -2,8 +2,8 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.2.5** ｜ 安装包 1.59 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
-不联网、不弹窗、无账号 ｜ 176 项单元测试
+**当前版本 0.2.6** ｜ 安装包 1.59 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46492 ｜
+不联网、不弹窗、无账号 ｜ 179 项单元测试
 
 > 项目主页（GitHub Pages）在 [`index.html`](index.html)，单文件、零依赖，直接当落地页用。
 > 启用方式：仓库 `Settings → Pages`，Source 选 `main` 分支根目录即可。
@@ -353,6 +353,11 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 键盘不可能知道你心里想的是哪个，所以辅助码需要一个明确的进入信号（搜狗双拼同一个
 设计）。两条路都留着：`dd` → `Tab` → `j`，或者 `ddj` → `Tab`。
 
+**3 键直出单字（设置里可选，默认关）**：打开之后 `ddj` 不用按 `Tab`，第 3 键直接
+当形码，第一位就是「带」。代价很实在——`代价`、`待机` 这类词也因此打不出来（退格
+一次会记住「这次别拆」，能正常打）。双拼每个音节固定 2 键，所以只有「1 个完整音节
++ 1 个孤立键」这唯一一种情况会有歧义，开关只管这 3 键；`ddfj` 这种 4 键码不归它管。
+
 小鹤那一列用的是**官方码**（`react.xhup.club` 反查出来是什么就是什么），不是自己
 推算的。早先按 IDS 部件分解推过一版，和官方只有 12% 一致——官方有「带上 / 寿上 /
 具上 / 既左」这类专用字根，还有「孰大优先 / 相交不拆 / 插隔不取」这些得看笔顺才
@@ -611,7 +616,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 176 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 179 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -651,7 +656,7 @@ unregister.cmd    :: 全部移除
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.2.5.exe
+# 产物：dist\Feihe-Setup-0.2.6.exe
 ```
 
 `build_setup.ps1` 做四件事：
