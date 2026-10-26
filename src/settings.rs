@@ -664,10 +664,15 @@ unsafe fn create() -> Option<HWND> {
     RegisterClassW(&wc);
 
     let (win_w, win_h) = window_size(W, CLIENT_H);
+    // 标题里带版本号：用户报问题、我们查「是哪一版」全靠这一行。手写常量迟早和
+    // Cargo.toml 对不上（以前就吃过「用户装的是 0.2.2、代码是 0.2.5」的亏），
+    // 所以直接从编译期包版本取，改版本号不用再回来改这里。
+    let title = format!("飞鹤输入法 · 设置 · {}", env!("CARGO_PKG_VERSION"));
+    let title_w = to_wide(&title);
     let h = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         CLASS_NAME,
-        w!("飞鹤输入法 · 设置"),
+        PCWSTR(title_w.as_ptr()),
         STYLE,
         CW_USEDEFAULT,
         CW_USEDEFAULT,

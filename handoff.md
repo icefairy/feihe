@@ -196,6 +196,15 @@ search_word=带&sign=9138f90c40cf1a8666380cfe2f499f3e
 后续字母进辅助码而不是编码。**别改成「不置 assist_active、把 3 键整体保留成编码」**——
 那样 `maybe_split` 会拿 `ddj` 去分词，跟新逻辑打架。
 
+## 设置窗标题带版本号
+
+标题是 `飞鹤输入法 · 设置 · {env!("CARGO_PKG_VERSION")}`，**不要写成字面量**。
+手写常量迟早和 `Cargo.toml` 对不上——之前就吃过「用户报的现象其实是旧安装」的亏
+（注册表 `DisplayVersion` 是 0.2.2，代码已经 0.2.5，绕了一圈才定位）。让用户截个
+设置窗的图就能确认版本，比问「你装的是哪一版」可靠。
+
+`w!()` 宏只吃编译期字面量，所以这里用 `format!` + `to_wide` 再传给 `CreateWindowExW`。
+
 ## 全拼模式
 
 设置窗「输入模式」里的双拼 / 全拼单选。`config::pinyin_mode()` 读的是一个 `AtomicBool`
@@ -1220,7 +1229,7 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 
 ```
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# → dist\Feihe-Setup-0.2.6.exe（1.59 MB，内嵌 3752 KB + 3793 KB 的双架构 DLL）
+# → dist\Feihe-Setup-0.2.7.exe（1.59 MB，内嵌 3752 KB + 3793 KB 的双架构 DLL）
 ```
 
 设计取舍：
