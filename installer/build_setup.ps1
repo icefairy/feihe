@@ -27,7 +27,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
-$version = '0.2.3'
+$version = '0.2.4'
 
 function Write-Step($msg) { Write-Host "`n[setup] $msg" -ForegroundColor Cyan }
 

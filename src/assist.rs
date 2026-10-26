@@ -42,6 +42,18 @@ impl AssistMode {
             AssistMode::Xiaohe => "xiaohe",
         }
     }
+
+    /// 这个方案的辅助码最长几键。
+    ///
+    /// 用途是「先连打、再按 Tab」时判断末尾几个键该挪进辅助码：自然码只取部首
+    /// 一个字母，小鹤是首末部件两键。`Tab` 进入辅助码态时按这个上限从长到短试。
+    pub fn max_keys(&self) -> usize {
+        match self {
+            AssistMode::Off => 0,
+            AssistMode::Ziranma => 1,
+            AssistMode::Xiaohe => 2,
+        }
+    }
 }
 
 type Table = HashMap<char, (&'static str, &'static str)>;

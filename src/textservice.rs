@@ -287,6 +287,62 @@ impl FeiheTextService {
         }
     }
 
+    /// 带辅助码查一次，只关心「筛出东西没有」。
+    fn assist_hit(prefix: &str, assist: &str, mode: AssistMode) -> bool {
+        if prefix.is_empty() || assist.is_empty() {
+            return false;
+        }
+        let hit = if config::pinyin_mode() {
+            dict::lookup_pinyin_filtered(prefix, assist, mode, 1)
+        } else {
+            dict::lookup_filtered(prefix, assist, mode, 1)
+        };
+        !hit.is_empty()
+    }
+
+    /// 「先连打、再按 Tab」：把编码末尾的辅助码拆出来。
+    ///
+    /// 自然码 / 小鹤音形的习惯是**一个码打完就完**（自然码 拼音+部首、小鹤 拼音+首末形），
+    /// 所以很多人会先把 `ddj` 敲完再想起辅助码。这时按 `Tab`，若末尾 1~2 键能当辅助码
+    /// 用（剥掉之后还能出候选），就挪过去，组合串直接变成 `dd j`——不用退格重来。
+    ///
+    /// 判据里那条**前缀长度必须是偶数**是关键：双拼每个音节恰好两键，剥完还剩奇数
+    /// 长度说明剥的是「半个音节」（`de` + Tab 不该把 `e` 当成辅助码），这种情况一律不拆。
+    ///
+    /// 全拼模式不走这套：音节长度 1~6 不定，奇偶没意义，只能靠用户手动 Tab。
+    ///
+    /// 抽成纯函数是为了能单测（`self` 里全是 COM 句柄，测试进程造不出来）。
+    fn split_trailing_assist(
+        code: &str,
+        max: usize,
+        mut hit: impl FnMut(&str, &str) -> bool,
+    ) -> Option<(String, String)> {
+        if max == 0 || code.contains(Self::SEP) {
+            return None;
+        }
+        let bytes = code.as_bytes();
+        if !bytes.iter().all(u8::is_ascii_lowercase) {
+            return None;
+        }
+        for t in (1..=max).rev() {
+            // 剩不下两个键（至少一个完整音节）就试下一个更短的上限——`ddj` + 小鹤
+            // 上限 2 时，2 键试不了但 1 键能试，所以是 continue 不是 break
+            if bytes.len() < t + 2 {
+                continue;
+            }
+            let cut = bytes.len() - t;
+            // 剩下半个音节就不拆：`de` 的 `e` 不是辅助码
+            if cut % 2 != 0 {
+                continue;
+            }
+            let (head, tail) = code.split_at(cut);
+            if hit(head, tail) {
+                return Some((head.to_string(), tail.to_string()));
+            }
+        }
+        None
+    }
+
     /// 把「按错读音打」的词追加到候选末尾（`zhongqing` → 重庆）。
     ///
     /// 抽成纯函数是为了能单测：`refresh()` 要 `&self`，而 `self` 里全是 COM 句柄，
@@ -2142,7 +2198,21 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 }
                 let next = !self.assist_active.get();
                 self.assist_active.set(next);
-                if !next {
+                if next {
+                    // 连打之后再按 Tab：末尾的形码该挪进辅助码（`ddj` → `dd j`）。
+                    // 只动编码，不动候选——随后 `refresh` 统一重算。
+                    if !config::pinyin_mode() {
+                        let code = self.code.borrow().clone();
+                        if let Some((head, tail)) =
+                            FeiheTextService::split_trailing_assist(&code, mode.max_keys(), |p, a| {
+                                FeiheTextService::assist_hit(p, a, mode)
+                            })
+                        {
+                            self.code.borrow_mut().clone_from(&head);
+                            self.assist.borrow_mut().clone_from(&tail);
+                        }
+                    }
+                } else {
                     self.assist.borrow_mut().clear();
                 }
                 self.refresh();
@@ -2787,6 +2857,75 @@ mod tests {
     fn query_code_strips_separator() {
         assert_eq!(FeiheTextService::query_code("ni'hao").as_ref(), "nihao");
         assert_eq!(FeiheTextService::query_code("vhsj").as_ref(), "vhsj");
+    }
+
+    /// 「先连打、再按 Tab」：末尾的形码该拆出去，但**不能拆掉半个音节**。
+    ///
+    /// 用户是拿自然码 / 小鹤的习惯先把整个码敲完（`ddj`）再按 Tab 的，老行为下
+    /// 这一按只是「进入辅助码态但辅助码为空」，接着敲的 `j` 会跟 `ddj` 拼成前缀，
+    /// 查了个空——用户看到的就是「辅助码对我没用」。
+    #[test]
+    fn split_trailing_assist_takes_shape_keys() {
+        let always = |_: &str, _: &str| true;
+        // 自然码 1 键：dd + j
+        assert_eq!(
+            FeiheTextService::split_trailing_assist("ddj", 1, always),
+            Some(("dd".into(), "j".into()))
+        );
+        // 小鹤 2 键：先试 2 键，成了就不再多试
+        assert_eq!(
+            FeiheTextService::split_trailing_assist("ddj", 2, |h, t| h == "dd" && t == "j"),
+            Some(("dd".into(), "j".into()))
+        );
+        assert_eq!(
+            FeiheTextService::split_trailing_assist("ddfj", 2, always),
+            Some(("dd".into(), "fj".into()))
+        );
+    }
+
+    /// 完码不能被拆：`de` 是按 Tab 想筛「的」，不是把 `e` 当辅助码。
+    /// 判据是「剥完剩下的前缀长度必须是偶数」——双拼每个音节固定两键。
+    #[test]
+    fn split_trailing_assist_keeps_whole_syllable() {
+        let always = |_: &str, _: &str| true;
+        assert_eq!(FeiheTextService::split_trailing_assist("de", 1, always), None);
+        assert_eq!(FeiheTextService::split_trailing_assist("de", 2, always), None);
+        // 单键码更不可能拆
+        assert_eq!(FeiheTextService::split_trailing_assist("d", 2, always), None);
+        // 手动分隔符 / 非字母：不碰
+        assert_eq!(FeiheTextService::split_trailing_assist("dd'j", 1, always), None);
+        assert_eq!(FeiheTextService::split_trailing_assist("dd1", 1, always), None);
+        // 剥了也筛不出东西，就别剥（用户可能只是打错了一个键）
+        assert_eq!(
+            FeiheTextService::split_trailing_assist("ddj", 1, |_, _| false),
+            None
+        );
+    }
+
+    /// 真表验证：`dd` + `j`（自然码，部首 巾）确实能筛出「带」，
+    /// `dd` + `fj`（小鹤，带上 + 巾）也能。这条把「拆出来的码真的有用」钉住——
+    /// 上面几条只用假闭包，码表坏了它们照样过。
+    #[test]
+    fn split_trailing_assist_hits_real_table() {
+        let _g = dict::tests::SCHEME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        dict::set_scheme(Scheme::Xiaohe);
+        for (mode, code) in [
+            (AssistMode::Ziranma, "ddj"),
+            (AssistMode::Xiaohe, "ddfj"),
+        ] {
+            let got = FeiheTextService::split_trailing_assist(code, mode.max_keys(), |p, a| {
+                FeiheTextService::assist_hit(p, a, mode)
+            });
+            assert!(got.is_some(), "{mode:?} 的 {code} 应该能拆");
+            let (_, assist) = got.unwrap();
+            let hit = dict::lookup_filtered("dd", &assist, mode, 45);
+            assert!(
+                hit.iter().any(|w| &**w == "带"),
+                "{mode:?} dd + {assist} 应该筛出「带」，实际 {hit:?}"
+            );
+        }
     }
 
     /// 自造词的准入规则：`li`+`mk`+`yr` → 李明远，四道门全过才记。

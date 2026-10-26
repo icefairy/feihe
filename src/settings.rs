@@ -35,7 +35,7 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 636;
+const CLIENT_H: i32 = 654;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -436,8 +436,17 @@ unsafe fn build(h: HWND) {
     radio(h, "关闭", 110, y - 2, 70, ID_ASSIST_OFF, true);
     radio(h, "自然码辅助码", 190, y - 2, 120, ID_ASSIST_ZRM, false);
     radio(h, "小鹤音形", 320, y - 2, 100, ID_ASSIST_XH, false);
+    // 辅助码必须按 Tab 才生效，这一步没写出来就没人知道（用户真的是打完了才想起）
+    label(
+        h,
+        "Tab 进出；自然码 1 键 / 小鹤 2 键，先打完码再按 Tab 也认",
+        16,
+        y + 18,
+        428,
+        0,
+    );
 
-    y += 40;
+    y += 58; // 上面多了一行说明
     label(h, "皮肤", 16, y, 90, 0);
     radio(h, "浅色", 110, y - 2, 70, ID_SKIN_LIGHT, true);
     radio(h, "深色", 190, y - 2, 70, ID_SKIN_DARK, false);
