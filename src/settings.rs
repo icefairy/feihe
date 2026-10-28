@@ -21,6 +21,8 @@ use windows::Win32::System::LibraryLoader::{
 use windows::Win32::UI::Controls::Dialogs::*;
 // EnableWindow 在 windows-rs 里归到了 KeyboardAndMouse 模块（跟着 user32 的分组走）
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+// 打开项目主页走 shell（由系统的「默认浏览器」决定，不是我们起进程）
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::assist::AssistMode;
@@ -35,7 +37,13 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 810;
+const CLIENT_H: i32 = 900;
+
+/// 项目主页。设置窗最下面显示它，点按钮直接用默认浏览器打开。
+///
+/// 写在代码里而不是读某个配置：地址是产品身份的一部分，改了要发版，不该被用户
+/// 或者一次失败的写盘悄悄改掉。
+const ABOUT_URL: &str = "https://github.com/icefairy/feihe";
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -72,6 +80,8 @@ const ID_IMPORT: i32 = 151;
 const ID_EXPORT: i32 = 152;
 const ID_CLOSE: i32 = 153;
 const ID_COMPILE: i32 = 154;
+const ID_ABOUT: i32 = 155;
+const ID_ABOUT_LINK: i32 = 156;
 
 static WND: AtomicIsize = AtomicIsize::new(0);
 
@@ -124,6 +134,30 @@ unsafe fn mk(
 
 fn label(parent: HWND, text: &str, x: i32, y: i32, w: i32, id: i32) -> HWND {
     unsafe { mk(parent, w!("STATIC"), text, WINDOW_STYLE(0), x, y, w, 20, id) }
+}
+
+/// 看起来像文字的「链接」：静态控件加 `SS_NOTIFY`，点一下会发一条 `STN_CLICKED`
+/// 到父窗口（`WM_COMMAND` 的 code 正好是 0，和普通按钮点击走同一条路）。
+///
+/// 不用 SysLink 是因为它默认带下划线和蓝色、和这里「一行灰色小字」的排版不搭；
+/// 也不用自绘，设置窗整体走原生控件。
+fn link_label(parent: HWND, text: &str, x: i32, y: i32, w: i32, id: i32) -> HWND {
+    unsafe {
+        mk(
+            parent,
+            w!("STATIC"),
+            text,
+            // SS_NOTIFY = 0x100：静态控件默认「点不动」，只发 STN_CLICKED 才需要它。
+            // windows-rs 0.62 没有导出这个常量（连 WindowsAndMessaging 里都没有），
+            // 所以写数值——这是静态控件的稳定 ABI，不会变。
+            WINDOW_STYLE(0x0000_0100),
+            x,
+            y,
+            w,
+            20,
+            id,
+        )
+    }
 }
 
 fn radio(parent: HWND, text: &str, x: i32, y: i32, w: i32, id: i32, group_start: bool) -> HWND {
@@ -488,6 +522,8 @@ unsafe fn on_command(h: HWND, id: i32) {
             let _ = ShowWindow(h, SW_HIDE);
             return;
         }
+        // 项目主页：交给默认浏览器，自己不联网
+        ID_ABOUT | ID_ABOUT_LINK => open_about(),
         _ => return,
     }
 
@@ -495,6 +531,23 @@ unsafe fn on_command(h: HWND, id: i32) {
     statusbar::refresh();
     crate::candidate::refresh_theme();
     sync(h);
+}
+
+/// 用默认浏览器打开项目主页。
+///
+/// 走 shell 而不是自己 `CreateProcess`：用哪个浏览器、是不是要提权，全由系统决定；
+/// 也不校验成功与否——设置窗不该因为浏览器打不开而弹错误框。
+unsafe fn open_about() {
+    let op = to_wide("open");
+    let url = to_wide(ABOUT_URL);
+    let _ = ShellExecuteW(
+        None,
+        PCWSTR(op.as_ptr()),
+        PCWSTR(url.as_ptr()),
+        PCWSTR::null(),
+        PCWSTR::null(),
+        SW_SHOWNORMAL,
+    );
 }
 
 unsafe fn build(h: HWND) {
@@ -673,6 +726,35 @@ unsafe fn build(h: HWND) {
         428,
         0,
     );
+
+    // 关于：一段自述 + 仓库地址。地址做成按钮而不是纯文字，用户不用手抄 URL。
+    // 放在最下面（而不是最上面）是因为它属于「装完看一次就完」的信息，不该挤占
+    // 真正要改的设置项。
+    let about_y = y + 26 + rows * 20 + 4 + 30;
+    // 内容总高度是算出来的、`CLIENT_H` 是写死的，两者迟早会漂。漂了的表现是
+    // 「关于」压到「关闭」按钮上（高 DPI 下才看得出来，本地测不出），
+    // 所以在调试构建里直接断死：改了上面任何一块间距，跑一次 debug 就能发现。
+    debug_assert!(
+        about_y + 42 < CLIENT_H - 40,
+        "设置窗内容装不下了：about_y={about_y}, CLIENT_H={CLIENT_H}"
+    );
+    label(
+        h,
+        "关于：开源输入法 · Rust + windows-rs 实现 · 不联网、不弹窗、无账号",
+        16,
+        about_y,
+        428,
+        0,
+    );
+    link_label(
+        h,
+        &format!("GitHub：{ABOUT_URL}"),
+        16,
+        about_y + 22,
+        300,
+        ID_ABOUT_LINK,
+    );
+    push(h, "打开项目主页", 320, about_y + 19, 124, 26, ID_ABOUT);
 
     push(h, "关闭", W - 106, CLIENT_H - 40, 90, 30, ID_CLOSE);
 }

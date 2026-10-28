@@ -169,7 +169,7 @@ $mb = [math]::Round((Get-Item $setup).Length / 1MB, 2)
 
 Write-Host ''
 Write-Host "[setup] OK -> $setup ($mb MB)" -ForegroundColor Green
-Write-Host '        双击运行即可（用户级安装，不弹 UAC）。'
+Write-Host '        双击运行即可（需要管理员：注册输入法要写 HKLM，会弹一次 UAC）。'
 
 # ── 5. 端到端自检（可选）────────────────────────────────────────
 # 为什么需要：安装包曾经因为用 CopyFiles 部署（运行时拷贝、源路径是构建机路径）
