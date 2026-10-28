@@ -56,11 +56,28 @@ pub fn chinese() -> bool {
     CHINESE.load(Ordering::Acquire)
 }
 
-/// 写中英开关：先改进程内缓存（立刻生效），再同步给 MSCTF。
+/// 写中英开关：先改进程内缓存（立刻生效），再同步给 MSCTF，最后记进配置。
+///
 /// 返回 compartment 是否写成功——写失败不影响我们自己的判定，只是系统那边看不到。
+///
+/// **必须落盘**：中英状态是用户按过一次 Shift（或点了浮窗）的结果，不是临时态。
+/// 不写盘的话，关掉程序再打开又回到默认值，用户会以为「切了没记住」——这正是
+/// 用户报的现象。
 pub fn set_chinese(open: bool) -> bool {
     CHINESE.store(open, Ordering::Release);
-    write_compartment(open)
+    let ok = write_compartment(open);
+    crate::config::set_chinese(open);
+    ok
+}
+
+/// 激活时用配置里的值初始化中英状态。
+///
+/// 和 `set_chinese` 的区别：**不写盘**。`Activate` 每个进程都会走一遍，如果这里
+/// 也落盘，两个进程交替激活就会互相覆盖（A 存中文、B 存英文，谁最后激活算谁的）。
+/// 配置只由「用户明确切换」来写。
+pub fn init_chinese(open: bool) {
+    CHINESE.store(open, Ordering::Release);
+    write_compartment(open);
 }
 
 fn write_compartment(open: bool) -> bool {

@@ -21,6 +21,7 @@ mod insert;
 mod phrase;
 mod pin;
 mod quick;
+mod secure;
 mod settings;
 mod shuangpin;
 mod softkbd;

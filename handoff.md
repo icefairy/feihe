@@ -628,6 +628,92 @@ NSIS 完成页也加了一行同样的说明。
 - 新增 crate feature `Win32_System_DataExchange`（只是一个绑定声明，链接时只带进实际
   用到的两个函数，体积无可测量变化）。
 
+## 密码框：一个键都不接管（0.3.6）
+
+用户报「在某些密码框里输入也会弹出候选，然后误输入了中文」。这不是显示策略问题，
+是权限问题——密码框里的按键只属于用户和那个应用。
+
+两道判据，任一命中即拦：
+
+| 判据 | 实现 | 覆盖 |
+|---|---|---|
+| input scope 含 `IS_PASSWORD` | `ITfContext::GetAppProperty(GUID_PROP_INPUTSCOPE)` → `ITfReadOnlyProperty::GetValue(ec)` → `ITfInputScope::GetInputScopes` | Chromium/Electron、UWP、WinUI、新 WPF |
+| 窗口样式 `ES_PASSWORD`(0x20) | `GetActiveView().GetWnd()` + `GetWindowLongW(GWL_STYLE)` | 经典 `Edit` / 老 `RichEdit` |
+
+只做前者会漏掉最古老那批程序（它们根本不设 input scope），而那批恰恰最需要保护。
+常量没走 windows crate（`ES_PASSWORD` 在 `Win32_UI_Controls` 下），为一个 0x20 再开
+一个 feature 不值——单测 `secure::tests::es_password_bit_is_right` 钉住这个魔数。
+
+### GetValue 要 edit cookie，而 OnKeyDown 没有
+
+`ITfReadOnlyProperty::GetValue(ec, range)` 的 `ec` 只能从 edit session 里拿到。
+所以在 `is_password` 里 request 一个 `TF_ES_SYNC | TF_ES_READ` 会话，在
+`DoEditSession(ec)` 里读，用 `Arc<AtomicBool>` 把结果递回来（`#[implement]` 的对象
+要求 `Send + Sync`，`Cell` 不行）。
+
+这个开销不能付在每次按键上，所以 `textservice` 按 **context 指针**缓存
+（`pw_ctx: Cell<isize>` + `pw: Cell<bool>`）：同一个输入位置只探一次。
+`Activate` 时清 0 强制重探——指针被复用（旧 context 销毁、新 context 落到同一地址）
+是最坏情况，激活至少能纠正一次。
+
+### 拦在哪一层
+
+`OnKeyDown` 里、`note_shift_combo` 之后、`is_shift` 之前，直接
+`return Ok(BOOL::from(false))`。放这个位置有两个理由：
+
+- 在 `note_shift_combo` 之后：单击 Shift 切中英在密码框里要照常可用（想切英文登录是合理需求）。
+- 返回 FALSE 而不是「不弹窗但继续组合」：一旦开始组合，字母就归我们管了，
+  后面任何一次回车/空格都可能把中文写进去。密码框里**连组合都不许开始**。
+
+`OnTestKeyDown` 没改：它返回 TRUE 只是「让我看一眼」，最终由 `OnKeyDown` 的返回值决定，
+不影响键最终进应用。
+
+## 3 键直出猜错必须能自己退回（0.3.6）
+
+用户勾着「3 键直出」，输入 `xrji`（璇玑）**什么都没有**，候选窗都不弹。
+
+链路：`xrj` 长度 3 → `auto_assist_split` 拆成 `xr` + `j`；判定用
+`assist_hit_single("xr","j")`，而 `xr`+`j` 恰好筛得出「铉/券」（`first()` 是单字），
+于是判定「拆得对」。第 4 键 `i` 进辅助码 → `xr`+`ji` **一条候选都没有** →
+`show_candidates` 收到空列表 → `hide_candidates`。整串 `xrji` 本来有「璇玑」，
+只是被那次拆分挡在外面。
+
+问题的本质不是「猜错了」（猜错不可避免：双拼 4 键码的前 3 键和「1 音节 + 1 形码」
+长得一模一样），而是**猜错之后就锁死了**——用户没有任何办法把自己救出来，
+除了 Esc 重打（而他还不知道自己该 Esc，因为他看到的是"没反应"）。
+
+修法 `undo_auto_assist`：自动拆出来的辅助码（`assist_auto` 位），加一个键之后
+如果「码 + 辅助码」为空、而**并回整串查得到东西**，就把辅助码并回编码。
+判据抽成纯函数 `assist_should_fold_back(auto, code, assist, hit, merged_hit)`。
+
+三个必须卡的边界：
+
+- **只在自动拆的辅助码上做**。用户按 `Tab` 拆的是明确意图，加多少个字母都该继续筛。
+- **并回整串也必须查得到才并**。并回去还是空的（真打错了）就别折腾，退格能自己恢复。
+- 并回之后置 `assist_direct_denied`：这一轮输入不再自动拆，免得用户在两个状态间反复横跳。
+
+回归测试 `textservice::tests::wrong_auto_split_folds_back`（真实词库：`xr`+`j` 非空、
+`xr`+`ji` 空、`xrji` 非空）+ `fold_back_needs_auto_and_a_better_whole_code`（六个开关位）。
+
+**通用原则**：任何「替用户猜」的自动行为，都必须有一条「猜错自动退回」的路径。
+只给入口不给退路的优化，在猜错的那一刻就是 bug——而且是最难解释的那种（用户看到的是
+"什么都没发生"）。
+
+## 中英状态进配置（0.3.6）
+
+中英状态原来只活在 `insert::CHINESE` 这个进程内原子量里，进程一退就没了。
+用户报「每次打开输入法都默认英文」（实际上是每次都是编译期默认值，跟他上次的选择无关）。
+
+- `config.chinese`（CONFIG_VER 8→9，缺省 true = 中文，老用户升级后手感不变）。
+- `insert::set_chinese`（用户显式切换）→ 落盘；`insert::init_chinese`（`Activate` 时）
+  → **只初始化和同步 compartment，不落盘**。这条区分很重要：`Activate` 每个进程都跑，
+  若它也写盘，两个进程交替激活就会互相覆盖（谁最后激活算谁的）。
+- 配置里只存「初值」：进程内的切换照旧只改原子量，不会因为别处改了配置就打断正在打的字。
+
+已知取舍：多进程之间不同步。在 A 窗口切英文、B 窗口仍是中文（和 0.3.5 一样）。
+要真正全局同步，得让 `refresh_if_changed` 也把 `chinese` 灌进 `insert` —— 那会让
+"在设置窗里保存一次就把所有窗口切成英文"，比不同步更让人困惑。
+
 ## 多行候选窗（0.3.5）
 
 单行一页 9 个，`ji` 这种码 14 页，翻着找字很累。现在第一次按 `+`/`=`/`↓` 时窗口

@@ -154,6 +154,15 @@ pub struct Config {
     /// 5 行就是 45 个一屏，找字快得多。行数是「一次能看多少」，不是「一次翻多少」：
     /// `=` 仍然一次只挪一行（见 `textservice::turn_page`），否则翻过头就等于没看见。
     pub candidate_rows: usize,
+    /// 中文态（true）/ 英文态（false）。
+    ///
+    /// 以前中英状态只活在 `insert::CHINESE` 这个原子量里，进程一退就没了：用户按
+    /// Shift 切到英文、关掉程序，下次打开又回到中文（或者反过来）。而中英状态是
+    /// **用户明确按过一次键**的结果，属于设置，不该每次重来。
+    ///
+    /// 这里只存「初值」：`Activate` 时读出来初始化 `insert`，之后进程内的切换照旧
+    /// 只改进程内缓存（顺带写回这一项），不会因为别处改了配置就打断正在打的字。
+    pub chinese: bool,
 }
 
 impl Config {
@@ -180,6 +189,8 @@ impl Config {
         assist_direct: false,
         // 默认 5 行：一屏 45 个，覆盖 `ji`/`yi` 这类大字集的大半，又不会糊满屏幕。
         candidate_rows: 5,
+        // 默认中文：中文输入法装完就该能直接打中文。
+        chinese: true,
     };
 }
 
@@ -397,7 +408,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 8;
+const CONFIG_VER: u32 = 9;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -437,6 +448,9 @@ pub fn load() -> Config {
     // 这个开关的默认值就是「保持旧行为」，老用户升级后手感不能变。
 
     // v7 → v8：新增 `candidate_rows`（翻页时摊开几行）。缺省 5。
+    //
+    // v8 → v9：新增 `chinese`（中英状态）。缺省 true = 中文，和以前「每次启动都是
+    // 中文」完全一致，老用户升级后不会突然变英文。
     // 这是**新增显示能力**，不打开也完全不影响原来的单行翻页，所以老用户升级后
     // 直接拿到 5 行——没人会因为「候选变多了」而不会打字。
 
@@ -489,6 +503,7 @@ fn parse(text: &str) -> (Config, u32) {
             "reading" => cfg.reading = parse_bool(v),
             "assist_direct" => cfg.assist_direct = parse_bool(v),
             "candidate_rows" => cfg.candidate_rows = v.parse().map_or(5, clamp_rows),
+            "chinese" => cfg.chinese = parse_bool(v),
             // v5 及更早的键名。`no_popup=1` 是用户勾过的 → 保持「一律不弹」；
             // `0` 是默认值 → 升级到自动检测（见 `load` 里的 v5→v6 说明）。
             "no_popup" | "uileless" => {
@@ -572,6 +587,17 @@ pub fn refresh_if_changed() -> bool {
     changed
 }
 
+/// 记下中英状态（用户按 Shift / 点浮窗切换时调用）。
+///
+/// 单独一个入口而不是让 `insert` 直接调 `update`：`insert::set_chinese` 在按键
+/// 路径上，这里要保证「先改进程内状态、再落盘」，落盘失败也不能影响打字。
+pub fn set_chinese(open: bool) {
+    if get().chinese == open {
+        return; // 没变就不写盘：切输入法/点浮窗可能连着来好几次
+    }
+    update(|c| c.chinese = open);
+}
+
 /// 改配置并立即写盘
 pub fn update(f: impl FnOnce(&mut Config)) {
     let snapshot = {
@@ -583,15 +609,13 @@ pub fn update(f: impl FnOnce(&mut Config)) {
     save(&snapshot);
 }
 
-pub fn save(cfg: &Config) {
-    // 测试进程绝不写盘。`cargo test` 里有好几个用例会调 `set_pinyin_mode()`，
-    // 那会走到 update() → save()，而测试进程里的 CFG 是默认值——一跑测试就把
-    // 用户真实的 config.ini 覆盖成默认配置了。
-    if cfg!(test) {
-        return;
-    }
-    let _ = std::fs::create_dir_all(dir());
-    let text = format!(
+/// 配置 → 写盘文本。
+///
+/// 抽出来是为了能在测试里往返验证（`parse(render(cfg)) == cfg`）：写盘的键名写错、
+/// `format!` 少一个参数，都属于「跑起来才发现」的那类错，而 `save` 本身在测试里
+/// 是空实现（`cfg!(test)` 直接返回），不抽出来就一行都测不到。
+fn render(cfg: &Config) -> String {
+    format!(
         "; 飞鹤输入法配置\n\
          config_ver={CONFIG_VER}\n\
          scheme={}\n\
@@ -607,7 +631,8 @@ pub fn save(cfg: &Config) {
          popup={}\n\
          reading={}\n\
          assist_direct={}\n\
-         candidate_rows={}\n",
+         candidate_rows={}\n\
+         chinese={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -621,8 +646,20 @@ pub fn save(cfg: &Config) {
         cfg.popup.key(),
         cfg.reading as u8,
         cfg.assist_direct as u8,
-        clamp_rows(cfg.candidate_rows)
-    );
+        clamp_rows(cfg.candidate_rows),
+        cfg.chinese as u8
+    )
+}
+
+pub fn save(cfg: &Config) {
+    // 测试进程绝不写盘。`cargo test` 里有好几个用例会调 `set_pinyin_mode()`，
+    // 那会走到 update() → save()，而测试进程里的 CFG 是默认值——一跑测试就把
+    // 用户真实的 config.ini 覆盖成默认配置了。
+    if cfg!(test) {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dir());
+    let text = render(cfg);
     // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
     // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程
     // 读到「已截断但还没写完」的半截配置（丢设置）。改名是原子的。
@@ -753,6 +790,27 @@ mod tests {
     }
 
     /// 候选行数：缺省 5；手改配置写到离谱的值（0 / 99 / 乱写）要夹回 1..=9。
+    /// 中英状态要能落盘、能读回；老配置没有这个键时必须回到中文。
+    #[test]
+    fn chinese_state_round_trips() {
+        assert!(Config::DEFAULT.chinese, "全新配置默认中文");
+        assert!(parse("").0.chinese, "缺键 = 中文");
+        assert!(!parse("chinese=0\n").0.chinese);
+        assert!(parse("chinese=1\n").0.chinese);
+
+        // 0.3.5 及更早的配置里没有 `chinese`，升级后不能把用户变成英文
+        let (cfg, ver) = parse("config_ver=8\nfullwidth=1\n");
+        assert_eq!(ver, 8);
+        assert!(cfg.chinese);
+
+        // save 的文本能被 parse 读回来（键名拼错、漏格式化参数都会在这里炸）
+        let mut c = Config::DEFAULT;
+        c.chinese = false;
+        let text = render(&c);
+        assert!(text.contains("chinese=0"), "写盘文本里必须有 chinese=0：{text}");
+        assert!(!parse(&text).0.chinese);
+    }
+
     #[test]
     fn candidate_rows_defaults_and_clamps() {
         assert_eq!(parse("").0.candidate_rows, 5);

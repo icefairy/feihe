@@ -102,6 +102,15 @@ pub struct FeiheTextService {
     /// 退格回到 `dd` 后再打 `j` 又被拆一次，死循环。拒绝一次就放过，直到这次
     /// 组合结束（上屏 / Esc）——用户真想用辅助码还有 `Tab`。
     assist_direct_denied: Cell<bool>,
+    /// 当前辅助码是「3 键直出」**自动**拆出来的（不是用户按的 Tab）。
+    ///
+    /// 自动拆是猜测，猜错必须能自己退回来：`xrji` 打「璇玑」，第 3 键 `xrj`
+    /// 会被拆成 `xr`+`j`（`xr`+`j` 恰好筛得出「铉/券」），第 4 键 `i` 再进辅助码
+    /// 变成 `xr`+`ji` —— 一条候选都没有，候选窗直接消失。用户看到的是
+    /// 「输入 xrji 什么都没有，连单字模式都没有」。
+    ///
+    /// 用户手动 Tab 拆的辅助码**不置这一位**：那是明确意图，加多少个字母都该继续筛。
+    assist_auto: Cell<bool>,
     /// 当前候选，已按词频降序
     candidates: RefCell<Vec<Cow<'static, str>>>,
     /// 当前页内选中索引
@@ -114,6 +123,15 @@ pub struct FeiheTextService {
     /// 翻页的步子仍然是一行，数字键仍然只认活动页——所以展开与不展开，打出来的
     /// 字完全一样，只是「能一眼看到多少」不同。
     expanded: Cell<bool>,
+    /// 上次探测过「是不是密码框」的 context（`as_raw` 指针），用来缓存结论。
+    ///
+    /// 探测要开一个同步编辑会话（`ITfReadOnlyProperty::GetValue` 要 edit cookie），
+    /// 每次按键都做一次太贵；同一个输入位置只探一次，换焦点（context 变）才重探。
+    /// `Activate` 时清 0，切输入法必定重探——指针被复用（旧 context 销毁、新 context
+    /// 落到同一地址）是最坏情况，那时至少还有一次激活能纠正。
+    pw_ctx: Cell<isize>,
+    /// 上面那个 context 是不是密码框。true 时一个键都不接管。
+    pw: Cell<bool>,
     /// 上一次算出的光标位置（屏幕坐标），翻页/移动选择时复用
     caret_x: Cell<i32>,
     caret_y: Cell<i32>,
@@ -153,10 +171,13 @@ impl FeiheTextService {
             assist: RefCell::new(String::new()),
             assist_active: Cell::new(false),
             assist_direct_denied: Cell::new(false),
+            assist_auto: Cell::new(false),
             candidates: RefCell::new(Vec::new()),
             selected: Cell::new(0),
             page: Cell::new(0),
             expanded: Cell::new(false),
+            pw_ctx: Cell::new(0),
+            pw: Cell::new(false),
             caret_x: Cell::new(0),
             caret_y: Cell::new(0),
             pending_op: RefCell::new(None),
@@ -179,6 +200,7 @@ impl FeiheTextService {
         self.assist.borrow_mut().clear();
         self.assist_active.set(false);
         self.assist_direct_denied.set(false);
+        self.assist_auto.set(false);
         self.segments.borrow_mut().clear();
         self.seg_idx.set(0);
         self.candidates.borrow_mut().clear();
@@ -424,6 +446,67 @@ impl FeiheTextService {
         self.code.borrow_mut().clone_from(&head);
         self.assist.borrow_mut().clone_from(&tail);
         self.assist_active.set(true);
+        self.assist_auto.set(true);
+    }
+
+    /// 自动拆出来的辅助码该不该并回编码（纯函数）。
+    ///
+    /// `hit` = 现在「码 + 辅助码」查得到东西吗；`merged_hit` = 并回整串之后查得到吗。
+    /// 只有「自动拆的 / 现在空 / 并回去有东西」三条同时成立才并回。
+    fn assist_should_fold_back(
+        auto: bool,
+        code: &str,
+        assist: &str,
+        hit: bool,
+        merged_hit: bool,
+    ) -> bool {
+        auto && !code.is_empty() && !assist.is_empty() && !hit && merged_hit
+    }
+
+    /// 撤销「3 键直出」猜错的那次拆分：把自动拆走的辅助码并回编码。
+    ///
+    /// 触发条件三条全满足才动：
+    /// 1. 辅助码是**自动**拆出来的（`assist_auto`）；
+    /// 2. 现在的「码 + 辅助码」一条候选都没有；
+    /// 3. 并回去之后的整串**查得到东西**。
+    ///
+    /// 第 3 条是关键：并回去还是空的（用户就是打错了）就别折腾，删字母能让它
+    /// 自己恢复，而这种时候乱改编码只会让用户更迷惑。
+    ///
+    /// 为什么必须有这个撤销：3 键直出是在「第 3 键」这个位置猜的，而双拼的
+    /// 4 键码（`xrji` → 璇玑）前 3 键正好长得像「1 个音节 + 1 个形码」。
+    /// 没有撤销时，猜错一次就把用户锁在空候选里——`xrji` 打不出「璇玑」，
+    /// 而开关默认是关的，打开它的用户（从自然码/小鹤带过来的）会以为输入法坏了。
+    fn undo_auto_assist(&self) {
+        let auto = self.assist_auto.get();
+        let code = self.code.borrow().clone();
+        let assist = self.assist.borrow().clone();
+        if !auto || code.is_empty() || assist.is_empty() {
+            return;
+        }
+        let mode = config::get().assist_mode;
+        let hit = if config::pinyin_mode() {
+            dict::lookup_pinyin_filtered(&code, &assist, mode, 1)
+        } else {
+            dict::lookup_filtered(&code, &assist, mode, 1)
+        };
+        // 并回整串（双拼下没有分隔符，直接拼）
+        let merged = format!("{code}{assist}");
+        if !FeiheTextService::assist_should_fold_back(
+            auto,
+            &code,
+            &assist,
+            !hit.is_empty(),
+            !dict::lookup(&merged, 1).is_empty(),
+        ) {
+            return;
+        }
+        self.code.borrow_mut().clone_from(&merged);
+        self.assist.borrow_mut().clear();
+        self.assist_active.set(false);
+        self.assist_auto.set(false);
+        // 本次输入别再自动拆了：用户已经用行为否掉了一次
+        self.assist_direct_denied.set(true);
     }
 
     /// 把「按错读音打」的词追加到候选末尾（`zhongqing` → 重庆）。
@@ -1999,6 +2082,10 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
             .ok()
             .and_then(|doc| unsafe { doc.GetTop() }.ok());
 
+        // 换激活就重新探测密码框：context 指针可能被系统复用，不能跨激活信
+        self.pw_ctx.set(0);
+        self.pw.set(false);
+
         // 读配置并按当前双拼方案准备词库索引（方案变了会重建，约 30ms）
         let cfg = config::load();
         dict::set_scheme(cfg.scheme);
@@ -2030,11 +2117,12 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 中英文开关。关着的时候 MSCTF 不会把按键交给 TIP，症状就是
         // 「切到飞鹤拼音后字母直接进应用、没有任何候选窗」。
         //
-        // 只有在「我们认为当前是中文态」时才强制置 1：用户主动切到英文后
-        // 不能再把它拉回来，否则他刚做的切换会被下一次激活抹掉。
-        if insert::chinese() {
+        // 初值来自配置（用户在哪个进程里切过中英，下次开机就还是那个状态）。
+        // 以前这里读的是进程内默认值 true，等于每次启动都强制回中文。
+        let chinese = config::get().chinese;
+        insert::init_chinese(chinese);
+        if chinese {
             open_keyboard(&tim, tid);
-        } else {
         }
 
         let keystroke_mgr: ITfKeystrokeMgr = tim.cast()?;
@@ -2205,6 +2293,31 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // ── Shift：单击切中英 ──────────────────────────────
         // 按下时什么也不做，键照常交给应用（大写字母要用它）；抬起时才判定。
         self.note_shift_combo(vk);
+
+        // ── 密码框：一个键都不接管 ────────────────────────
+        //
+        // 这不是「弹不弹候选」的策略问题，是权限问题：密码框里的按键只属于用户和
+        // 那个应用。以前这里没有判断，用户在登录框里打 `nihao` 会看到候选，
+        // 一个空格就把「你好」写进密码框——登录当场失败，而且没人会想到是输入法干的。
+        //
+        // 放在 Shift 之后：Shift 单击切中英在密码框里照样该能用（用户可能就想切英文）。
+        // 探测结果按 context 缓存，见 `pw_ctx` 的说明。
+        if let Ok(context) = pic.ok() {
+            let raw = context.as_raw() as isize;
+            if self.pw_ctx.get() != raw {
+                self.pw_ctx.set(raw);
+                self.pw.set(crate::secure::is_password(&context));
+            }
+            if self.pw.get() {
+                // 万一上一处留了组合串（焦点从普通框切进来的极端情况），先收干净
+                if self.is_composing() {
+                    self.clear_state();
+                }
+                self.hide_candidates();
+                return Ok(BOOL::from(false));
+            }
+        }
+
         if FeiheTextService::is_shift(vk) {
             return Ok(BOOL::from(false));
         }
@@ -2388,6 +2501,8 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 }
                 let next = !self.assist_active.get();
                 self.assist_active.set(next);
+                // 用户亲手按的 Tab，这条辅助码就是他的本意，不许再自动撤销
+                self.assist_auto.set(false);
                 if next {
                     // 连打之后再按 Tab：末尾的形码该挪进辅助码（`ddj` → `dd j`）。
                     // 只动编码，不动候选——随后 `refresh` 统一重算。
@@ -2446,6 +2561,10 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                         self.code.borrow_mut().push(ch);
                     } else if self.assist_active.get() {
                         self.assist.borrow_mut().push(ch);
+                        // 自动拆出来的辅助码，加一个字母之后一条候选都没有 →
+                        // 说明第 3 键那一下猜错了（用户其实在打更长的码）。
+                        // 趁现在退回去，别让他卡在一个空候选窗里。
+                        self.undo_auto_assist();
                     } else {
                         self.code.borrow_mut().push(ch);
                     }
@@ -3278,6 +3397,61 @@ mod tests {
             FeiheTextService::auto_assist_split("ddj", 1, |_, _| false),
             None
         );
+    }
+
+
+    /// 「3 键直出」猜错时必须能自己退回来。
+    ///
+    /// 用户报的现象：勾了 3 键直出，输入 `xrji`（璇玑）**什么都没有**，连候选窗都不弹。
+    /// 链路是：第 3 键 `xrj` 被拆成 `xr`+`j`（`xr`+`j` 确实筛得出「铉/券」，
+    /// 所以判定「拆得对」），第 4 键 `i` 进辅助码 → `xr`+`ji` 一条候选都没有 →
+    /// 候选窗收起。整串 `xrji` 本来是有「璇玑」的，只是被那次拆分挡在外面。
+    #[test]
+    fn wrong_auto_split_folds_back() {
+        let _g = dict::tests::SCHEME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        dict::set_scheme(Scheme::Xiaohe);
+        let mode = AssistMode::Xiaohe;
+
+        // 第 3 键确实会被拆：xr + j 筛得出单字
+        let got = FeiheTextService::auto_assist_split("xrj", mode.max_keys(), |p, a| {
+            FeiheTextService::assist_hit_single(p, a, mode)
+        });
+        assert_eq!(got, Some(("xr".into(), "j".into())));
+
+        // 拆完再打进第 4 键：辅助码 `ji` 一条候选都没有，但整串 `xrji` 有
+        let hit = dict::lookup_filtered("xr", "ji", mode, 1);
+        assert!(hit.is_empty(), "xr+ji 应该是空的（这正是用户看到的现象）");
+        let merged = dict::lookup("xrji", 1);
+        assert!(!merged.is_empty(), "xrji 整串必须有候选，否则没法并回去");
+        assert!(
+            FeiheTextService::assist_should_fold_back(
+                true,
+                "xr",
+                "ji",
+                !hit.is_empty(),
+                !merged.is_empty()
+            ),
+            "自动拆错 + 现在空 + 并回去有东西 → 必须并回编码"
+        );
+    }
+
+    /// 并回的四个开关位（纯逻辑）。
+    #[test]
+    fn fold_back_needs_auto_and_a_better_whole_code() {
+        use FeiheTextService as S;
+        // 正常情况：自动拆的、现在空、并回去有候选
+        assert!(S::assist_should_fold_back(true, "xr", "ji", false, true));
+        // 用户手动 Tab 拆的：不许动（那是明确意图）
+        assert!(!S::assist_should_fold_back(false, "xr", "ji", false, true));
+        // 现在筛得出东西：拆对了，别动
+        assert!(!S::assist_should_fold_back(true, "ji", "wj", true, true));
+        // 并回去也是空：用户打错了，交给退格
+        assert!(!S::assist_should_fold_back(true, "xr", "zz", false, false));
+        // 空码不算
+        assert!(!S::assist_should_fold_back(true, "", "ji", false, true));
+        assert!(!S::assist_should_fold_back(true, "xr", "", false, true));
     }
 
     /// 真表验证「筛出单字」这道门槛：`dd` + `j`（自然码，部首 巾）第一项是单字，

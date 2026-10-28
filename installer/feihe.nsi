@@ -32,7 +32,7 @@ Unicode true
 ; 这里留一个兜底值，只为「不经过 build_setup、直接跑 makensis」时能编过；
 ; 正常流程绝不会用它——两处硬编码迟早会出现「DLL 0.3.4 / 安装包 0.3.3」。
 !ifndef APP_VER
-  !define APP_VER "0.3.5"
+  !define APP_VER "0.3.6"
 !endif
 !define APP_PUBLISHER "feihe"
 !define APP_URL       "https://github.com/icefairy/feihe"
