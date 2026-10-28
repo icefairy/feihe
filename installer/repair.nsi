@@ -17,6 +17,11 @@
 ;    如果还按用户级跑，恰好在修不了的那个故障上无能为力。代价是弹一次 UAC。
 ; 5. 结果必须**看得见**：成功弹一个、失败弹一个并带上退出码。静默结束等于让用户
 ;    自己猜，而这正是「装完没有输入法」这类问题的根源。
+; 6. **先体检再动手。** 双击它的人多数只是「输入法没反应，想找个东西点一下」，
+;    注册往往是好的。跑 install_tip.ps1 -CheckOnly（同一份脚本、同一套路径常量），
+;    全对就弹「无需修复」直接退出，一个字都不写；有缺项才真的修，并把缺了哪些
+;    打进日志。这样它既是修复工具，也是一个能自证「现在到底正不正常」的体检工具
+;    ——这是安装包替代不了的那部分价值。
 ;
 ; 编译：makensis /DOUTDIR=<dist> repair.nsi
 
@@ -81,6 +86,20 @@ Section "修复"
     DetailPrint "没找到 feihe32.dll：只注册 64 位宿主"
   ${EndIf}
 
+  ; ── 先体检：本来就是好的就什么都不做 ──
+  ; 大多数双击它的场合注册是正常的（用户只是「输入法没反应，想找个东西点一下」）。
+  ; 白写一遍注册不会坏，但会让人以为真出过问题，也浪费一次 UAC 之外的等待。
+  ; 体检用的是同一份脚本、同一套路径常量，不会出现「NSIS 说好、脚本说坏」。
+  StrCpy $2 '$1 -CheckOnly'
+  DetailPrint "检查当前注册状态…"
+  nsExec::ExecToLog '$2'
+  Pop $3
+  ${If} $3 == "0"
+    MessageBox MB_ICONINFORMATION|MB_OK "当前注册状态正常，不需要修复。$\r$\n$\r$\n如果你在 Win+Space 里还是看不到「${APP_NAME}」，多半是 shell 的输入法列表缓存没刷新——注销后重新登录一次即可（比重启快）。"
+    Goto done
+  ${EndIf}
+  DetailPrint "[fix] 需要修复（上面 [need] 行是缺的项），开始重写注册…"
+
   DetailPrint "重新注册 COM / TSF 组件…"
   DetailPrint "  $1"
   nsExec::ExecToLog '$1'
@@ -92,4 +111,6 @@ Section "修复"
     MessageBox MB_ICONSTOP|MB_OK "修复失败（脚本退出码 $2）。$\r$\n$\r$\n本窗口的日志里有具体原因，最后几行就是。$\r$\n常见原因：安装目录里的 feihe.dll 被安全软件锁住，或者没有以管理员身份运行（注册要写 HKLM）。"
     SetErrorLevel 1
   ${EndIf}
+
+  done:
 SectionEnd

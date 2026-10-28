@@ -45,7 +45,11 @@
 #>
 param(
     [Parameter(Mandatory = $true)][string]$DllPath,
-    [string]$DllPath32
+    [string]$DllPath32,
+    # 只体检、不写任何东西。注册正常 exit 0，需要修复 exit 3。
+    # Feihe-Repair.exe 用它来决定「要不要真的动一遍」——用户双击修复工具时
+    # 大多数情况注册是好的，白写一遍只会让他以为出过问题。
+    [switch]$CheckOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,21 +68,12 @@ if ([IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432) {
         $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
                '-DllPath', "`"$DllPath`"")
         if ($DllPath32) { $a += @('-DllPath32', "`"$DllPath32`"") }
+        # -CheckOnly 必须一起带过去：漏了的话 32 位入口会起一个**正常注册**的
+        # 子进程，「体检」变成「悄悄改一遍」，比不做体检更糟。
+        if ($CheckOnly) { $a += '-CheckOnly' }
         & $ps64 @a
         exit $LASTEXITCODE
     }
-}
-
-# ── 必须管理员 ──────────────────────────────────────────────────
-# 注册项写到 HKLM（见文件头说明：HKCU 的话系统读不到，输入法显示成「不可用」）。
-# 非管理员时不要硬往下走——半套注册比不注册更难查。
-$isAdmin = ([Security.Principal.WindowsPrincipal] `
-    [Security.Principal.WindowsIdentity]::GetCurrent()
-).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "[FAIL] 需要管理员权限（注册项要写 HKLM，否则系统读不到，输入法会显示成「不可用」）。" -ForegroundColor Red
-    Write-Host "       请右键「以管理员身份运行」安装程序，或右键 Feihe-Repair.exe 选择「以管理员身份运行」。" -ForegroundColor Red
-    exit 2
 }
 
 $Clsid   = '{70CB823D-D08A-4B57-B8BE-08BCE2539FF3}'
@@ -97,6 +92,96 @@ if ($DllPath32) {
         throw "32-bit DLL not found: $DllPath32"
     }
     $DllPath32 = (Resolve-Path -LiteralPath $DllPath32).Path
+}
+
+# ── 只体检（-CheckOnly）：一个字都不写，只看「系统现在能不能看到我们」──
+#
+# 判定项与末尾的硬校验同源，另外多三条最容易漏的：
+#   · `InprocServer32` 指的**是不是当前这份 DLL**。换过安装目录、或者把目录搬走
+#     之后，键都在、路径是旧的，宿主加载失败——症状和「没注册」一模一样。
+#   · 当前用户的键盘列表里有没有我们。注册全对但键盘列表没加上，Win+Space 就是
+#     不列出来，用户照样用不了。
+#   · `HKCU\...\CTF\TIP\{CLSID}` 有没有残留。它是「设置里多出一个不可用的输入法」
+#     的来源，而且 `HKCU\Software\Classes` 优先级比 HKLM 高，留着会盖住新路径。
+#
+# 退出码：0 = 正常，3 = 需要修复。1/2 留给真正的失败，别混用。
+# 不需要管理员：读 HKLM 谁都能读，这样「只是想看看正不正常」的人不用点 UAC。
+if ($CheckOnly) {
+    $need = New-Object System.Collections.Generic.List[string]
+
+    $inproc64 = "HKLM:\SOFTWARE\Classes\CLSID\$Clsid\InprocServer32"
+    $cur64 = $null
+    if (Test-Path -LiteralPath $inproc64) {
+        $cur64 = (Get-ItemProperty -LiteralPath $inproc64 -ErrorAction SilentlyContinue).'(default)'
+    }
+    if (-not $cur64) {
+        $need.Add("64 位 COM 注册缺失：$inproc64")
+    } elseif ($cur64 -ne $DllPath) {
+        $need.Add("64 位 COM 注册指向别的 DLL：注册表里是 `"$cur64`"，应为 `"$DllPath`"")
+    }
+
+    $tip64 = "HKLM:\SOFTWARE\Microsoft\CTF\TIP\$Clsid"
+    if (-not (Test-Path -LiteralPath "$tip64\Category\Item\$Clsid")) {
+        $need.Add("TIP 定义缺失（64 位，Category\Item）：$tip64")
+    }
+    $lp64 = "$tip64\LanguageProfile\$LangId\$Profile"
+    if (-not (Test-Path -LiteralPath $lp64)) {
+        $need.Add("LanguageProfile 缺失（64 位）：$lp64")
+    } else {
+        $en = (Get-ItemProperty -LiteralPath $lp64 -ErrorAction SilentlyContinue).Enable
+        if ($null -eq $en -or [int]$en -ne 1) { $need.Add("LanguageProfile 的 Enable 不是 1（64 位）") }
+    }
+
+    if ($DllPath32) {
+        $inproc32 = "HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID\$Clsid\InprocServer32"
+        $cur32 = $null
+        if (Test-Path -LiteralPath $inproc32) {
+            $cur32 = (Get-ItemProperty -LiteralPath $inproc32 -ErrorAction SilentlyContinue).'(default)'
+        }
+        if (-not $cur32) {
+            $need.Add("32 位 COM 注册缺失：$inproc32")
+        } elseif ($cur32 -ne $DllPath32) {
+            $need.Add("32 位 COM 注册指向别的 DLL：注册表里是 `"$cur32`"，应为 `"$DllPath32`"")
+        }
+        $lp32 = "HKLM:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$LangId\$Profile"
+        if (-not (Test-Path -LiteralPath $lp32)) {
+            $need.Add("LanguageProfile 缺失（32 位）：$lp32")
+        }
+    }
+
+    if (Test-Path -LiteralPath "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid") {
+        $need.Add("HKCU 还留着旧的 TIP 定义（设置里会多出一个「不可用的输入法」）")
+    }
+
+    $upKey = 'HKCU:\Control Panel\International\User Profile\zh-Hans-CN'
+    $tipValue = "0804:$Clsid$Profile"
+    $inList = $false
+    if (Test-Path -LiteralPath $upKey) {
+        $inList = (@((Get-Item -LiteralPath $upKey).GetValueNames()) -contains $tipValue)
+    }
+    if (-not $inList) {
+        $need.Add("当前用户的键盘列表里没有飞鹤（Win+Space 不会列出它）")
+    }
+
+    if ($need.Count -eq 0) {
+        Write-Host "[ok] 注册状态正常，无需修复（CLSID / TIP 定义 / LanguageProfile / 键盘列表都在，且指向当前 DLL）"
+        exit 0
+    }
+    Write-Host "[need] 需要修复，共 $($need.Count) 项：" -ForegroundColor Yellow
+    foreach ($n in $need) { Write-Host "       $n" -ForegroundColor Yellow }
+    exit 3
+}
+
+# ── 必须管理员 ──────────────────────────────────────────────────
+# 注册项写到 HKLM（见文件头说明：HKCU 的话系统读不到，输入法显示成「不可用」）。
+# 非管理员时不要硬往下走——半套注册比不注册更难查。
+$isAdmin = ([Security.Principal.WindowsPrincipal] `
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "[FAIL] 需要管理员权限（注册项要写 HKLM，否则系统读不到，输入法会显示成「不可用」）。" -ForegroundColor Red
+    Write-Host "       请右键「以管理员身份运行」安装程序，或右键 Feihe-Repair.exe 选择「以管理员身份运行」。" -ForegroundColor Red
+    exit 2
 }
 
 # Registry values need an explicit type. Set-ItemProperty has NO -PropertyType
