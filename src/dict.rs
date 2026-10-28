@@ -711,6 +711,37 @@ fn top_by_rank(
     best.into_iter().map(|(_, p)| p).collect()
 }
 
+/// 往候选序列里放一条。
+///
+/// `sorted` 为真时按**码长**插入（同码长排在已有条目之后，所以用户词库天然在
+/// 核心词库前面）。这个函数存在的原因见 `collect` 里「带辅助码时两个词库都要收」
+/// 那段：两段各自已按 (码长, 行号) 有序，插进同一个序列就是归并，不用全排序。
+fn put_candidate(
+    out: &mut Vec<Cow<'static, str>>,
+    lens: &mut Vec<u8>,
+    w: Cow<'static, str>,
+    len: u8,
+    limit: usize,
+    sorted: bool,
+) {
+    if !sorted {
+        out.push(w);
+        lens.push(len);
+        return;
+    }
+    let pos = lens.iter().position(|&x| x > len).unwrap_or(lens.len());
+    // 已经满额且比现有最长的还长：这条排不进候选，直接丢
+    if pos >= limit {
+        return;
+    }
+    out.insert(pos, w);
+    lens.insert(pos, len);
+    if out.len() > limit {
+        out.pop();
+        lens.pop();
+    }
+}
+
 /// 按「用户词库优先 → 静态词库」的顺序收集候选，不做动态排序。
 ///
 /// 每个来源内部走同一套排序键 `(码长, 词频行号)`，见 `top_by_rank`。
@@ -744,6 +775,30 @@ fn collect(
 
     let pass = |w: &str| -> bool { assist::word_matches(w, mode, assist_prefix) };
 
+    // **两个词库都要收，按码长归并——「用户词库收满就直接返回」是错的。**
+    //
+    // 老逻辑是「用户词库优先，收满 limit 条就不再扫核心词库」。不带辅助码时
+    // 看着没问题（limit 不设上限），但它有一个致命副作用：**个人词库会把核心
+    // 词库整体挤出候选**。用户导入搜狗词表（5.5 万条）之后，`ia`（cha）的前几
+    // 百条候选全是「查看 / 查询 / 查的」这类两字词，核心词库的单字「查」一条
+    // 都进不来。
+    //
+    // 症状有两条：
+    //   1. 打 `ia` 找不到「查」这个字（翻页也翻不到，候选是被过滤掉的）；
+    //   2. 3 键直出的判定是「筛出的第一项必须是单字」。`ia` + 自然码 `m`（查→木）
+    //      的第一项是词「查看」，于是拒绝拆分，`iam` 被当成整串码去查，正好命中
+    //      「查明」——用户看到的就是「自然码一个辅助码打满却精确不出字」。
+    //
+    // 码长在这里就是仲裁者：单字 2 键、两字词 4 键，`top_by_rank` 已按
+    // 「码长 → 行号」排过，所以两段各自有序，把核心词库的条目按码长插进来即可，
+    // 不必全排序。同码长时先来的（用户词库）在前，保持「个人词优先」的老语义。
+    //
+    // **只在带辅助码时归并。** 不带辅助码时 `limit` 是「候选不设上限」的
+    // `usize::MAX`，用户词库永远填不满、核心词库照样会被扫到，没有必要为它
+    // 按码长插队——而且那时候 `out` 有几千条，逐条 `insert` 是 O(n²)。
+    let filtered = !assist_prefix.is_empty();
+
+
     // **带辅助码时必须先扫全量、再截断。**
     //
     // `top_by_rank` 是「按词频挑前 limit 条」，过滤发生在它之后。limit 很小时
@@ -770,10 +825,19 @@ fn collect(
                 if !pass(w) || !seen.insert(w) {
                     continue;
                 }
-                out.push(Cow::Borrowed(w));
-                lens.push(b.rank_key(which, p).0.min(u8::MAX as usize) as u8);
+                put_candidate(
+                    &mut out,
+                    &mut lens,
+                    Cow::Borrowed(w),
+                    b.rank_key(which, p).0.min(u8::MAX as usize) as u8,
+                    limit,
+                    filtered, // 带辅助码：统一按码长插；否则用户词库内部已有序，直接追加
+                );
                 if out.len() >= limit {
-                    return (out, lens);
+                    if !filtered {
+                        return (out, lens);
+                    }
+                    break; // 额度满了，剩下的位置留给核心词库
                 }
             }
         }
@@ -784,10 +848,19 @@ fn collect(
                 if !pass(w) || !seen.insert(w) {
                     continue;
                 }
-                out.push(Cow::Owned(w.to_string()));
-                lens.push(ov.rank_key(which, p).0.min(u8::MAX as usize) as u8);
+                put_candidate(
+                    &mut out,
+                    &mut lens,
+                    Cow::Owned(w.to_string()),
+                    ov.rank_key(which, p).0.min(u8::MAX as usize) as u8,
+                    limit,
+                    filtered,
+                );
                 if out.len() >= limit {
-                    return (out, lens);
+                    if !filtered {
+                        return (out, lens);
+                    }
+                    break;
                 }
             }
         }
@@ -798,14 +871,27 @@ fn collect(
     let bin = dictbin::get();
     {
         let (ps, pe) = bin.prefix_range(which, prefix);
+        // 归并时核心词库自己收满 limit 条就够：`top_by_rank` 已经按码长排过，
+        // 前 limit 条命中就是码长最短的 limit 条，后面的插不进候选。
+        let mut taken = 0usize;
         for p in top_by_rank(ps..pe, scan, |p| bin.rank_key(which, p)) {
             let w = bin.word_at(which, p);
             if !pass(w) || !seen.insert(w) {
                 continue;
             }
-            out.push(Cow::Borrowed(w));
-            lens.push(bin.rank_key(which, p).0.min(u8::MAX as usize) as u8);
-            if out.len() >= limit {
+            put_candidate(
+                &mut out,
+                &mut lens,
+                Cow::Borrowed(w),
+                bin.rank_key(which, p).0.min(u8::MAX as usize) as u8,
+                limit,
+                filtered, // 带辅助码：按码长插进用户词库那一段里
+            );
+            taken += 1;
+            if filtered && taken >= limit {
+                break;
+            }
+            if !filtered && out.len() >= limit {
                 return (out, lens);
             }
         }
@@ -930,6 +1016,39 @@ pub fn import_from(path: &Path) -> Result<(usize, Option<(usize, usize)>), Strin
 pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
+
+
+    /// 带辅助码时，核心词库的短码单字不能被个人词库挤出候选。
+    ///
+    /// 用户报的现场：导入搜狗个人词表后打 `ia` + 自然码 `m`（查→木），候选全是
+    /// 「查看 / 查询 / 查的」这类两字词，单字「查」连一屏都进不去。3 键直出的
+    /// 「第一项必须是单字」判定因此不成立、拒绝拆分，`iam` 被当成整串码查，
+    /// 正好命中「查明」——用户看到的就是「自然码一个辅助码打满却精确不出字」。
+    ///
+    /// 这里只断言归并语义，不碰真实词库内容（个人词库随用户导什么而变）。
+    #[test]
+    fn merged_candidates_keep_short_code_from_static_dict() {
+        let mut out: Vec<Cow<'static, str>> = Vec::new();
+        let mut lens: Vec<u8> = Vec::new();
+        // 个人词库：三条 4 键两字词把 3 个额度占满
+        for w in ["查看", "查询", "查的"] {
+            put_candidate(&mut out, &mut lens, Cow::Borrowed(w), 4, 3, true);
+        }
+        // 核心词库的 2 键单字仍要挤进来，把最长的那条顶掉
+        put_candidate(&mut out, &mut lens, Cow::Borrowed("查"), 2, 3, true);
+        assert_eq!(
+            out.iter().map(|w| w.as_ref()).collect::<Vec<_>>(),
+            ["查", "查看", "查询"],
+            "短码单字必须挤回候选，额度满也要顶掉最长的一条"
+        );
+        // 同码长时先来的（个人词库）在前：个人词优先的老语义不能丢
+        put_candidate(&mut out, &mut lens, Cow::Borrowed("察"), 2, 4, true);
+        assert_eq!(
+            out.iter().map(|w| w.as_ref()).collect::<Vec<_>>(),
+            ["查", "察", "查看", "查询"]
+        );
+    }
+
 
     /// `SCHEME` / `pinyin_mode` 都是进程级全局状态，测试并行跑会互相篡改。
     /// 凡是碰这两个状态的用例（包括其它模块的）统一拿这把锁串行。
