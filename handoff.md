@@ -1908,6 +1908,57 @@ ${EndIf}
 
 验证清单：M3.34。
 
+### 第二层：`InstallLayoutOrTip` 会把刚写好的 TIP 定义删掉
+
+把清理段前移之后，安装**仍然**报「注册项没有写全」，缺的正是 64 位那两条
+（`Category\Item` 和 `LanguageProfile`）。加检查点定位到：
+
+```text
+[dbg] before InstallLayoutOrTip: 64=True 32=True
+[dbg] after  InstallLayoutOrTip: 64=False 32=True
+```
+
+`input.dll!InstallLayoutOrTip`——就是当初为修「Ctrl+Shift 切不到飞鹤」加的那个
+API——会把它**不认可的 TIP 定义整棵删掉**，而且只清当前进程视图（64 位）那份，
+32 位那份不动。它清的是孤儿 CLSID 键：只要这个 profile 没走过 TSF 的正式注册
+（`ITfInputProcessorProfileMgr::RegisterProfile`），在它眼里就是垃圾。
+
+所以「写完就删」有两处，一处是我们自己的代码，一处是系统 API。修法只有一个：
+**把 TIP 定义写到它后面**。现在的顺序是
+
+```text
+清旧定义 → 写 CLSID（64/32）→ InstallLayoutOrTip → 写 TIP 定义（64/32）
+        → 补 User Profile / SortOrder → 重启 ctfmon → 硬校验
+```
+
+`Register-TipView` 因此拆成 `Register-Com`（只写 CLSID）和 `Register-TipDef`
+（只写 Category / LanguageProfile），调用顺序一眼可见。两个函数头都写了「为什么
+必须这个顺序」，免得以后有人图省事合并回去。
+
+> 通用教训：**「注册」和「交给系统 API 确认」是两件事，顺序错了就会被系统清理掉。**
+> 遇到「我明明写了，读出来却没有」，先怀疑中间那个 API 调用，别只怀疑自己的赋值。
+
+## 「修复安装状态」小工具（Feihe-Repair.exe）
+
+用户要求：安装目录里放一个 exe，双击就能修好注册状态，不用重装。
+
+`installer/repair.nsi` → `dist\Feihe-Repair.exe`（约 107 KB），随主安装包装到
+`$INSTDIR`。行为：
+
+1. 读 `HKCU\...\Uninstall\FeiheIME\InstallLocation` 定位安装目录，读不到就用
+   exe 自己所在目录（用户把 exe 拷进安装目录双击的常见姿势）；
+2. 找不到 `feihe.dll` 直接报错退出，不猜；
+3. **内嵌一份 install_tip.ps1**（不用安装目录里那份——那份可能被删、被改、或本身
+   是旧版本），解到 `$PLUGINSDIR` 跑；
+4. **一个文件都不动**：不覆盖 DLL、不碰 config.ini / freq.txt / phrases.txt。所以
+   它在「DLL 正被浏览器映射着」时照样能跑，也不会有任何数据风险；
+5. 结果用 MessageBox 明确告知：成功 / 失败（带退出码）。静默结束等于让用户自己猜。
+
+编译顺序：先 `repair.nsi`（产物进 dist），再 `feihe.nsi`（用
+`!if /FILEEXISTS` 保护，缺了也不至于编不过）。
+
+验证清单：M3.35。
+
 ## 已知问题
 
 - `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现

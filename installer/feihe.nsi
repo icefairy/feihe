@@ -323,6 +323,13 @@ Section "主程序" SecMain
   File "install_tip.ps1"
   File "uninstall_tip.ps1"
 
+  ; 修复工具：注册状态坏了（语言列表里看不到、添加键盘也没有）时，用户在安装
+  ; 目录里双击它就能重写注册，不用重装、不动任何数据文件。
+  ; 它由 repair.nsi 单独编译，没编过就跳过——不能让主安装包因为缺一个小工具编不过。
+  !if /FILEEXISTS "${OUTDIR}\Feihe-Repair.exe"
+    File "${OUTDIR}\Feihe-Repair.exe"
+  !endif
+
   ; 用户手册。文件名带中文，方便用户直接双击打开；内容随版本更新，不写注册表。
   DetailPrint "部署用户手册…"
   File "/oname=使用帮助.md" "${HELPDOC}"
@@ -407,6 +414,7 @@ Section "Uninstall"
   ${EndIf}
   Delete "$INSTDIR\install_tip.ps1"
   Delete "$INSTDIR\uninstall_tip.ps1"
+  Delete "$INSTDIR\Feihe-Repair.exe"
   Delete "$INSTDIR\使用帮助.md"
   Delete "$INSTDIR\*.old"
   Delete "$INSTDIR\backup-*.bak"

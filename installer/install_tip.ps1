@@ -101,10 +101,9 @@ function Set-RegValue {
 # 参数化的原因：WOW64 把 HKCU\SOFTWARE\Classes 和 HKCU\SOFTWARE\Microsoft\CTF\TIP
 # 都重定向了（CTF 只有 SystemShared 是共享键）。64 位宿主查前者，32 位宿主查
 # Wow6432Node 那份，两边必须各自有一套完整的 CLSID + TIP 定义。
-function Register-TipView {
+function Register-Com {
     param(
         [Parameter(Mandatory = $true)][string]$ClassesRoot,
-        [Parameter(Mandatory = $true)][string]$CtfTipRoot,
         [Parameter(Mandatory = $true)][string]$Dll
     )
 
@@ -118,6 +117,25 @@ function Register-TipView {
     Set-RegValue -Path $inproc -ValueName '(default)' -Value $Dll
     Set-RegValue -Path $inproc -ValueName 'ThreadingModel' -Value 'Apartment'
     Write-Host "[com] $ClassesRoot -> $Dll"
+}
+
+# -- 1b. CTF TIP 定义（Category + LanguageProfile）------------------------
+#
+# ⚠ **必须在 InstallLayoutOrTip 之后调用，不能放在前面。**
+#
+# 实测（2026-10-28，本机）：`input.dll!InstallLayoutOrTip` 会把它不认可的 TIP 定义
+# 整棵删掉——调用前 64 位那份 `Category\Item` 存在，调用后就没了，而 32 位那份它
+# 不管。它清的是「当前进程视图」里的孤儿 CLSID 键：只要这个 profile 没走过 TSF 的
+# 正式注册（ITfInputProcessorProfileMgr::RegisterProfile），就被当成垃圾。
+#
+# 而它又是「把输入法加进当前用户键盘列表」唯一好用的 API（0.3.x 当初为修
+# 「Ctrl+Shift 切不到飞鹤」才加的）。两边都要，只能排顺序：
+#
+#   清旧定义 → 写 CLSID → InstallLayoutOrTip → **再写 TIP 定义** → 补 User Profile
+#
+# 定义最后写，谁也删不掉；安装器末尾的硬校验会确认它真的在。
+function Register-TipDef {
+    param([Parameter(Mandatory = $true)][string]$CtfTipRoot)
 
     # 2. CTF TIP definition
     $tip = Join-Path $CtfTipRoot $Clsid
@@ -156,16 +174,16 @@ function Register-TipView {
     Set-RegValue -Path $lp -ValueName 'IconIndex' -Value 0 -Type DWord
 }
 
-# -- 0. 清掉上一次留下的 TIP 定义（必须**在注册之前**）----------------
+# -- 0. 清掉上一次留下的 TIP 定义（必须**在最前面**）------------------
 #
 # 老版本卸载后可能留下 Enable=0 的 LanguageProfile，那条会让输入法在语言列表里
 # 显示成灰色/不可用，所以每次安装都重建一遍。
 #
-# ⚠ 这段只能放在 Register-TipView **之前**。它原来被夹在「注册完 TIP」和「加键盘
-# 列表」之间，等于把刚写好的 64 位 TIP 定义整棵删掉，然后照常往下走——CLSID 还在、
-# TIP 没了，于是语言列表里根本看不到飞鹤，「添加键盘」也找不到它。32 位那份
-# （Wow6432Node）因为写在后一步反而幸免，症状因此更迷惑：32 位宿主勉强能用，
-# 64 位宿主（explorer / 记事本 / 浏览器 / 微信）全都看不见。
+# ⚠ 这段必须放在**所有写入之前**。它一度被夹在「注册完 TIP」和「加键盘列表」之间，
+# 等于把刚写好的 64 位 TIP 定义整棵删掉，然后照常往下走——CLSID 还在、TIP 没了，
+# 于是语言列表里根本看不到飞鹤，「添加键盘」也找不到它。32 位那份（Wow6432Node）
+# 因为写在后一步反而幸免，症状因此更迷惑：32 位宿主勉强能用，64 位宿主
+# （explorer / 记事本 / 浏览器 / 微信）全都看不见。
 #
 # 为什么长期没暴露：旧的管理员安装曾在 HKLM 留过一份 TIP，HKCU 缺了会回落到它；
 # 等第 6 步把 HKLM 也清干净，输入法就彻底消失了。
@@ -182,14 +200,10 @@ foreach ($tipRoot in @(
 
 $script:IconDll = $DllPath
 
-Register-TipView -ClassesRoot 'HKCU:\SOFTWARE\Classes' `
-                 -CtfTipRoot  'HKCU:\SOFTWARE\Microsoft\CTF\TIP' `
-                 -Dll         $DllPath
+Register-Com -ClassesRoot 'HKCU:\SOFTWARE\Classes' -Dll $DllPath
 
 if ($DllPath32) {
-    Register-TipView -ClassesRoot 'HKCU:\SOFTWARE\Classes\Wow6432Node' `
-                     -CtfTipRoot  'HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP' `
-                     -Dll         $DllPath32
+    Register-Com -ClassesRoot 'HKCU:\SOFTWARE\Classes\Wow6432Node' -Dll $DllPath32
     Write-Host "[com] 32-bit host support enabled"
 } else {
     Write-Host "[com] 未提供 32 位 DLL，32 位宿主（32 位 Office / IE 插件等）无法使用飞鹤" -ForegroundColor Yellow
@@ -216,6 +230,12 @@ if ($ok) {
 } else {
     $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
     Write-Host "[tip] InstallLayoutOrTip FAILED, err=$err (will use registry fallback)" -ForegroundColor Yellow
+}
+
+# -- 3b. 写 TIP 定义（**必须在上面那步之后**，见 Register-TipDef 的注释）-----
+Register-TipDef -CtfTipRoot 'HKCU:\SOFTWARE\Microsoft\CTF\TIP'
+if ($DllPath32) {
+    Register-TipDef -CtfTipRoot 'HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'
 }
 
 # -- 4. Verify + fallback ---------------------------------------------
