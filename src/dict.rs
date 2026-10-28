@@ -450,7 +450,30 @@ fn search(
     mode: AssistMode,
     limit: usize,
 ) -> Vec<Cow<'static, str>> {
-    let (mut out, lens) = collect(pinyin, prefix, assist_prefix, mode, limit);
+    let (mut out, mut lens) = collect(pinyin, prefix, assist_prefix, mode, limit);
+
+    // 自造词也进候选，**和词库候选一起交给下面那次词频排序**。
+    //
+    // 以前是「插到 0 号位」：刚拼出来的 `limkyr` 下次就该直接出。但自造词本身也是
+    // 学来的——`commit_segments` 每分词上屏一次就记一次，用户并没有「造词」的意思。
+    // 无条件置顶于是变成「谁最后被分词提交过，谁永远第一」：反复从候选里选「自然码」，
+    // 第一位却一直是早前分词学出来的「自然吗」，动态词频对它完全无效（用户报的
+    // 就是这一条）。现在两者用同一把尺子——`freq` 的「码 + 词」次数，谁被选得多谁在
+    // 前。刚造的词由 `remember_phrase` 顺手记一次次数，而对手是 0 次，所以「刚造的
+    // 立刻能出」这个原始需求照样成立。
+    //
+    // 码长按「等于输入」算：自造词只认整码（`phrase::words_with_code`），它的码就是
+    // 输入本身，也就是这一批候选里最短的那一档，和词库里打满的那个词平级。
+    if assist_prefix.is_empty() {
+        for w in crate::phrase::words_for(prefix, pinyin) {
+            if out.iter().any(|x| x.as_ref() == w.as_str()) {
+                continue;
+            }
+            lens.push(prefix.len().min(u8::MAX as usize) as u8);
+            out.push(Cow::Owned(w));
+        }
+    }
+
     // 动态词频只在这一层做：双拼/全拼、带不带辅助码的查询全都汇到这里，
     // 不会出现「某个入口忘了排序」这种只在特定模式下复现的怪事。
     //
@@ -472,22 +495,6 @@ fn search(
     // 只在打满时做：形码没打满时还是前缀筛选语义（`v` 该出所有 v 部首的字），
     // 不能提前抢排序。置顶仍然在最后执行，用户显式钉的词照赢。
     promote_exact_shape(&mut out, assist_prefix, mode);
-
-    // 自造词组：用户一段一段拼出来的、词库里本来没有的词（`limkyr`→李明远）。
-    // 码打满就出，并且排在最前面——这是用户刚造的词，他下次敲这个码要的就是它。
-    //
-    // 位置在「一简字」和「置顶」**之前**，也就是它们都还压在上面：一简字是
-    // 打字人的肌肉记忆，置顶是用户显式钉死的，两者都该赢过自动学来的东西。
-    //
-    // 带辅助码时不参与：辅助码是用户主动「再筛一道」，可自造词没有可靠的首字
-    // 辅助码，硬塞进去等于把用户的筛选当没发生。
-    if assist_prefix.is_empty() {
-        // `words_for` 给的是「新学的在前」；倒着 promote（每个都插到 0 号位）
-        // 才能让最新的那个最后落到最前面。
-        for w in crate::phrase::words_for(prefix, pinyin).into_iter().rev() {
-            promote(&mut out, &w, true, limit);
-        }
-    }
 
     // 二简词：两键出一个常用两字词（`nd` 难道、`sy` 所以）。小鹤官方「二简」，
     // 见 `brief2`。
@@ -538,6 +545,8 @@ fn search(
     if let Some(w) = crate::pin::word_for(prefix) {
         promote(&mut out, &w, true, limit);
     }
+    // 自造词是排序前插进去的，不经过 `promote` 的截断，这里统一收口。
+    out.truncate(limit);
     out
 }
 
@@ -1138,6 +1147,56 @@ pub(crate) mod tests {
 
 
 
+
+    /// **自造词不再无条件置顶：它和词库候选一起按学习次数排。**
+    ///
+    /// 现场：用户的 `zirjma` 下有个早前分词时自动学出来的「自然吗」（自造词），
+    /// 无论他从候选里选多少次「自然码」，第一位永远是「自然吗」——动态词频对它
+    /// 完全无效，看起来就像「词频调整坏了」。
+    ///
+    /// 自造词本身也是学来的（`commit_segments` 每分词上屏一次就记一次），凭什么
+    /// 压过用户显式选择的词？现在的规则是同一把尺子：谁在这个码下被选得多谁在前。
+    ///
+    /// 词面从**词库自己**取，不写死：单测不能假设词库里恰好有哪个词。
+    #[test]
+    fn learned_candidate_beats_auto_phrase() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        // `zirj`（zi ran）：词库里自然 / 孜然 都是两字，码长一样，只差词频——正好
+        // 是这次要比的那一对。词面从**词库自己**取，不写死。
+        let base = lookup("zirj", usize::MAX);
+        let head_len = base.first().expect("该码在词库里必须有候选").chars().count();
+        let target = base
+            .iter()
+            .skip(1)
+            .find(|w| w.chars().count() == head_len)
+            .expect("需要一个同码长的候选来对比")
+            .to_string();
+
+        // 同一个码下挂一个自造词：老逻辑会把它插到 0 号位
+        crate::phrase::learn("字然", "zi ran");
+        // 用户反复从候选里选了 target
+        for _ in 0..3 {
+            crate::freq::bump("zirj", &target);
+        }
+
+        let r = lookup("zirj", usize::MAX);
+        assert_eq!(
+            r.first().map(|s| s.as_ref()),
+            Some(target.as_str()),
+            "选过三次的词必须赢过自动学的自造词：{r:?}"
+        );
+    }
+
+    /// 自造词仍然要出得来——它只是不再插队，不是不出现。
+    #[test]
+    fn auto_phrase_still_listed_after_ranking() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        crate::phrase::learn("字然", "zi ran");
+        let r = lookup("zirj", usize::MAX);
+        assert!(r.iter().any(|w| w.as_ref() == "字然"), "自造词不能消失：{r:?}");
+    }
 
     /// 长词收窄的边界：最多比输入长一个音节。
     ///

@@ -1280,7 +1280,8 @@ impl FeiheTextService_Impl {
     /// 一简次选 `d;` 用它：要出什么由键位决定，跟候选里选中的那个没关系。
     /// 别拿 `commit_with` 顶替——那个是「当前候选 + 后缀」，会拼出「的打」。
     fn commit_literal(&self, text: &str) {
-        crate::freq::bump(&self.code.borrow(), text);
+        let code = FeiheTextService::query_code(&self.code.borrow()).into_owned();
+        crate::freq::bump(&code, text);
         self.pending_op
             .borrow_mut()
             .replace(EditOp::Commit(text.to_string()));
@@ -1297,7 +1298,10 @@ impl FeiheTextService_Impl {
         // 学的是「拼上标点之前」的那个词。晚一步就会把「你好，」当成一个词记进去，
         // 而候选里永远不会有带标点的词，这条记录等于白存。
         // 码一起带上：同一个词在不同码下的次数要分开算（多音字）。
-        crate::freq::bump(&self.code.borrow(), &word);
+        // 必须用 `query_code`（去掉手动分隔符）：排序那边是按去分隔符的码查的，
+        // 这里留个 `ni'hao` 就永远对不上，那条学习记录等于白记。
+        let code = FeiheTextService::query_code(&self.code.borrow()).into_owned();
+        crate::freq::bump(&code, &word);
         let mut text = word;
         text.push_str(suffix);
         self.pending_op.borrow_mut().replace(EditOp::Commit(text));
@@ -1531,6 +1535,10 @@ impl FeiheTextService_Impl {
             FeiheTextService::compose_phrase(&segs, &code, |c, w| dict::pinyin_of(c, w, mode))
         {
             crate::phrase::learn(&word, &py);
+            // 顺手记一次词频，让自造词和词库候选进同一个排序（见 `dict::search`）。
+            // 不记的话，刚造的词是 0 次，只和「同样 0 次的词库候选」打平，而平局是
+            // 词库先来——用户造完立刻敲同一个码，第一位可能还是那个同音的旧词。
+            crate::freq::bump(&code, &word);
         }
     }
 
@@ -1821,6 +1829,20 @@ impl FeiheTextService_Impl {
         let word = self.candidates.borrow().get(idx).map(|s| s.to_string());
         match word {
             Some(w) => {
+                // **选词就要学**。数字键和鼠标点是和空格完全等价的「我选了这个词」。
+                //
+                // 这里以前直接上屏、不记次数，于是只有**空格选中的第一个候选**会被学，
+                // 越是「翻页 / 按数字键 / 点鼠标去找那个对的词」，越学不到。用户报的
+                // 「选了『自然码』好几次，下次第一位还是『自然吗』」就是这么来的：
+                // `freq.txt` 里只有 `zirjma→自然吗 4`（他按了 4 次空格），而「自然码」
+                // 一次都没有——他每次都是用数字键/鼠标选的，那些选择全被丢了。
+                //
+                // 快捷输入的候选项是「2026年10月28日」这种现场生成的串，钉它没有意义，
+                // 学它同样没有——码是 `/rq`，下次也命不中。
+                let code = FeiheTextService::query_code(&self.code.borrow()).into_owned();
+                if !code.starts_with(quick::PREFIX) {
+                    crate::freq::bump(&code, &w);
+                }
                 self.pending_op.borrow_mut().replace(EditOp::Commit(w));
                 self.request_edit_session();
                 self.clear_state();
