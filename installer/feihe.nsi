@@ -32,7 +32,7 @@ Unicode true
 ; 这里留一个兜底值，只为「不经过 build_setup、直接跑 makensis」时能编过；
 ; 正常流程绝不会用它——两处硬编码迟早会出现「DLL 0.3.4 / 安装包 0.3.3」。
 !ifndef APP_VER
-  !define APP_VER "0.3.6"
+  !define APP_VER "0.3.7"
 !endif
 !define APP_PUBLISHER "feihe"
 !define APP_URL       "https://github.com/icefairy/feihe"
@@ -95,7 +95,7 @@ ShowInstDetails show
 ShowUninstDetails show
 BrandingText "${APP_NAME} ${APP_VER} — 小鹤双拼 / 全拼 输入法"
 
-VIProductVersion "0.3.3.0"
+VIProductVersion "${APP_VER}.0"
 VIAddVersionKey /LANG=2052 "ProductName"     "${APP_NAME}"
 VIAddVersionKey /LANG=2052 "FileDescription" "${APP_NAME} 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion"     "${APP_VER}"
@@ -134,8 +134,31 @@ UninstallIcon "assets\feihe.ico"
 
 ; ── 工具函数 ────────────────────────────────────────────────────
 
+; 取文件字节数。入参：$0 = 路径；出参：$R4 = 字节数（打不开就是 -1）
+;
+; 不用 FileFunc 的 GetSize——那只统计目录（内部 IfFileExists "$path\*.*"）。
+Function GetFileSize
+  ClearErrors
+  FileOpen $R3 "$0" r
+  ${If} ${Errors}
+    StrCpy $R4 -1
+    Return
+  ${EndIf}
+  FileSeek $R3 0 END $R4
+  FileClose $R3
+FunctionEnd
+
 ; 覆盖一个可能被占用（已被 ctfmon / explorer / 记事本映射）的文件。
 ; 入参：$R8 = 源文件，$R9 = 目标文件；出参：失败时置 $R5 = 1
+;
+; 判定「首拷成没成」**不能只看 CopyFiles 的 $Errors**。实测：目标 DLL 被进程
+; 映射着时，`CopyFiles /SILENT` 有时既不报错、也没写进去——旧逻辑 `IfErrors`
+; 没抓到，直接跳到大小校验，发现不符就 Abort，改名兜底那条路根本没走。用户看到
+; 的是「装完弹出 DLL 部署失败，请关掉程序重装」——0.3.7 在本机就是这么复现的
+; （chrome / 编辑器都映射着 C:\soft\Feihe\feihe.dll）。
+;
+; 所以现在：**大小比对说了算**。拷完读目标长度，和源一致才算过；不一致就一律
+; 走「改名旧文件 → 再拷」。同一个大小凑巧相等的情况用 $1（CopyFiles 报没报错）兜底。
 ;
 ; 失败链是踩出来的，改之前先看完：
 ;   1. 直接 Copy 失败——目标被映射，正常现象
@@ -149,11 +172,26 @@ UninstallIcon "assets\feihe.ico"
 ;           不再做 /REBOOTOK 删除（宁可当场报错，让人关掉程序重装）；
 ;           复制完比**文件大小**，不一致算失败。
 Function CopyOrReplace
+  ; 源文件大小先记下来（改名只动目标，源在 $PLUGINSDIR 里，不受影响）
+  StrCpy $0 "$R8"
+  Call GetFileSize
+  StrCpy $R6 $R4
+
   ClearErrors
   CopyFiles /SILENT "$R8" "$R9"
-  IfErrors 0 verify
+  ${If} ${Errors}
+    StrCpy $1 1
+  ${Else}
+    StrCpy $1 0
+  ${EndIf}
+  StrCpy $0 "$R9"
+  Call GetFileSize
+  ${If} $1 = 0
+  ${AndIf} $R4 = $R6
+    Goto done
+  ${EndIf}
 
-  DetailPrint "  $R9 被占用，改名旧文件后重试"
+  DetailPrint "  $R9 没写进去（多半正被映射），改名旧文件后重试"
   ; 后缀要唯一：固定名一旦被上一次的 .old 占着，Rename 就失败了。
   ; NSIS 没有 $RANDOM（老版本没有），用 GetTickCount 的毫秒数当随机源。
   System::Call 'kernel32::GetTickCount()i.r2'
@@ -166,40 +204,19 @@ Function CopyOrReplace
   ${If} ${Errors}
     DetailPrint "[!] 改名失败（$R2 也不可用），无法替换 $R9"
     StrCpy $R5 1
-    Goto verify
+    Goto done
   ${EndIf}
   DetailPrint "  旧文件已改名为 $R2"
   ClearErrors
   CopyFiles /SILENT "$R8" "$R9"
-  ${If} ${Errors}
-    DetailPrint "[!] 旧文件已挪走，但新文件写不进 $R9"
+  StrCpy $0 "$R9"
+  Call GetFileSize
+  ${If} $R4 != $R6
+    DetailPrint "[!] 旧文件已挪走，但新文件没写对（应为 $R6，实际 $R4）"
     StrCpy $R5 1
   ${EndIf}
 
-  verify:
-  ; 大小比对是这里唯一的硬校验：只查 FileExists 会把「旧文件还在」当成成功。
-  ; FileFunc 的 GetSize 只统计目录（内部 IfFileExists "$path\*.*"），这里用
-  ; FileSeek 到 END 直接拿长度——没有外部依赖，也不涉及结构体封送。
-  ClearErrors
-  FileOpen $R3 "$R8" r
-  ${If} ${Errors}
-    StrCpy $R6 -1
-  ${Else}
-    FileSeek $R3 0 END $R6
-    FileClose $R3
-  ${EndIf}
-  ClearErrors
-  FileOpen $R3 "$R9" r
-  ${If} ${Errors}
-    StrCpy $R4 -1
-  ${Else}
-    FileSeek $R3 0 END $R4
-    FileClose $R3
-  ${EndIf}
-  ${If} $R6 != $R4
-    DetailPrint "[!] $R9 大小不符（应为 $R6，实际 $R4）"
-    StrCpy $R5 1
-  ${EndIf}
+  done:
   ; 顺手清历史残留；删不掉（映射中）就算了，不影响本次安装
   Delete "$R9.old"
   Delete "$R9.old-*"

@@ -25,7 +25,6 @@ use crate::uielement;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Variant::{VariantInit, VT_I4};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_1, VK_OEM_2, VK_OEM_4, VK_OEM_5,
     VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RWIN, VK_SHIFT,
@@ -2119,11 +2118,13 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         //
         // 初值来自配置（用户在哪个进程里切过中英，下次开机就还是那个状态）。
         // 以前这里读的是进程内默认值 true，等于每次启动都强制回中文。
+        //
+        // **顺序要紧**：`set_client_tid` 必须先登记，`init_chinese` 里写 compartment
+        // 需要 client id，id 还是 0 的话它只能什么都不做——那正好是「激活后按键不
+        // 进 TIP」的另一种成因。
+        insert::set_client_tid(tid);
         let chinese = config::get().chinese;
         insert::init_chinese(chinese);
-        if chinese {
-            open_keyboard(&tim, tid);
-        }
 
         let keystroke_mgr: ITfKeystrokeMgr = tim.cast()?;
         let key_sink: ITfKeyEventSink = self.to_interface();
@@ -2140,7 +2141,7 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         *self.context.borrow_mut() = context;
         self.tid.set(tid);
         // 软键盘 / 设置窗要靠这个 client id 才能 RequestEditSession 和改中英开关
-        insert::set_client_tid(tid);
+        // （`set_client_tid` 已经在上面登记过，这里不再重复）
         statusbar::show();
         Ok(())
     }
@@ -2734,30 +2735,6 @@ impl FeiheTextService_Impl {
 
 fn to_utf16(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
-}
-
-/// 读出并强制打开「中/英」开关。
-///
-/// `GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` 为 0 时，MSCTF 认为输入法处于英文态，
-/// 按键一律放行给应用——这就是「字母直接进输入框、没有候选窗」的根因。
-/// 新注册的 TIP 这个值可能是关的，所以激活时直接置 1。
-fn open_keyboard(tim: &ITfThreadMgr, tid: u32) {
-    let Ok(mgr) = tim.cast::<ITfCompartmentMgr>() else {
-        return;
-    };
-    let Ok(comp) = (unsafe { mgr.GetCompartment(&GUID_COMPARTMENT_KEYBOARD_OPENCLOSE) }) else {
-        return;
-    };
-
-    let mut v = unsafe { VariantInit() };
-    unsafe {
-        // VARIANT_0.Anonymous 是 ManuallyDrop，需要显式解引用才能写字段
-        let inner = &mut *v.Anonymous.Anonymous;
-        inner.vt = VT_I4;
-        inner.Anonymous.lVal = 1;
-    }
-    // 写失败也没别的办法——这里没有能补救的动作，只能让输入法按当前状态跑
-    let _ = unsafe { comp.SetValue(tid, &v) };
 }
 
 unsafe fn caret_range(context: &ITfContext, ec: u32) -> Result<ITfRange> {

@@ -56,18 +56,21 @@ pub fn chinese() -> bool {
     CHINESE.load(Ordering::Acquire)
 }
 
-/// 写中英开关：先改进程内缓存（立刻生效），再同步给 MSCTF，最后记进配置。
+/// 写中英开关：先改进程内缓存（立刻生效），再记进配置，最后重新把 MSCTF 的
+/// 「键盘打开」状态拉起来。
 ///
 /// 返回 compartment 是否写成功——写失败不影响我们自己的判定，只是系统那边看不到。
 ///
 /// **必须落盘**：中英状态是用户按过一次 Shift（或点了浮窗）的结果，不是临时态。
 /// 不写盘的话，关掉程序再打开又回到默认值，用户会以为「切了没记住」——这正是
 /// 用户报的现象。
+///
+/// 注意这里**不看 `open`**：切到英文也不许去关 compartment，理由见
+/// `keep_keyboard_open`。
 pub fn set_chinese(open: bool) -> bool {
     CHINESE.store(open, Ordering::Release);
-    let ok = write_compartment(open);
     crate::config::set_chinese(open);
-    ok
+    keep_keyboard_open()
 }
 
 /// 激活时用配置里的值初始化中英状态。
@@ -75,12 +78,27 @@ pub fn set_chinese(open: bool) -> bool {
 /// 和 `set_chinese` 的区别：**不写盘**。`Activate` 每个进程都会走一遍，如果这里
 /// 也落盘，两个进程交替激活就会互相覆盖（A 存中文、B 存英文，谁最后激活算谁的）。
 /// 配置只由「用户明确切换」来写。
+///
+/// 这里也照样把 compartment 拉到打开态：上次激活可能被写成了 0（老版本会这么干），
+/// 不清掉的话这个进程会一直收不到按键。
 pub fn init_chinese(open: bool) {
     CHINESE.store(open, Ordering::Release);
-    write_compartment(open);
+    keep_keyboard_open();
 }
 
-fn write_compartment(open: bool) -> bool {
+/// 把线程级的「键盘打开」compartment 置 1。
+///
+/// ## 只能写 1，永远不能写 0
+///
+/// `GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` 不是我们的中英状态，它是**交给 MSCTF 的
+/// 开关**：为 0 时 MSCTF 认为这个输入法处于英文态，**按键一律不派发给 TIP**，
+/// `OnKeyDown` / `OnKeyUp` 一个都收不到。中英状态的真身是上面那个 `CHINESE` 原子量
+/// （宿主不管 compartment，见 `CHINESE` 的注释）。
+///
+/// 曾经按 `open` 双向写：切英文时写 0，结果 Shift 的抬起事件再也送不进来，
+/// 用户切到英文之后就切不回来了（报「Shift 无法切换中英文」），只能关掉应用重开。
+/// 这个死锁没有别的出口——收不到键就没法再写回 1。
+fn keep_keyboard_open() -> bool {
     let tid = client_tid();
     if tid == 0 {
         return false;
@@ -99,9 +117,33 @@ fn write_compartment(open: bool) -> bool {
         // VARIANT_0.Anonymous 是 ManuallyDrop，必须显式解引用
         let inner = &mut *v.Anonymous.Anonymous;
         inner.vt = VT_I4;
-        inner.Anonymous.lVal = i32::from(open);
+        inner.Anonymous.lVal = KEYBOARD_OPEN;
     }
     unsafe { comp.SetValue(tid, &v) }.is_ok()
+}
+
+/// 写进 `GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` 的**唯一**合法值。
+///
+/// 单独拎成常量 + 下面的测试，是为了让「有人又想按中英状态双向写」这件事在
+/// `cargo test` 里就撞墙，而不是等用户抱怨 Shift 切不回来。
+const KEYBOARD_OPEN: i32 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 中英状态不许影响 MSCTF 的键盘开关：英文态下按键仍然必须派发给我们，
+    /// 否则 Shift 抬起收不到，切回中文再没有入口（死锁）。
+    #[test]
+    fn keyboard_switch_stays_open_in_english_mode() {
+        assert_eq!(KEYBOARD_OPEN, 1);
+        // 真正的约束在 `keep_keyboard_open` 里：它不看 `CHINESE`，也不收参数。
+        // 这里再钉一次「英文态下 CHINESE 是 false」这个前提，防止有人以为
+        // 「英文态 = 关掉键盘开关」。
+        CHINESE.store(false, Ordering::Release);
+        assert!(!chinese());
+        CHINESE.store(true, Ordering::Release);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────

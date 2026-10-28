@@ -1765,6 +1765,43 @@ UILess 通道，宿主才会收到 `BeginUIElement`**；走自绘窗时这三个
       （下次跑安装包也会顺手清掉：ProgramData 清理发生在 install_tip.ps1 重启 ctfmon 之后，
       映射一释放就删得动）
 
+## Shift 切不回中文：`GUID_COMPARTMENT_KEYBOARD_OPENCLOSE` 不许写 0（0.3.7）
+
+用户报「Shift 切换不了中英」——**切到英文之后再也切不回来**。根因在 0.3.6 那次
+「中英状态记住」，但坑本身从 M2 就埋着。
+
+这个 compartment **不是我们的中英状态**，是交给 MSCTF 的开关：写 0 之后 MSCTF
+认为输入法处于英文态，**按键一律不派发给 TIP**——`OnKeyDown` / `OnKeyUp` 一个都
+收不到。而 Shift 单击切中英是在 `OnKeyUp` 里判定的（按下时还分不清「单击」和
+`Shift+A`），于是：
+
+```
+用户按 Shift → 切英文 → 我们写了 compartment=0 → 键盘事件不再进 TIP
+             → 再按 Shift，OnKeyUp 收不到 → 永远回不到中文
+```
+
+死锁没有别的出口：收不到键，就没法再把 1 写回去。中英状态的真身一直是
+`insert::CHINESE` 这个原子量（`CHINESE` 的注释里写了「宿主不管 compartment」），
+compartment 只是给系统看的副本——副本写成「关闭」等于把自己的进线掐了。
+
+修法：
+
+- `write_compartment(open)` → `keep_keyboard_open()`，**只写 1**，不收参数。
+  切英文、切中文都写 1。
+- `init_chinese` 也写 1：老版本可能已经把某个线程写成了 0，激活时顺手清掉，
+  用户升级后不用手改配置。
+- `Activate` 里 `insert::set_client_tid(tid)` **提到 `init_chinese` 前面**。
+  原来在后面，进程首次激活时 `client_tid()` 还是 0，`keep_keyboard_open` 里
+  `tid == 0` 直接返回——等于激活时那次「拉回打开」从来没成功过。这也是
+  「切到飞鹤后按键不进 TIP」的另一种成因（多见于同一进程二次激活）。
+- `textservice` 里那个旧的 `open_keyboard(&tim, tid)` 删掉，两份逻辑只留一份。
+
+**代价**：系统语言栏/宿主的「中/英」指示不再跟着变（永远显示打开）。我们自己画的
+状态浮窗是准的，而按键能不能收到是底线，这个取舍没有讨论空间。
+
+`insert::KEYBOARD_OPEN` 常量和 `keyboard_switch_stays_open_in_english_mode`
+测试钉住「唯一合法值是 1」，防止有人哪天又按 `open` 双向写。
+
 ## 已知问题
 
 - `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现
