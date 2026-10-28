@@ -336,17 +336,44 @@ impl FeiheTextService {
         }
     }
 
+    /// 同上，但只要**第一名**（探测用：这段码默认该上什么字）。
+    ///
+    /// 和 `lookup_any(code, 1)` 的区别是意图，也是**结果**：那读起来像「候选只取一条」，
+    /// 而只取一条会在动态词频置换之前就截断——`ji` 只取一条是「级」，跑完整流水线
+    /// （词频学过的词会被提上来）才是「奇」。分词默认字、合并上屏都要的是后者，
+    /// 否则组合串显示的字和候选窗第一项对不上。
+    fn lookup_any_first(code: &str) -> Option<Cow<'static, str>> {
+        if config::pinyin_mode() {
+            dict::first_pinyin(code)
+        } else {
+            dict::first(code)
+        }
+    }
+
+    /// 同上，只问「这段码有没有候选」。切分要在候选里挑最优切法，每一步都在问
+    /// 存在性，所以这里可以便宜（一条命中就停），和第一名无关。
+    fn lookup_any_has(code: &str) -> bool {
+        if config::pinyin_mode() {
+            dict::any_pinyin(code)
+        } else {
+            dict::any(code)
+        }
+    }
+
     /// 带辅助码查一次，只关心「筛出东西没有」。
+    ///
+    /// 走 `dict::any_*`（存在性探测），不走 `lookup(..., 1)`——存不存在和顺序、候选
+    /// 上限都无关，所以这里允许收集器找到一条就停；但那个 `1` 的语义必须写在函数名
+    /// 上，不能靠调用点自己记住（`iam` 那次就是把「探测」和「取候选」混成一个 limit）。
     fn assist_hit(prefix: &str, assist: &str, mode: AssistMode) -> bool {
         if prefix.is_empty() || assist.is_empty() {
             return false;
         }
-        let hit = if config::pinyin_mode() {
-            dict::lookup_pinyin_filtered(prefix, assist, mode, 1)
+        if config::pinyin_mode() {
+            dict::any_pinyin_filtered(prefix, assist, mode)
         } else {
-            dict::lookup_filtered(prefix, assist, mode, 1)
-        };
-        !hit.is_empty()
+            dict::any_filtered(prefix, assist, mode)
+        }
     }
 
     /// 「先连打、再按 Tab」：把编码末尾的辅助码拆出来。
@@ -401,12 +428,12 @@ impl FeiheTextService {
         if prefix.is_empty() || assist.is_empty() {
             return false;
         }
-        let hit = if config::pinyin_mode() {
-            dict::lookup_pinyin_filtered(prefix, assist, mode, 1)
+        let top = if config::pinyin_mode() {
+            dict::first_pinyin_filtered(prefix, assist, mode)
         } else {
-            dict::lookup_filtered(prefix, assist, mode, 1)
+            dict::first_filtered(prefix, assist, mode)
         };
-        hit.first().is_some_and(|w| w.chars().count() == 1)
+        top.is_some_and(|w| w.chars().count() == 1)
     }
 
     /// 「3 键直出」：音形模式下敲到第 3 键就把末尾 1~2 键挪进辅助码（`ddj` → `dd`+`j`）。
@@ -491,10 +518,12 @@ impl FeiheTextService {
             return;
         }
         let mode = config::get().assist_mode;
+        // 两条都是**存在性**判定（筛空了没有 / 并回去有东西没有），所以用 `any_*`：
+        // 与排序、候选上限无关，代价是一条命中就停。
         let hit = if config::pinyin_mode() {
-            dict::lookup_pinyin_filtered(&code, &assist, mode, 1)
+            dict::any_pinyin_filtered(&code, &assist, mode)
         } else {
-            dict::lookup_filtered(&code, &assist, mode, 1)
+            dict::any_filtered(&code, &assist, mode)
         };
         // 并回整串（双拼下没有分隔符，直接拼）
         let merged = format!("{code}{assist}");
@@ -502,17 +531,11 @@ impl FeiheTextService {
         // （`yk`+`wf` 筛得出「赢 x」，但用户要的是并回去之后的「英文」）。
         // 注意这里必须查**不带筛选**的整串——带筛选查等于没并。
         let merged_hit = if config::pinyin_mode() {
-            dict::lookup_pinyin(&merged, 1)
+            dict::any_pinyin(&merged)
         } else {
-            dict::lookup(&merged, 1)
+            dict::any(&merged)
         };
-        if !FeiheTextService::assist_should_fold_back(
-            auto,
-            &code,
-            &assist,
-            !hit.is_empty(),
-            !merged_hit.is_empty(),
-        ) {
+        if !FeiheTextService::assist_should_fold_back(auto, &code, &assist, hit, merged_hit) {
             return;
         }
         self.code.borrow_mut().clone_from(&merged);
@@ -648,8 +671,7 @@ impl FeiheTextService {
             .iter()
             .map(|u| Segment {
                 code: u.clone(),
-                word: FeiheTextService::lookup_any(u, 1)
-                    .first()
+                word: FeiheTextService::lookup_any_first(u)
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
                 picked: false,
@@ -730,8 +752,7 @@ impl FeiheTextService {
                 if !s.word.is_empty() {
                     return s.word.clone();
                 }
-                FeiheTextService::lookup_any(&s.code, 1)
-                    .first()
+                FeiheTextService::lookup_any_first(&s.code)
                     .map(|w| w.to_string())
                     .unwrap_or_else(|| s.code.clone())
             })
@@ -851,7 +872,7 @@ impl FeiheTextService {
     #[cfg(test)]
     fn split_segments(code: &str) -> Vec<String> {
         let units = Self::syllables(code);
-        Self::split_segments_units(&units, |p| !Self::lookup_any(p, 1).is_empty())
+        Self::split_segments_units(&units, Self::lookup_any_has)
     }
 
     /// 是不是 Shift 键本身。宿主可能报 VK_SHIFT(0x10)，也可能报左右键(0xA0/0xA1)。
@@ -1356,7 +1377,7 @@ impl FeiheTextService_Impl {
         if !force && !self.candidates.borrow().is_empty() {
             return false; // 有候选，正常走
         }
-        let has = |p: &str| !FeiheTextService::lookup_any(p, 1).is_empty();
+        let has = |p: &str| FeiheTextService::lookup_any_has(p);
         let codes = FeiheTextService::plan_segments(&code, has);
         if codes.len() < 2 {
             return false;
@@ -1370,8 +1391,7 @@ impl FeiheTextService_Impl {
                 let (word, picked) = match prev.get(i) {
                     Some((pc, w, pk)) if pc == c => (w.clone(), *pk),
                     _ => (
-                        FeiheTextService::lookup_any(c, 1)
-                            .first()
+                        FeiheTextService::lookup_any_first(c)
                             .map(|s| s.to_string())
                             .unwrap_or_default(),
                         false,

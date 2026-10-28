@@ -361,6 +361,88 @@ pub fn lookup_pinyin_filtered(
     search(true, prefix, assist_prefix, mode, limit)
 }
 
+// ─────────────────────────────────────────────────────────────
+// 探测：只问「有没有」和「第一名是什么」
+// ─────────────────────────────────────────────────────────────
+//
+// 这两个问题**成本不同、答案也不同**，所以分成两组函数，不再用 `lookup(..., 1)` 一句
+// 话敷衍过去：
+//
+// - `any_*`：**只要存在性**。存不存在和顺序、候选上限都无关，所以可以只让收集器
+//   找一条就停——最便宜，判定「这个码成不成立」用它。
+// - `first_*`：**要第一名**。第一名是完整流水线的产物（词库归并 → 动态词频置换 →
+//   形码打满置顶 → 自造词），任何一步只看到一条都会算错。`ji` 就是现成的例子：
+//   只取一条时是「级」，跑完词频置换后是「奇」——用户学过的词会被提上来。
+//
+// 为什么当初会出 `iam` 那次事故：判定路径图便宜用了 `limit = 1`，而收集器在那条
+// 小 limit 上「用户词库满了就返回」，核心词库一条没扫，「查」根本不在候选里，
+// 「第一名是单字」永远不成立，于是拒绝拆分、`iam` 整串查命中「查明」。
+//
+// 不变量（单测 `first_agrees_with_full_lookup` 守着）：`first(c)` 必须等于
+// `lookup(c, 上限)[0]`。**任何调整候选上限的改动都不许影响这里的结果。**
+
+/// 有没有候选（只问存在性，不关心是谁）。
+pub fn any(prefix: &str) -> bool {
+    search(false, prefix, "", AssistMode::Off, 1).first().is_some()
+}
+
+/// 带辅助码筛选后还有没有候选。
+pub fn any_filtered(prefix: &str, assist_prefix: &str, mode: AssistMode) -> bool {
+    search(false, prefix, assist_prefix, mode, 1)
+        .first()
+        .is_some()
+}
+
+/// 全拼：有没有候选。
+pub fn any_pinyin(prefix: &str) -> bool {
+    search(true, prefix, "", AssistMode::Off, 1)
+        .first()
+        .is_some()
+}
+
+/// 全拼 + 辅助码：有没有候选。
+pub fn any_pinyin_filtered(prefix: &str, assist_prefix: &str, mode: AssistMode) -> bool {
+    search(true, prefix, assist_prefix, mode, 1)
+        .first()
+        .is_some()
+}
+
+/// 双拼：第一名是什么（跑完整流水线，和候选窗第一条**必须**一致）。
+pub fn first(prefix: &str) -> Option<Cow<'static, str>> {
+    search(false, prefix, "", AssistMode::Off, usize::MAX)
+        .into_iter()
+        .next()
+}
+
+/// 双拼 + 辅助码筛选：第一名是什么。
+pub fn first_filtered(
+    prefix: &str,
+    assist_prefix: &str,
+    mode: AssistMode,
+) -> Option<Cow<'static, str>> {
+    search(false, prefix, assist_prefix, mode, usize::MAX)
+        .into_iter()
+        .next()
+}
+
+/// 全拼：第一名是什么。
+pub fn first_pinyin(prefix: &str) -> Option<Cow<'static, str>> {
+    search(true, prefix, "", AssistMode::Off, usize::MAX)
+        .into_iter()
+        .next()
+}
+
+/// 全拼 + 辅助码筛选：第一名是什么。
+pub fn first_pinyin_filtered(
+    prefix: &str,
+    assist_prefix: &str,
+    mode: AssistMode,
+) -> Option<Cow<'static, str>> {
+    search(true, prefix, assist_prefix, mode, usize::MAX)
+        .into_iter()
+        .next()
+}
+
 fn search(
     pinyin: bool,
     prefix: &str,
@@ -1017,6 +1099,41 @@ pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
+
+    /// **探测入口与候选上限无关**：`first*` 拿到的必须是 `lookup(..., 上限)` 的第一条。
+    ///
+    /// 这是「3 键直出 / 自动并回 / 分词默认字」这一整片逻辑的地基——它们全都只问
+    /// 「第一名是谁」，一旦某次改动让探测和显示两条路的头部不一致，判定就会失效，
+    /// 而症状永远不会指向词库（`iam` 那次的表现是「精确不出字」）。
+    ///
+    /// 这条用例只比「自己和自己」，不假设词库里有什么，所以不会被个人词库影响；
+    /// 反过来说它也**不能**替换成具体词断言（那条规矩踩过两次）。
+    #[test]
+    fn first_agrees_with_full_lookup() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+
+        for code in ["ji", "dd", "ia", "n", "zuci", "fwhe"] {
+            let full = lookup(code, usize::MAX);
+            assert_eq!(
+                first(code).as_deref(),
+                full.first().map(|w| w.as_ref()),
+                "`{code}`：探测拿到的第一名必须和全量查询一致"
+            );
+        }
+
+        // 带辅助码那条路：首名同样要和全量筛选一致
+        for mode in [AssistMode::Ziranma, AssistMode::Xiaohe] {
+            for (code, assist) in [("ia", "m"), ("dd", "j"), ("jm", "vo"), ("ji", "wj")] {
+                let full = lookup_filtered(code, assist, mode, usize::MAX);
+                assert_eq!(
+                    first_filtered(code, assist, mode).as_deref(),
+                    full.first().map(|w| w.as_ref()),
+                    "`{code}`+`{assist}`（{mode:?}）：辅助码路径的探测也必须和全量一致"
+                );
+            }
+        }
+    }
 
     /// 带辅助码时，核心词库的短码单字不能被个人词库挤出候选。
     ///
