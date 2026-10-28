@@ -10,9 +10,10 @@
 ;    老的 ProgramData 副本会在安装时尽力清理（删不掉的留着，不安排重启删除）。
 ; 3. 覆盖 DLL 时先 Delete 再 Rename 兜底：ctfmon / explorer 常常已经把旧 DLL
 ;    映射进进程，直接 Copy 会失败。Windows 允许**重命名**已映射的文件，
-;    所以改名成 .old-<随机> 再拷新文件就行。后缀必须唯一——固定 `.old` 一旦被
-;    上一次留下的、仍被映射的旧文件占着，删不掉也改不进去，整条替换链就断了
-;    （这个坑真的发生过：装完仍是上一版 DLL，功能像没修一样）。
+;    所以改名成 backup-<pid>.bak 再拷新文件就行。名字必须**每次都真不一样**——
+;    固定名一旦被上一次留下的、仍被映射的旧文件占着，删不掉也改不进去，整条替换
+;    链就断了（这个坑真的发生过：装完仍是上一版 DLL，功能像没修一样；也发生过
+;    改名本身失败，用户看到「DLL 部署失败」）。
 ;    但改名只换了磁盘上的文件——ctfmon 进程里映射的仍是旧代码。install_tip.ps1
 ;    最后一步会重启 ctfmon（Windows 按需自动拉起，中等完整性；不能从提权进程
 ;    手动拉，UIPI 会挡消息），覆盖安装后点一下输入框就加载新 DLL，不用注销。
@@ -148,6 +149,35 @@ Function GetFileSize
   FileClose $R3
 FunctionEnd
 
+; 造一个「当前肯定不存在」的备份名。入参：$R9 = 原文件，$R7 = 已重试次数；出参：$R2
+;
+; **不依赖随机源**。老实现用 `System::Call kernel32::GetTickCount` 拼后缀，实测
+; 那插件在这台机上调用返回空，$R2 就退化成固定字符串 "feihe.dll.old-"，下一次
+; 安装又撞同一个名字（上一份还被进程映射着，删不掉也覆盖不了）→ Rename 必然失败，
+; 替换链断在这儿。本机 C:\soft\Feihe 里的 "feihe.dll.old-" 和 "feihe.dll.old--b"
+; 就是这条老逻辑的产物。`$PID` 也不是 NSIS 内置变量（编译报 unknown variable）。
+;
+; 改成最笨但绝对可靠的办法：从 backup-1.bak 往上数，取第一个**不存在**的名字。
+; 唯一性由 FileExists 直接保证，不依赖随机数，也就不存在「随机源失效」这回事；
+; 目录里残留多少份旧备份都不影响——数字跳过它们继续往上。
+;
+; 文件名和扩展名都不沿用：`feihe.dll` → `backup-3.bak`。一是彻底躲开与旧名相撞
+; （不再有 "feihe.dll.old-xxx" 这类同前缀），二是 .bak 不会被杀软当组件再扫一遍。
+Function MakeBackupName
+  ${GetParent} "$R9" $0
+  ; 从「已试过的次数」开始数，免得 5 次重试反复拿同一个名字
+  StrCpy $R1 $R7
+  name_loop:
+    IntOp $R1 $R1 + 1
+    StrCpy $R2 "$0\backup-$R1.bak"
+    ${IfNot} ${FileExists} "$R2"
+      Return
+    ${EndIf}
+    ${If} $R1 < 5000
+      Goto name_loop
+    ${EndIf}
+FunctionEnd
+
 ; 覆盖一个可能被占用（已被 ctfmon / explorer / 记事本映射）的文件。
 ; 入参：$R8 = 源文件，$R9 = 目标文件；出参：失败时置 $R5 = 1
 ;
@@ -192,21 +222,28 @@ Function CopyOrReplace
   ${EndIf}
 
   DetailPrint "  $R9 没写进去（多半正被映射），改名旧文件后重试"
-  ; 后缀要唯一：固定名一旦被上一次的 .old 占着，Rename 就失败了。
-  ; NSIS 没有 $RANDOM（老版本没有），用 GetTickCount 的毫秒数当随机源。
-  System::Call 'kernel32::GetTickCount()i.r2'
-  StrCpy $R2 "$R9.old-$R2"
-  ${If} ${FileExists} "$R2"
-    StrCpy $R2 "$R2-b"
-  ${EndIf}
-  ClearErrors
-  Rename "$R9" "$R2"
-  ${If} ${Errors}
-    DetailPrint "[!] 改名失败（$R2 也不可用），无法替换 $R9"
+  ; 改名这一步的名字**不能只换后缀**：老实现拼 "$R9.old-<tick>"，而 tick 取不到时
+  ; 名字就固定成 "feihe.dll.old-"，第二次安装撞同一个名字 → Rename 失败（目标已
+  ; 存在，而且那目标还被映射着删不掉），用户看到「DLL 部署失败」。现在每次换一个
+  ; 真不冲突的名字（文件名+扩展名都换），Rename 仍失败就再换名字重试，最多 5 次。
+  StrCpy $R7 0
+  try_rename:
+    Call MakeBackupName
+    ClearErrors
+    Rename "$R9" "$R2"
+    ${IfNot} ${Errors}
+      DetailPrint "  旧文件已改名为 $R2"
+      Goto recopy
+    ${EndIf}
+    IntOp $R7 $R7 + 1
+    ${If} $R7 < 5
+      Goto try_rename
+    ${EndIf}
+    DetailPrint "[!] 改名失败（试了 5 个名字都不行），无法替换 $R9"
     StrCpy $R5 1
     Goto done
-  ${EndIf}
-  DetailPrint "  旧文件已改名为 $R2"
+
+  recopy:
   ClearErrors
   CopyFiles /SILENT "$R8" "$R9"
   StrCpy $0 "$R9"
@@ -218,8 +255,10 @@ Function CopyOrReplace
 
   done:
   ; 顺手清历史残留；删不掉（映射中）就算了，不影响本次安装
+  ${GetParent} "$R9" $0
   Delete "$R9.old"
   Delete "$R9.old-*"
+  Delete "$0\backup-*.bak"
 FunctionEnd
 
 ; 调 PowerShell 脚本并检查退出码。入参：$R7 = 完整命令行
@@ -275,7 +314,7 @@ Section "主程序" SecMain
   ${AndIf} ${FileExists} "$INSTDIR\feihe.dll"
   ${AndIf} ${FileExists} "$INSTDIR\feihe32.dll"
   ${Else}
-    MessageBox MB_ICONSTOP|MB_OK "DLL 部署失败：$INSTDIR\feihe.dll 未正确写入。$\r$\n$\r$\n多半是旧文件还被某个程序（ctfmon、打开中的记事本或浏览器）占用着。$\r$\n请关掉这些程序后重新运行安装程序；也可以先把 $INSTDIR 里 feihe.dll.old* 之类改个名字再装。"
+    MessageBox MB_ICONSTOP|MB_OK "DLL 部署失败：$INSTDIR\feihe.dll 未正确写入。$\r$\n$\r$\n多半是旧文件还被某个程序（ctfmon、打开中的记事本或浏览器）占用着。$\r$\n请关掉这些程序后重新运行安装程序；也可以先把 $INSTDIR 里的 feihe.dll.old*、backup-*.bak 之类改个名字再装。"
     SetErrorLevel 1
     Abort
   ${EndIf}
@@ -316,6 +355,7 @@ Section "主程序" SecMain
     ${EndIf}
     ; register.cmd 时代留下的改名残留形如 feihe.dll.old-141324，通配要宽一点
     Delete "$R1\*.old"
+    Delete "$R1\backup-*.bak"
     Delete "$R1\*.old-*"
     Delete "$R1\install_tip.ps1"
     Delete "$R1\uninstall_tip.ps1"
@@ -369,6 +409,7 @@ Section "Uninstall"
   Delete "$INSTDIR\uninstall_tip.ps1"
   Delete "$INSTDIR\使用帮助.md"
   Delete "$INSTDIR\*.old"
+  Delete "$INSTDIR\backup-*.bak"
   Delete "$INSTDIR\uninstall.exe"
 
   ; 用户数据**故意保留**：config.ini / freq.txt / phrases.txt / pinned.txt 是用户

@@ -1844,6 +1844,70 @@ fn assist_should_fold_back(auto: bool, code: &str, assist: &str, hit: bool) -> b
 `empty_assist_folds_back_even_when_whole_code_is_unknown`（纯函数）、
 `unknown_four_char_word_folds_back_then_segments`（真表，整条链路钉住）。
 
+## 装完「语言列表里看不到飞鹤、添加键盘也没有」
+
+用户报：装完 0.3.8，系统语言列表里找不到飞鹤，点「添加键盘」也没有这一项。
+
+**根因是一段自删代码。** `install_tip.ps1` 里清理旧残留那段，被放在了注册**之后**：
+
+```text
+Register-TipView ... HKCU\SOFTWARE\Microsoft\CTF\TIP ...   # 刚写好 TIP 定义
+$hkcuTip = "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid"
+if (Test-Path $hkcuTip) { Remove-Item $hkcuTip -Recurse -Force }   # 立刻整棵删掉
+```
+
+写完就删，脚本还照样 exit 0。结果 `CLSID\...\InprocServer32` 在、`CTF\TIP\{CLSID}`
+整棵没了 → 语言列表里没有注册项 → 既看不见也添加不了。
+
+32 位那份（`Wow6432Node\...\CTF\TIP`）因为在后一步才写，反而幸免，所以现场是
+「32 位视图有、64 位视图没有」。explorer / 记事本 / 浏览器都是 64 位，读不到。
+
+**为什么长期没暴露**：旧的管理员安装（0.3.0 之前）在 HKLM 留过一份 TIP，HKCU 缺了
+会回落到 HKLM。脚本第 6 步「尽力清理旧机器级条目」一旦拿到权限把它删干净，或者换机
+重装，就再也没有回落可用——这个隐患一直是随包发出去的。
+
+**修法**（只动安装脚本，DLL 源码零改动）：
+
+- 清理段移到 `Register-TipView` **之前**（第 0 步），两个视图都清，语义从「建好再拆」
+  改成「先拆旧的再建新的」。
+- 脚本末尾加硬校验：CLSID、`Category\Item`、`LanguageProfile`（含 32 位镜像）逐个
+  `Test-Path`，缺一个就 `exit 1`。安装器 `RunPs` 会把非 0 退出码变成弹窗——「装完没有
+  输入法」从此当场报错，不再静默成功。
+  > 记住：任何「清理」步骤都要先问一句「它要清的东西，我是不是刚写过」。
+
+**顺带修：DLL 改名兜底彻底化（用户提出）**
+
+用户原话：「对写入失败的 dll 重命名请更彻底一点，包括文件名和后缀都要重命名，现在
+很容易新名字的也是被占用的」。
+
+现场证据：`C:\soft\Feihe` 里躺着 `feihe.dll.old-` 和 `feihe.dll.old--b`——**数字是空
+的**。老逻辑：
+
+```nsis
+System::Call 'kernel32::GetTickCount()i.r2'
+StrCpy $R2 "$R9.old-$R2"        ; 取不到 → "feihe.dll.old-"
+${If} ${FileExists} "$R2"
+  StrCpy $R2 "$R2-b"            ; 再撞 → "feihe.dll.old--b"
+${EndIf}
+```
+
+`System::Call` 在这台机上返回空（插件/环境问题），随机源失效 → 名字退化成固定串 →
+下一次安装撞同名，而那份还被映射着（删不掉也覆盖不了）→ `Rename` 失败 → 用户看到
+「DLL 部署失败」。所以问题不是「随机性不够」，是**随机压根没生效，而且只试一次**。
+
+现在：
+
+- 名字完全换掉：`feihe.dll` → `backup-<n>.bak`（文件名和扩展名都不沿用，顺带避免
+  杀软把 .bak 再当组件扫）；
+- `n` 从 1 往上数，**取第一个不存在的**——唯一性由 `FileExists` 直接保证，不依赖任何
+  随机源，也就不存在「随机源失效」这回事；
+- `Rename` 仍失败就换下一个名字重试，最多 5 次（起始序号跟着重试次数走，不会反复试
+  同一个名字）；
+- `Delete` 通配同步加 `backup-*.bak`（安装段 / ProgramData 清理 / 卸载段三处）。
+- 注：`$PID` 不是 NSIS 内置变量，写了会 `unknown variable` 警告。
+
+验证清单：M3.34。
+
 ## 已知问题
 
 - `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现

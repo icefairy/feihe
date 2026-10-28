@@ -156,6 +156,30 @@ function Register-TipView {
     Set-RegValue -Path $lp -ValueName 'IconIndex' -Value 0 -Type DWord
 }
 
+# -- 0. 清掉上一次留下的 TIP 定义（必须**在注册之前**）----------------
+#
+# 老版本卸载后可能留下 Enable=0 的 LanguageProfile，那条会让输入法在语言列表里
+# 显示成灰色/不可用，所以每次安装都重建一遍。
+#
+# ⚠ 这段只能放在 Register-TipView **之前**。它原来被夹在「注册完 TIP」和「加键盘
+# 列表」之间，等于把刚写好的 64 位 TIP 定义整棵删掉，然后照常往下走——CLSID 还在、
+# TIP 没了，于是语言列表里根本看不到飞鹤，「添加键盘」也找不到它。32 位那份
+# （Wow6432Node）因为写在后一步反而幸免，症状因此更迷惑：32 位宿主勉强能用，
+# 64 位宿主（explorer / 记事本 / 浏览器 / 微信）全都看不见。
+#
+# 为什么长期没暴露：旧的管理员安装曾在 HKLM 留过一份 TIP，HKCU 缺了会回落到它；
+# 等第 6 步把 HKLM 也清干净，输入法就彻底消失了。
+foreach ($tipRoot in @(
+    'HKCU:\SOFTWARE\Microsoft\CTF\TIP',
+    'HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'
+)) {
+    $stale = Join-Path $tipRoot $Clsid
+    if (Test-Path $stale) {
+        Remove-Item $stale -Recurse -Force
+        Write-Host "[tip] removed stale TIP key: $stale"
+    }
+}
+
 $script:IconDll = $DllPath
 
 Register-TipView -ClassesRoot 'HKCU:\SOFTWARE\Classes' `
@@ -172,13 +196,8 @@ if ($DllPath32) {
 }
 
 # -- 3. Add to the current user's keyboard list -----------------------
-# A stale per-user profile (Enable = 0) left behind by an older uninstall makes the
-# entry invisible even after a successful install. Drop it first.
-$hkcuTip = "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid"
-if (Test-Path $hkcuTip) {
-    Remove-Item $hkcuTip -Recurse -Force
-    Write-Host "[tip] removed stale HKCU TIP key (had Enable=0 leftovers)"
-}
+# 这里不再删 TIP 键——清理在注册**之前**（第 0 步）做完了。0.3.8 及以前这段写在这，
+# 把刚注册好的 TIP 定义整个删掉，是「装完语言列表里没有飞鹤」的直接原因。
 
 $sig = @"
 using System;
@@ -337,6 +356,27 @@ foreach ($view in @(
         }
     }
 }
+
+# -- 6. 硬校验：注册项必须真的都在 ------------------------------------
+# 安装器只看退出码。0.3.8 就是「TIP 被自己删掉、脚本照样 exit 0」，用户装完发现
+# 语言列表里没有飞鹤、添加键盘也没有，却没有任何报错。这里把「定义在不在」变成
+# 失败退出码，让安装器当场弹窗，而不是留给用户去语言设置里瞎找。
+$required = @(
+    "HKCU:\SOFTWARE\Classes\CLSID\$Clsid\InprocServer32",
+    "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid\Category\Item\$Clsid",
+    "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$LangId\$Profile"
+)
+if ($DllPath32) {
+    $required += "HKCU:\SOFTWARE\Classes\Wow6432Node\CLSID\$Clsid\InprocServer32"
+    $required += "HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$LangId\$Profile"
+}
+$missing = @($required | Where-Object { -not (Test-Path -LiteralPath $_) })
+if ($missing.Count -gt 0) {
+    Write-Host "[FAIL] 注册项没有写全，输入法不会出现在语言列表里：" -ForegroundColor Red
+    foreach ($m in $missing) { Write-Host "       $m" -ForegroundColor Red }
+    exit 1
+}
+Write-Host "[ok] CLSID / TIP 定义 / LanguageProfile 全部就位"
 
 Write-Host ""
 Write-Host "[done] Feihe IME registered."
