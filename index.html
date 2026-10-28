@@ -223,6 +223,7 @@
       <a href="#compare">对比</a>
       <a href="#features">特性</a>
       <a href="#keymap">键位</a>
+      <a href="#assist">辅助码</a>
       <a href="#start">开始用</a>
       <a href="#status">现状</a>
     </div>
@@ -243,7 +244,7 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n">1.56<small>MB</small></div><div class="k">安装包</div></div>
+      <div class="stat"><div class="n">1.67<small>MB</small></div><div class="k">安装包</div></div>
       <div class="stat"><div class="n">8006</div><div class="k">收录单字</div></div>
       <div class="stat"><div class="n">46493</div><div class="k">词条</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
@@ -439,6 +440,104 @@
       <div class="z">
         <div class="t">零声母 · 三字母韵母</div>
         <div class="d">用韵母所在键：昂 <code>ah</code>、鞥 <code>eg</code></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="assist">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">辅助码</div>
+      <h2>同音字太多时，再加一道「形」</h2>
+      <p class="sub">
+        <code>ji</code> 底下有 128 个单字，第一位是「机」，想要「记」得翻好几页。
+        辅助码就是音码之后再补一两个字母，用字的「形状」再筛一遍——候选从几十个缩到一两个。
+        不改你怎么打字，只是让你少翻页。设置窗「辅助码」里三选一，新装默认自然码。
+      </p>
+    </div>
+
+    <pre><span class="c">三步：先音码，再 Tab，再形码</span>
+ji                <span class="c">音码（小鹤双拼，两键一个音节）</span>
+ji → Tab          <span class="c">组合串末尾多出一个空格位，等着填形码</span>
+ji → Tab → m j    <span class="c">组合串显示成「ji mj」，候选只剩木字旁，「机」在第一位</span>
+<span class="p">空格</span>              <span class="c">上屏「机」</span>
+
+<span class="c">先连打、再按 Tab 也认：末尾能当形码的键会自动挪过去</span>
+dd + f + j → Tab  <span class="c">组合串变成「dd fj」，不用退格重来</span></pre>
+
+    <div class="grid" style="margin-top:20px">
+      <div class="card">
+        <h3>自然码辅助码 · 1 键</h3>
+        <p>取部首读音的首字母，只按一键：的 <code>b</code>（白）、打 <code>s</code>（手）、
+          想 <code>x</code>（心）、你 <code>r</code>（人）、机 <code>m</code>（木）、
+          简 <code>z</code>（竹）。同音字按「什么旁」分成二十来类，一个键就切开。</p>
+      </div>
+      <div class="card">
+        <h3>小鹤音形 · 2 键</h3>
+        <p>首部件 + 末部件，各按声母定键，用<strong>官方码</strong>（和
+          <code>react.xhup.club</code> 反查逐字一致）：打 <code>fd</code>（扌+丁）、
+          带 <code>fj</code>（带上+巾）、记 <code>yj</code>（讠+己）、计 <code>yu</code>（讠+十）。</p>
+      </div>
+      <div class="card">
+        <h3>形码打满就出字</h3>
+        <p>形码和输入<strong>完全相等</strong>的单字会顶到第一位，不按词频排：
+          <code>jm</code> → <code>Tab</code> → <code>v o</code>，第一位就是「简」，
+          哪怕「简单」比它更常用。</p>
+      </div>
+      <div class="card">
+        <h3>键数就是上限</h3>
+        <p>自然码 1 键、小鹤 2 键。多敲一个字母等于筛空——筛选是<strong>过滤不是排序</strong>，
+          筛不到就是一条候选都没有，翻多少页也找不到。写错了就 <code>Tab</code> 退出或退格删掉。</p>
+      </div>
+      <div class="card">
+        <h3>词只按首字筛</h3>
+        <p><code>dd</code> 底下「大 / 代 / 待 / 带 / 戴 / 呆 / 贷」一串同音字：
+          按小鹤的 <code>f</code>（或自然码的 <code>j</code>）就只剩「带」那一支（带上、带来）；
+          按 <code>r y</code>（自然码 <code>r</code>）只剩「代」那一支。
+          第二个字的形状不参与，想让词更准就把音码打全。</p>
+      </div>
+      <div class="card">
+        <h3>和「3 键直出」的关系</h3>
+        <p>那个开关（默认关）只是省掉 <code>Tab</code>：第 3 键直接当形码，
+          <code>das</code> 出「打」、<code>ddj</code> 出「带」。它在猜，猜错会自动并回音码
+          （<code>ykwf</code> → 英文），自己按 <code>Tab</code> 拆的则不会被撤销。</p>
+      </div>
+    </div>
+
+    <div class="tablewrap" style="margin-top:22px">
+      <table>
+        <thead>
+          <tr><th>想打</th><th>小鹤音形</th><th>自然码</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>机</td><td class="me">ji → Tab → m j</td><td class="me">ji → Tab → m</td><td>木 + 几 / 部首木</td></tr>
+          <tr><td>计</td><td class="me">ji → Tab → y u</td><td class="me">ji → Tab → y</td><td>讠 + 十；自然码只能到「言字旁」，计/记都在这里</td></tr>
+          <tr><td>记</td><td class="me">ji → Tab → y j</td><td class="me">ji → Tab → y</td><td>讠 + 己——这一档正是 2 键胜过 1 键的地方</td></tr>
+          <tr><td>玑</td><td class="me">ji → Tab → w j</td><td class="me">ji → Tab → y</td><td>王 + 几；生僻字平时排在很后面</td></tr>
+          <tr><td>打</td><td class="me">da → Tab → f d</td><td class="me">da → Tab → s</td><td>扌 + 丁 / 部首「手」</td></tr>
+          <tr><td>简</td><td class="me">jm → Tab → v o</td><td class="me">jm → Tab → z</td><td>官方码 vo；打满两键后「简」自动置顶</td></tr>
+          <tr><td>代（词）</td><td class="me">dd → Tab → r y</td><td class="me">dd → Tab → r</td><td>词只按首字筛，出来的是「代」字头的词</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="zero">
+      <div class="z">
+        <div class="t">怎么记</div>
+        <div class="d">自然码念部首名（白、手、心、人）；小鹤记官方字根（一百多个）。
+          <code>简</code> 是 <code>vo</code>、<code>明</code> 是 <code>oo</code> 这类独体字是官方另定的码，
+          别硬猜，用 <code>/fc</code> 反查。</div>
+      </div>
+      <div class="z">
+        <div class="t">什么时候用</div>
+        <div class="d">同音字多的大字集（<code>ji</code>、<code>yi</code>、<code>shi</code>）、
+          生僻字、以及「一批同音词里我就要那一个字开头的词」。日常大部分码两三个候选就够，不用按 Tab。</div>
+      </div>
+      <div class="z">
+        <div class="t">和分词的关系</div>
+        <div class="d">辅助码态里<strong>进不了分词</strong>。要逐段改长句，先按一次
+          <code>Tab</code> 退出；退格删掉最后一个形码字母也会自动退出。</div>
       </div>
     </div>
   </div>
