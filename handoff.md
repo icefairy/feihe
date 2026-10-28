@@ -1802,6 +1802,48 @@ compartment 只是给系统看的副本——副本写成「关闭」等于把�
 `insert::KEYBOARD_OPEN` 常量和 `keyboard_switch_stays_open_in_english_mode`
 测试钉住「唯一合法值是 1」，防止有人哪天又按 `open` 双向写。
 
+## 3 键直出会把「词库里没有的长词」锁死在空窗里（0.3.8）
+
+用户报：`lmhdilvi`（联海创智，四字词、词库里没有）**一条候选都没有，连分词也进不去**。
+
+链路（实测，`assist_direct=1` + 小鹤音形）：
+
+| 键 | code | assist | 结果 |
+|---|---|---|---|
+| `l m h` | `lm` | `h` | 3 键直出拆开——`lm`+`h` 筛出「炼」，第一项是单字，判定「拆得对」 |
+| `d` | `lm` | `hd` | `lookup_filtered("lm","hd")` **还是「炼」**，不为空 → 不并回 |
+| `i` | `lm` | `hdi` | 空了 → 想并回，但 `dict::lookup("lmhdi")` 也是空 |
+| `l v i` | `lm` | `hdilvi` | 继续往辅助码里堆，永远空 |
+
+旧规则的并回条件是「现在空 **且** 并回整串查得到东西」。第二条对词库里没有的词
+（四字公司名、生造词、生僻人名）**永远不成立**，于是用户被锁在空候选窗里；而
+`assist_active` 为真时 `try_segment` 直接返回 false，分词模式也进不去——两个出口
+同时关死。
+
+**修法：筛空就并回，不再问「整串查不查得到」。**
+
+```rust
+fn assist_should_fold_back(auto: bool, code: &str, assist: &str, hit: bool) -> bool {
+    auto && !code.is_empty() && !assist.is_empty() && !hit
+}
+```
+
+理由是一条单调性：辅助码筛选是**前缀**匹配（`assist::word_matches` 拿辅助码去比
+词条形码的前缀），同一个音码下，辅助码越长候选集合只会越小——**一旦空了，加字母
+只会更空**。所以「空」就等于「留在辅助码态永远看不到候选」，而并回编码至少还能走
+分词模式。旧的 `merged_hit` 条件只解决「整串在词库里」的那一半（`xrji` → 璇玑），
+另一半（词库没有的长词）被它挡在门外。
+
+手动 `Tab` 拆的照样不并回（`assist_auto` 只在自动拆时置真）：那是明确意图，用户
+自己再按一下 `Tab` 就退出，输入法不许替他反悔。
+
+**没动的地方**：`auto_assist` 还是只在第 3 键猜（`code.len() == 3`）。4 键可能是
+两个完整音节、5 键可能是两个半音节，越长越不该替用户猜。
+
+回归测试：`fold_back_needs_auto_and_an_empty_filter`、
+`empty_assist_folds_back_even_when_whole_code_is_unknown`（纯函数）、
+`unknown_four_char_word_folds_back_then_segments`（真表，整条链路钉住）。
+
 ## 已知问题
 
 - `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现

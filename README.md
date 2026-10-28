@@ -2,8 +2,8 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.3.7** ｜ 安装包 1.62 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 207 项单元测试 ｜ 用户级安装，不需要 UAC
+**当前版本 0.3.8** ｜ 安装包 1.62 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
+不联网、不弹窗、无账号、密码框不接管 ｜ 210 项单元测试 ｜ 用户级安装，不需要 UAC
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
 > `freq.txt`、`phrases.txt`、`pinned.txt`。**压缩一份安装目录就是完整备份**，
@@ -713,7 +713,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 207 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 210 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -737,7 +737,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.7.exe
+# 产物：dist\Feihe-Setup-0.3.8.exe
 ```
 
 不弹 UAC 的原因不只是「省一步」：输入法的 DLL 跑在记事本 / Word / 浏览器这些普通权限
@@ -776,7 +776,7 @@ unregister.cmd    :: 全部移除
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.7.exe
+# 产物：dist\Feihe-Setup-0.3.8.exe
 ```
 
 `build_setup.ps1` 做四件事：

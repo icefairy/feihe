@@ -450,32 +450,26 @@ impl FeiheTextService {
 
     /// 自动拆出来的辅助码该不该并回编码（纯函数）。
     ///
-    /// `hit` = 现在「码 + 辅助码」查得到东西吗；`merged_hit` = 并回整串之后查得到吗。
-    /// 只有「自动拆的 / 现在空 / 并回去有东西」三条同时成立才并回。
-    fn assist_should_fold_back(
-        auto: bool,
-        code: &str,
-        assist: &str,
-        hit: bool,
-        merged_hit: bool,
-    ) -> bool {
-        auto && !code.is_empty() && !assist.is_empty() && !hit && merged_hit
-    }
-
-    /// 撤销「3 键直出」猜错的那次拆分：把自动拆走的辅助码并回编码。
+    /// 判据只有一条：**自动拆的 + 现在筛空了**。
     ///
-    /// 触发条件三条全满足才动：
-    /// 1. 辅助码是**自动**拆出来的（`assist_auto`）；
-    /// 2. 现在的「码 + 辅助码」一条候选都没有；
-    /// 3. 并回去之后的整串**查得到东西**。
+    /// 为什么不问「并回整串查得到东西」：辅助码筛选是**前缀**匹配，一旦这个码+辅助码
+    /// 筛空，再往辅助码上加字母只会更空（集合只会缩小）。也就是说——只要空了，留在
+    /// 辅助码态就永远看不到候选；而并回编码至少还有分词模式这条出路
+    /// （`assist_active` 为真时 `try_segment` 直接返回 false，两个出口同时关死）。
     ///
-    /// 第 3 条是关键：并回去还是空的（用户就是打错了）就别折腾，删字母能让它
-    /// 自己恢复，而这种时候乱改编码只会让用户更迷惑。
+    /// 具体翻车现场：`lmhdilvi`（联海创智，词库里没有的四字词）第 3 键被拆成
+    /// `lm`+`h`（筛出「炼」），第 5 键 `lm`+`hdi` 空了，而整串 `lmhdi` 也查不到
+    /// （词库里没这个词）——旧规则要求「并回查得到」，于是永远并不回去，用户卡在
+    /// 空候选窗里，连分词都进不去。
     ///
     /// 为什么必须有这个撤销：3 键直出是在「第 3 键」这个位置猜的，而双拼的
     /// 4 键码（`xrji` → 璇玑）前 3 键正好长得像「1 个音节 + 1 个形码」。
-    /// 没有撤销时，猜错一次就把用户锁在空候选里——`xrji` 打不出「璇玑」，
-    /// 而开关默认是关的，打开它的用户（从自然码/小鹤带过来的）会以为输入法坏了。
+    /// 没有撤销时，猜错一次就把用户锁在空候选里，打开这个开关的用户（从自然码/小鹤
+    /// 带过来的）会以为输入法坏了。
+    fn assist_should_fold_back(auto: bool, code: &str, assist: &str, hit: bool) -> bool {
+        auto && !code.is_empty() && !assist.is_empty() && !hit
+    }
+
     fn undo_auto_assist(&self) {
         let auto = self.assist_auto.get();
         let code = self.code.borrow().clone();
@@ -491,13 +485,7 @@ impl FeiheTextService {
         };
         // 并回整串（双拼下没有分隔符，直接拼）
         let merged = format!("{code}{assist}");
-        if !FeiheTextService::assist_should_fold_back(
-            auto,
-            &code,
-            &assist,
-            !hit.is_empty(),
-            !dict::lookup(&merged, 1).is_empty(),
-        ) {
+        if !FeiheTextService::assist_should_fold_back(auto, &code, &assist, !hit.is_empty()) {
             return;
         }
         self.code.borrow_mut().clone_from(&merged);
@@ -3403,32 +3391,38 @@ mod tests {
         let merged = dict::lookup("xrji", 1);
         assert!(!merged.is_empty(), "xrji 整串必须有候选，否则没法并回去");
         assert!(
-            FeiheTextService::assist_should_fold_back(
-                true,
-                "xr",
-                "ji",
-                !hit.is_empty(),
-                !merged.is_empty()
-            ),
+            FeiheTextService::assist_should_fold_back(true, "xr", "ji", !hit.is_empty()),
             "自动拆错 + 现在空 + 并回去有东西 → 必须并回编码"
         );
     }
 
-    /// 并回的四个开关位（纯逻辑）。
+    /// 并回的各道门槛（纯逻辑）。
     #[test]
-    fn fold_back_needs_auto_and_a_better_whole_code() {
+    fn fold_back_needs_auto_and_an_empty_filter() {
         use FeiheTextService as S;
-        // 正常情况：自动拆的、现在空、并回去有候选
-        assert!(S::assist_should_fold_back(true, "xr", "ji", false, true));
-        // 用户手动 Tab 拆的：不许动（那是明确意图）
-        assert!(!S::assist_should_fold_back(false, "xr", "ji", false, true));
-        // 现在筛得出东西：拆对了，别动
-        assert!(!S::assist_should_fold_back(true, "ji", "wj", true, true));
-        // 并回去也是空：用户打错了，交给退格
-        assert!(!S::assist_should_fold_back(true, "xr", "zz", false, false));
+        // 自动拆的 + 筛空了 → 并回
+        assert!(S::assist_should_fold_back(true, "xr", "ji", false));
+        // 用户手动 Tab 拆的：不许动（那是明确意图，他自己再按一下 Tab 就退出）
+        assert!(!S::assist_should_fold_back(false, "xr", "ji", false));
+        // 还筛得出东西：拆对了，别动
+        assert!(!S::assist_should_fold_back(true, "ji", "wj", true));
         // 空码不算
-        assert!(!S::assist_should_fold_back(true, "", "ji", false, true));
-        assert!(!S::assist_should_fold_back(true, "xr", "", false, true));
+        assert!(!S::assist_should_fold_back(true, "", "ji", false));
+        assert!(!S::assist_should_fold_back(true, "xr", "", false));
+    }
+
+    /// 筛空就并回，**不看**「并回整串查不查得到」。
+    ///
+    /// 辅助码筛选是前缀匹配，空了以后加字母只会更空；而词库里没有的词（四字公司名、
+    /// 生僻人名）整串永远查不到。旧规则要求「并回去有东西」，等于把这类词锁死：
+    /// 候选窗永远空，`assist_active` 还挡着分词模式。
+    #[test]
+    fn empty_assist_folds_back_even_when_whole_code_is_unknown() {
+        use FeiheTextService as S;
+        // `lm`+`hdi` 空，`lmhdi` 也查不到 —— 照样要并回
+        assert!(S::assist_should_fold_back(true, "lm", "hdi", false));
+        // 辅助码还没到上限、但已经空了，同样并回（更早恢复，用户少看一会儿空窗）
+        assert!(S::assist_should_fold_back(true, "dd", "j", false));
     }
 
     /// 真表验证「筛出单字」这道门槛：`dd` + `j`（自然码，部首 巾）第一项是单字，
@@ -3942,5 +3936,48 @@ mod tests {
         assert!(FeiheTextService::is_shift(0xA1));
         assert!(!FeiheTextService::is_shift(0x41));
         assert!(!FeiheTextService::is_shift(0x0D));
+    }
+
+    /// 词库里没有的四字词，靠分词照样能打出来（用户报：`lmhdilvi` → 联海创智
+    /// 一条候选都没有，连单字模式都进不去）。
+    ///
+    /// 卡住的原因不是分词坏了——整串切成 `lm|hd|il|vi` 完全正常——而是「3 键直出」
+    /// 在第 3 键就把 `lmh` 拆成 `lm`+`h`（`lm`+`h` 确实筛得出「炼」，判定拆得对），
+    /// 之后 `d` 进来辅助码还是 `hd`（仍筛得出「炼」），到第 5 键 `hdi` 才空。
+    /// 旧规则要求「并回整串查得到东西」，而 `lmhdi` 压根不在词库里 → 永远并不回去，
+    /// 用户就永远停在 `lm`+`hdi…` 这个空窗里，`assist_active` 又让分词进不去。
+    ///
+    /// 现在「辅助码超长」本身就是铁证，直接并回。
+    #[test]
+    fn unknown_four_char_word_folds_back_then_segments() {
+        let _g = dict::tests::SCHEME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        dict::set_scheme(Scheme::Xiaohe);
+        let mode = AssistMode::Xiaohe;
+
+        // 第 3 键会被拆
+        let got = FeiheTextService::auto_assist_split("lmh", mode.max_keys(), |p, a| {
+            FeiheTextService::assist_hit_single(p, a, mode)
+        });
+        assert_eq!(got, Some(("lm".into(), "h".into())));
+
+        // 第 4 键还筛得出东西（所以旧规则在这里不会并回）
+        let hit = dict::lookup_filtered("lm", "hd", mode, 1);
+        assert!(!hit.is_empty());
+        // 第 5 键才空，而整串 `lmhdi` 也查不到——旧规则就是死在这里
+        assert!(dict::lookup_filtered("lm", "hdi", mode, 1).is_empty());
+        assert!(dict::lookup("lmhdi", 1).is_empty());
+        assert!(
+            FeiheTextService::assist_should_fold_back(true, "lm", "hdi", false),
+            "辅助码 3 键已超过小鹤音形上限，必须并回"
+        );
+
+        // 并回之后整串（8 键）无候选，分词给出 4 段——这正是用户要的「单字模式」
+        assert!(dict::lookup("lmhdilvi", 1).is_empty());
+        let units = FeiheTextService::syllables("lmhdilvi");
+        let segs =
+            FeiheTextService::split_segments_units(&units, |p| !FeiheTextService::lookup_any(p, 1).is_empty());
+        assert_eq!(segs, vec!["lm", "hd", "il", "vi"]);
     }
 }

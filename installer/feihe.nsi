@@ -32,7 +32,7 @@ Unicode true
 ; 这里留一个兜底值，只为「不经过 build_setup、直接跑 makensis」时能编过；
 ; 正常流程绝不会用它——两处硬编码迟早会出现「DLL 0.3.4 / 安装包 0.3.3」。
 !ifndef APP_VER
-  !define APP_VER "0.3.7"
+  !define APP_VER "0.3.8"
 !endif
 !define APP_PUBLISHER "feihe"
 !define APP_URL       "https://github.com/icefairy/feihe"
@@ -154,7 +154,7 @@ FunctionEnd
 ; 判定「首拷成没成」**不能只看 CopyFiles 的 $Errors**。实测：目标 DLL 被进程
 ; 映射着时，`CopyFiles /SILENT` 有时既不报错、也没写进去——旧逻辑 `IfErrors`
 ; 没抓到，直接跳到大小校验，发现不符就 Abort，改名兜底那条路根本没走。用户看到
-; 的是「装完弹出 DLL 部署失败，请关掉程序重装」——0.3.7 在本机就是这么复现的
+; 的是「装完弹出 DLL 部署失败，请关掉程序重装」——0.3.8 在本机就是这么复现的
 ; （chrome / 编辑器都映射着 C:\soft\Feihe\feihe.dll）。
 ;
 ; 所以现在：**大小比对说了算**。拷完读目标长度，和源一致才算过；不一致就一律
