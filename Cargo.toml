@@ -1,6 +1,6 @@
 [package]
 name = "feihe"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 description = "飞鹤输入法 - TSF (Text Services Framework) 中文输入法，小鹤双拼"
 license = "MIT"
@@ -32,6 +32,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     # 快捷输入取本地时间（GetLocalTime）
     "Win32_System_SystemInformation",
+    # `/fc` 反查：OpenClipboard / GetClipboardData 读剪贴板文本
+    "Win32_System_DataExchange",
     # 设置窗里的词库导入/导出文件选择框
     "Win32_UI_Controls_Dialogs",
     # 用户词库 user.bin：CreateFileMappingW / MapViewOfFile 做文件映射

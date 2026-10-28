@@ -1,4 +1,4 @@
-//! 快捷输入：日期 / 时间 / 星期 / 时间戳 / 农历 / 干支 / 节气
+//! 快捷输入：日期 / 时间 / 星期 / 时间戳 / 农历 / 干支 / 节气 / 剪贴板反查
 //!
 //! ## 为什么要有引导符
 //!
@@ -23,10 +23,10 @@
 //!
 //! ## 前缀匹配
 //!
-//! 八个命令的首字母互不相同（r / s / x / d / t / n / g / j），所以 `/r` 就能唯一
+//! 九个命令的首字母互不相同（r / s / x / d / t / n / g / j / f），所以 `/r` 就能唯一
 //! 确定「日期」。打 `/rq` 和 `/r` 效果一样，不要求用户记全。
 //!
-//! 只打一个引导符时列出全部命令的**当前值预览**——按空格得到最常用的日期，按数字选别的。
+//! 只打一个引导符时列出全部命令的预览——按空格得到最常用的日期，按数字选别的。
 //! 这样不用记码也能用。
 //!
 //! ## 农历 / 干支 / 节气来自 Tyme
@@ -249,6 +249,12 @@ struct Cmd {
     key: &'static str,
     /// 给用户看的名字
     label: &'static str,
+    /// 只打一个 `/` 时的预览文案。
+    ///
+    /// `None` = 用 `build` 的第一项（时间类命令「此刻的值」本身就是最好的预览）。
+    /// `Some` = 不能提前求值的那类：`/fc` 要去读剪贴板，预览列一遍就把用户
+    /// 当前复制的内容白读八次，还可能在剪贴板被占用时卡住。
+    preview: Option<&'static str>,
     build: fn(&Now) -> Vec<String>,
 }
 
@@ -256,6 +262,7 @@ const CMDS: &[Cmd] = &[
     Cmd {
         key: "rq",
         label: "日期",
+        preview: None,
         build: |n| {
             vec![
                 n.date_cn(),
@@ -270,6 +277,7 @@ const CMDS: &[Cmd] = &[
     Cmd {
         key: "sj",
         label: "时间",
+        preview: None,
         build: |n| {
             vec![
                 n.time_hm(),
@@ -282,11 +290,13 @@ const CMDS: &[Cmd] = &[
     Cmd {
         key: "xq",
         label: "星期",
+        preview: None,
         build: |n| vec![n.weekday_cn().to_string(), n.weekday_short().to_string()],
     },
     Cmd {
         key: "dt",
         label: "日期时间",
+        preview: None,
         build: |n| {
             vec![
                 format!("{} {}", n.date_dash(), n.time_hms()),
@@ -299,22 +309,34 @@ const CMDS: &[Cmd] = &[
     Cmd {
         key: "ts",
         label: "时间戳",
+        preview: None,
         build: |n| vec![n.epoch.to_string(), n.epoch_ms.to_string()],
     },
     Cmd {
         key: "nl",
         label: "农历",
+        preview: None,
         build: |n| cached(n, |c| &c.lunar),
     },
     Cmd {
         key: "gz",
         label: "干支",
+        preview: None,
         build: |n| cached(n, |c| &c.ganzhi),
     },
     Cmd {
         key: "jq",
         label: "节气",
+        preview: None,
         build: |n| cached(n, |c| &c.term),
+    },
+    // 反查：读剪贴板里的汉字，给每个字的音 + 辅助码，以及可以直接照着敲的连打串。
+    // 不做「此刻的值」预览（见 `preview` 字段注释）。
+    Cmd {
+        key: "fc",
+        label: "反查",
+        preview: Some("反查（复制文字后敲 /fc）"),
+        build: |_| crate::fancha::from_clipboard(),
     },
 ];
 
@@ -343,7 +365,10 @@ pub fn candidates(key: &str) -> Vec<String> {
     }
     // 多个命令都匹配（只可能是空串）：各取第一项当预览
     hits.iter()
-        .filter_map(|c| (c.build)(&now).into_iter().next())
+        .filter_map(|c| match c.preview {
+            Some(p) => Some(p.to_string()),
+            None => (c.build)(&now).into_iter().next(),
+        })
         .collect()
 }
 

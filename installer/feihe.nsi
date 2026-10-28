@@ -28,7 +28,12 @@ Unicode true
 ; ── 基本信息 ────────────────────────────────────────────────────
 !define APP_NAME      "飞鹤拼音"
 !define APP_NAME_EN   "Feihe IME"
-!define APP_VER       "0.3.3"
+; 版本号以 Cargo.toml 为准，build_setup.ps1 用 /DAPP_VER= 传进来。
+; 这里留一个兜底值，只为「不经过 build_setup、直接跑 makensis」时能编过；
+; 正常流程绝不会用它——两处硬编码迟早会出现「DLL 0.3.4 / 安装包 0.3.3」。
+!ifndef APP_VER
+  !define APP_VER "0.3.4"
+!endif
 !define APP_PUBLISHER "feihe"
 !define APP_URL       "https://github.com/icefairy/feihe"
 
@@ -112,7 +117,7 @@ UninstallIcon "assets\feihe.ico"
 ; 完成页立刻多出一个「重启计算机」，用户看到就以为「必须重启」。
 ; 这个宏是最后一道保险：就算别处再置标记，完成页也不会显示重启选项。
 !define MUI_FINISHPAGE_NOREBOOTSUPPORT
-!define MUI_FINISHPAGE_TEXT "${APP_NAME} 已安装。$\r$\n$\r$\n用 Win+Space 或 Ctrl+Shift 切换到「${APP_NAME}」。$\r$\n$\r$\n如果输入法列表里还看不到它，请注销后重新登录（列表由 shell 缓存）。不需要重启电脑。"
+!define MUI_FINISHPAGE_TEXT "${APP_NAME} 已安装。$\r$\n$\r$\n用 Win+Space 或 Ctrl+Shift 切换到「${APP_NAME}」。$\r$\n$\r$\n如果输入法列表里还看不到它，请注销后重新登录（列表由 shell 缓存）。不需要重启电脑。$\r$\n$\r$\n注意：装之前就开着的程序（浏览器、编辑器、资源管理器）仍在使用旧版 DLL：新功能在它们里面不生效，请把它们关掉重开一次。"
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
 !insertmacro MUI_PAGE_WELCOME

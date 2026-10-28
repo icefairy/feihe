@@ -2107,6 +2107,14 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 在应用里敲键就说明用户已经回到打字，软键盘可以收了
         softkbd::hide();
 
+        // 别的进程（设置窗口）可能刚保存过配置：勾了「3 键直出」、把辅助码改成
+        // 音形之类。这里每次按键探一次文件指纹，变了就重读——否则用户改完设置
+        // 回到文档接着打字，用的还是旧副本，看起来就像「设置没生效」。
+        if config::refresh_if_changed() {
+            // 双拼方案也跟着切（`load` 只更新配置，词库索引要单独通知）
+            dict::set_scheme(config::get().scheme);
+        }
+
         if let Ok(context) = pic.ok() {
             self.context.borrow_mut().replace(context.clone());
         } else {
@@ -3167,6 +3175,29 @@ mod tests {
         );
         let wide = dict::lookup_filtered("dd", "j", mode, 45);
         assert!(wide.iter().any(|w| &**w == "带"), "dd + j 应该筛出「带」");
+    }
+
+    /// 小鹤音形 + 3 键直出：`jiw` 必须能拆成 `ji` + `w`，接着敲 `j` 就是「玑」。
+    ///
+    /// 这条是用户真实反馈的回归测试：反查工具写着「玑 = jiwj」，设置了音形、
+    /// 勾了 3 键直出，敲 `jiwj` 却一个字都出不来。根因是 `dict::collect` 先用
+    /// `limit` 截断再按辅助码过滤，`limit = 1` 时（判定命中用的额度）拿到的是
+    /// `ji` 词频最高的「机」，它不带 `w`，于是永远判定「筛不出」→ 不拆。
+    #[test]
+    fn ji_with_shape_key_is_auto_split() {
+        let _g = dict::tests::SCHEME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        dict::set_scheme(Scheme::Xiaohe);
+        let mode = AssistMode::Xiaohe;
+        let got = FeiheTextService::auto_assist_split("jiw", mode.max_keys(), |p, a| {
+            FeiheTextService::assist_hit_single(p, a, mode)
+        });
+        assert_eq!(got, Some(("ji".into(), "w".into())));
+
+        // 第 4 键接上首形码的第二个键 → 只剩「玑」
+        let hit = dict::lookup_filtered("ji", "wj", mode, 90);
+        assert_eq!(hit.first().map(|w| w.to_string()).as_deref(), Some("玑"));
     }
 
     /// 自造词的准入规则：`li`+`mk`+`yr` → 李明远，四道门全过才记。

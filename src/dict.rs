@@ -547,6 +547,66 @@ pub fn pinyin_of(code: &str, word: &str, pinyin: bool) -> Option<String> {
     None
 }
 
+/// 反查一批**单字**的读音（全拼，音节用空格分隔）。
+///
+/// 只认单字条目：`璇玑` 这条词条只说明整词的拼音，单个字的读音得从它自己的
+/// 单字条目里拿。多音字（`重` chong / zhong）会返回多条，顺序就是索引顺序
+/// （按码），调用方自己决定取哪条。
+///
+/// 为什么不缓存：一次 `/fc` 只扫一遍（几万条内存映射，约 1ms），而缓存要在
+/// 用户导入词库、切换方案后失效——为一个低频命令维护一套失效逻辑不划算。
+pub fn readings_for(chars: &[char]) -> Vec<Vec<String>> {
+    use std::collections::HashMap;
+
+    let mut out: Vec<Vec<String>> = vec![Vec::new(); chars.len()];
+    if chars.is_empty() {
+        return out;
+    }
+    let mut want: HashMap<char, Vec<usize>> = HashMap::new();
+    for (i, &c) in chars.iter().enumerate() {
+        want.entry(c).or_default().push(i);
+    }
+
+    fn take(out: &mut [Vec<String>], want: &HashMap<char, Vec<usize>>, w: &str, py: &str) {
+        // 单字最多 4 字节（汉字 3 字节、扩展区 4 字节），更长的必然是词
+        if w.len() > 4 {
+            return;
+        }
+        let mut it = w.chars();
+        let Some(c) = it.next() else { return };
+        if it.next().is_some() {
+            return;
+        }
+        let Some(idx) = want.get(&c) else { return };
+        for &i in idx {
+            if !out[i].iter().any(|s| s == py) {
+                out[i].push(py.to_string());
+            }
+        }
+    }
+
+    let user = user_source();
+    match &user {
+        UserSrc::Mapped(b) => {
+            for i in 0..b.count() {
+                take(&mut out, &want, b.word(i), b.pinyin(i));
+            }
+        }
+        UserSrc::Heap(ov) => {
+            for (w, py) in &ov.entries {
+                take(&mut out, &want, w, py);
+            }
+        }
+        UserSrc::None => {}
+    }
+
+    let bin = dictbin::get();
+    for i in 0..bin.count() {
+        take(&mut out, &want, bin.word(i), bin.pinyin(i));
+    }
+    out
+}
+
 /// 前缀区间里挑出排在最前面的 `limit` 个位置，键是 `(码长, 原始行号)`。
 ///
 /// ## 为什么不能只按码排
@@ -639,6 +699,19 @@ fn collect(
 
     let pass = |w: &str| -> bool { assist::word_matches(w, mode, assist_prefix) };
 
+    // **带辅助码时必须先扫全量、再截断。**
+    //
+    // `top_by_rank` 是「按词频挑前 limit 条」，过滤发生在它之后。limit 很小时
+    // （判定命中那一路传的是 1），它只挑出该码下词频最高的那一条：`ji` 的第一名
+    // 是「机」，辅助码 `wj` 命中不了它，于是 limit=1 的筛选结果恒为空。
+    // 症状就是「3 键直出永远不拆」和「辅助码对这个字无效」——用户按反查得到的
+    // `jiwj` 敲下去一个字都出不来。
+    //
+    // 不改 `top_by_rank` 去接受过滤闭包：那条热路径上没有辅助码时不能背这个
+    // 开销（单键几千条）。只在对辅助码筛选时把额度放开，让 `top_by_rank` 走
+    // 全排序分支，过滤后再由下面的 `out.len() >= limit` 提前收工。
+    let scan = if assist_prefix.is_empty() { limit } else { usize::MAX };
+
     // 1) 用户词库优先。常态是 mmap 的 user.bin（和 base.bin 同一条零解析路径，
     //    多进程共享页缓存）；只有 bin 缺失或比 txt 旧时才退回堆索引。
     //
@@ -647,7 +720,7 @@ fn collect(
     match &user {
         UserSrc::Mapped(b) => {
             let (ps, pe) = b.prefix_range(which, prefix);
-            for p in top_by_rank(ps..pe, limit, |p| b.rank_key(which, p)) {
+            for p in top_by_rank(ps..pe, scan, |p| b.rank_key(which, p)) {
                 let w = b.word_at(which, p);
                 if !pass(w) || !seen.insert(w) {
                     continue;
@@ -661,7 +734,7 @@ fn collect(
         }
         UserSrc::Heap(ov) => {
             let (ps, pe) = ov.prefix_range(which, prefix);
-            for p in top_by_rank(ps..pe, limit, |p| ov.rank_key(which, p)) {
+            for p in top_by_rank(ps..pe, scan, |p| ov.rank_key(which, p)) {
                 let w = ov.word_at(which, p);
                 if !pass(w) || !seen.insert(w) {
                     continue;
@@ -680,7 +753,7 @@ fn collect(
     let bin = dictbin::get();
     {
         let (ps, pe) = bin.prefix_range(which, prefix);
-        for p in top_by_rank(ps..pe, limit, |p| bin.rank_key(which, p)) {
+        for p in top_by_rank(ps..pe, scan, |p| bin.rank_key(which, p)) {
             let w = bin.word_at(which, p);
             if !pass(w) || !seen.insert(w) {
                 continue;
@@ -1204,6 +1277,36 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+
+    /// 辅助码筛选**不能**被 `limit` 提前截断。
+    ///
+    /// 之前 `collect` 先用 `top_by_rank` 取前 `limit` 条再过滤：`ji` 词频最高的
+    /// 是「机」，辅助码 `wj` 命中不了它，于是 `limit = 1` 时筛选结果永远为空。
+    /// 3 键直出（`jiw`）恰好是拿 `limit = 1` 判断命中的，表现为「勾了 3 码出单字，
+    /// 敲 `jiw` 却没反应」；用户按反查工具敲 `jiwj` 也一个字都出不来。
+    #[test]
+    fn assist_filter_is_not_truncated_by_limit() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            crate::assist::code_of('玑', AssistMode::Xiaohe),
+            Some("wj"),
+            "辅助码表里 玑 必须是官方码 wj，否则整条链都对不上"
+        );
+        for limit in [1usize, 2, 5, usize::MAX] {
+            let hit = lookup_filtered("ji", "wj", AssistMode::Xiaohe, limit);
+            assert!(
+                hit.iter().any(|w| &**w == "玑"),
+                "limit={limit} 时 ji+wj 应该筛出玑，实际 {hit:?}"
+            );
+        }
+        // 只看第一项的那条路（3 键直出的命中判定）也必须看得到东西
+        let one = lookup_filtered("ji", "w", AssistMode::Xiaohe, 1);
+        assert!(
+            one.first().is_some_and(|w| w.chars().count() == 1),
+            "ji+w 的第一项必须是单字，实际 {one:?}"
+        );
     }
 
     #[test]

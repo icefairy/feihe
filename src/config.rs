@@ -2,7 +2,8 @@
 //!
 //! 手写 `key=value` 解析，不引 serde——配置项就十来个，没必要为此拉一个依赖进来。
 //! 每个进程各有一份内存副本，`Activate` 时重新读取；设置窗口改完立即写盘，
-//! 其它进程下次激活时自然生效。
+//! 其它进程在**下一次按键**时通过 `refresh_if_changed` 跟上（不用切输入法，
+//! 更不用重启宿主程序）。
 //!
 //! ## 数据放在安装目录（而不只是配置）
 //!
@@ -476,6 +477,62 @@ fn parse_bool(v: &str) -> bool {
 /// 当前内存中的配置
 pub fn get() -> Config {
     CFG.lock().map(|g| *g).unwrap_or(Config::DEFAULT)
+}
+
+/// `config.ini` 上一次被本进程读到时的指纹：`(修改时间纳秒, 字节数)`。
+static STAMP: Mutex<Option<(u128, u64)>> = Mutex::new(None);
+
+fn stamp_of(p: &Path) -> Option<(u128, u64)> {
+    let m = std::fs::metadata(p).ok()?;
+    let t = m
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((t, m.len()))
+}
+
+/// 配置文件变了就重读一遍，返回是否真的重读过。
+///
+/// ## 为什么需要
+///
+/// 配置是**每个宿主进程各一份**内存副本：在设置窗口（跑在随便哪个进程里）勾上
+/// 「3 键直出」或把辅助码改成音形之后，Word / 浏览器里那份副本还是旧的。用户
+/// 回到文档接着打字，得到的是旧行为，而设置窗口明明勾好了——这时候任何解释
+/// （「要切一下输入法」「要重启」）都像甩锅。
+///
+/// 以前只在 `Activate` 里读：切输入法 / 切窗口才生效。现在每次按键前探一次
+/// 文件指纹，一次 `metadata` 调用（微秒级），换来「改完立刻就对了」。
+///
+/// ## 为什么用 mtime + 长度而不是只看 mtime
+///
+/// 文件系统时间戳精度有限（FAT 是 2 秒），同一秒内连改两次可能看起来没变。
+/// 加上长度能挡住绝大多数「改完立刻保存」的情况；`save` 用的是写临时文件再改名，
+/// 长度变化几乎必然发生。
+pub fn refresh_if_changed() -> bool {
+    let now = stamp_of(&path());
+    let changed = {
+        let mut g = match STAMP.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        if *g == now {
+            false
+        } else {
+            *g = now;
+            true
+        }
+    };
+    if changed {
+        load();
+        // `load` 可能因为版本迁移顺手重写了文件（`ver < CONFIG_VER`），指纹跟着变。
+        // 这里立刻把新指纹记下来，否则下一次按键会为同一次迁移再白读一遍。
+        if let Ok(mut g) = STAMP.lock() {
+            *g = stamp_of(&path());
+        }
+    }
+    changed
 }
 
 /// 改配置并立即写盘

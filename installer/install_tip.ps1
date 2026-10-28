@@ -284,6 +284,39 @@ foreach ($dll in $dlls) {
     }
 }
 
+# -- 5.5 报告：还有哪些进程映射着**别的路径**的 feihe.dll ---------------
+# 换 DLL 只对「之后才加载它」的进程有效。浏览器、资源管理器、编辑器这类常驻程序
+# 在安装前就把旧 DLL 映射进自己的地址空间了，不重启它们，里面跑的一直是旧代码。
+#
+# 症状极具误导性：同一个版本，记事本里新功能好用、Chrome 里却是老样子，用户会
+# 以为「设置没保存」。实测过一台机器上三个不同目录的 feihe.dll 同时活着
+# （旧管理员安装的 C://soft//Feihe、更早的 ProgramData、新装的 LOCALAPPDATA）。
+#
+# 只报告、不杀进程：这里面可能有用户正在写的东西（Word、IDE），替用户关掉窗口
+# 比让他自己重开一次糟糕得多。信息进安装日志，也打一行到控制台。
+$loaded = @{}
+try {
+    foreach ($proc in Get-Process) {
+        try {
+            foreach ($m in $proc.Modules) {
+                if ($m.ModuleName -like 'feihe*.dll' -and $m.FileName) {
+                    if ($m.FileName -ne $DllPath -and $m.FileName -ne $DllPath32) {
+                        $loaded[$proc.ProcessName] = $m.FileName
+                    }
+                }
+            }
+        } catch { }   # 系统进程 / 别的用户的进程读不到模块列表，跳过
+    }
+} catch { }
+if ($loaded.Count -gt 0) {
+    Write-Host "[stale] 下列程序仍在使用旧版 DLL，请关闭后重开一次才会用上新版本："
+    foreach ($k in ($loaded.Keys | Sort-Object)) {
+        Write-Host ("         {0}  ->  {1}" -f $k, $loaded[$k])
+    }
+} else {
+    Write-Host "[stale] 没有进程映射旧路径的 feihe.dll"
+}
+
 # -- 6. 尽力清理旧版本留下的机器级条目 ------------------------------
 # v0.3.0 之前是管理员安装，CLSID/TIP 写在 HKLM、DLL 在 Program Files。现在改成
 # 用户级：HKCU 的条目优先，旧的 HKLM 条目不会再生效，但留着会指向一个已经不存在的

@@ -27,7 +27,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
-$version = '0.3.3'
+# 版本号以 `Cargo.toml` 为唯一真相。以前这里是硬编码的 `'0.3.x'`，升 crate 版本时
+# 忘了同步就会出现「DLL 是 0.3.4、安装包叫 0.3.3」——用户报版本号时会直接被带偏。
+# `^version` 只匹配行首（`[package]` 那一条），依赖里的 `x = { version = "..." }`
+# 和 `tyme4rs = "1.5.0"` 都不在行首，不会被误抓。
+$version = (Select-String -Path (Join-Path $repo 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+if (-not $version) { throw "读不到 Cargo.toml 里的 version，安装包版本号没法确定" }
 
 function Write-Step($msg) { Write-Host "`n[setup] $msg" -ForegroundColor Cyan }
 
@@ -140,7 +146,8 @@ if (-not $hasBom) {
 # makensis 调用抽成函数：正式包和自检包只差一个 /DSELFTEST 宏和输出目录
 function Invoke-Makensis([string]$OutDir, [switch]$SelfTestMode) {
     # 变量别叫 $args —— 那是 PowerShell 的自动变量，容易被覆盖出怪问题
-    $margs = @("/DOUTDIR=$OutDir", "/DSRCDIR=$(Join-Path $repo 'target')", '-V3')
+    $margs = @("/DOUTDIR=$OutDir", "/DSRCDIR=$(Join-Path $repo 'target')",
+               "/DAPP_VER=$version", '-V3')
     if ($SelfTestMode) { $margs += '/DSELFTEST' }
     $margs += 'feihe.nsi'
     Push-Location $PSScriptRoot
@@ -162,7 +169,7 @@ $mb = [math]::Round((Get-Item $setup).Length / 1MB, 2)
 
 Write-Host ''
 Write-Host "[setup] OK -> $setup ($mb MB)" -ForegroundColor Green
-Write-Host '        双击运行即可（会弹 UAC 提权）。'
+Write-Host '        双击运行即可（用户级安装，不弹 UAC）。'
 
 # ── 5. 端到端自检（可选）────────────────────────────────────────
 # 为什么需要：安装包曾经因为用 CopyFiles 部署（运行时拷贝、源路径是构建机路径）
