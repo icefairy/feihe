@@ -148,6 +148,12 @@ pub struct Config {
     /// 默认关：多数人敲到第 3 键是在继续打词，抢成辅助码等于把词吞掉。
     /// 打开的人（从自然码 / 小鹤带过来的）宁愿先出单字，词可以关掉开关或退格重打。
     pub assist_direct: bool,
+    /// 翻页时候选窗一次摊开几行（1 = 老样子，单行横向滚动）。
+    ///
+    /// 单行时一页 9 个，同码字多的码（`ji` 128 个）要按 14 次 `=` 才能看完；摊开
+    /// 5 行就是 45 个一屏，找字快得多。行数是「一次能看多少」，不是「一次翻多少」：
+    /// `=` 仍然一次只挪一行（见 `textservice::turn_page`），否则翻过头就等于没看见。
+    pub candidate_rows: usize,
 }
 
 impl Config {
@@ -172,7 +178,18 @@ impl Config {
         reading: true,
         // 默认关：3 键里那个孤立键更可能是在打下一个音节，自动拆会吞词。
         assist_direct: false,
+        // 默认 5 行：一屏 45 个，覆盖 `ji`/`yi` 这类大字集的大半，又不会糊满屏幕。
+        candidate_rows: 5,
     };
+}
+
+/// 行数的允许范围。上限 9 是「再多就盖住半屏」的实用界限；
+/// 下限 1 = 老的单行行为，关掉多行的人用它。
+pub const ROWS_MIN: usize = 1;
+pub const ROWS_MAX: usize = 9;
+
+pub fn clamp_rows(n: usize) -> usize {
+    n.clamp(ROWS_MIN, ROWS_MAX)
 }
 
 static CFG: Mutex<Config> = Mutex::new(Config::DEFAULT);
@@ -245,6 +262,20 @@ pub fn set_no_popup_for_test(v: bool) {
 /// **读音提示的原子镜像。** 候选窗每画一页都要问一遍（每项一次），走 Mutex 不划算。
 static READING: AtomicBool = AtomicBool::new(true);
 
+/// 候选窗行数的原子镜像：`candidate::show` 每次按键都要问一次。
+static ROWS: AtomicU8 = AtomicU8::new(5);
+
+/// 翻页时一次摊开几行（1 = 单行）
+pub fn candidate_rows() -> usize {
+    ROWS.load(Ordering::Acquire) as usize
+}
+
+pub fn set_candidate_rows(n: usize) {
+    let n = clamp_rows(n);
+    ROWS.store(n as u8, Ordering::Release);
+    update(|c| c.candidate_rows = n);
+}
+
 pub fn reading() -> bool {
     READING.load(Ordering::Acquire)
 }
@@ -259,6 +290,7 @@ fn sync_mirrors(cfg: &Config) {
     PINYIN_MODE.store(cfg.pinyin_mode, Ordering::Release);
     POPUP_MODE.store(cfg.popup.bits(), Ordering::Release);
     READING.store(cfg.reading, Ordering::Release);
+    ROWS.store(clamp_rows(cfg.candidate_rows) as u8, Ordering::Release);
 }
 
 pub fn set_pinyin_mode(on: bool) {
@@ -365,7 +397,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 7;
+const CONFIG_VER: u32 = 8;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -403,6 +435,10 @@ pub fn load() -> Config {
 
     // v6 → v7：新增 `assist_direct`（音形 3 键直出）。缺省 false，不需要迁移动作——
     // 这个开关的默认值就是「保持旧行为」，老用户升级后手感不能变。
+
+    // v7 → v8：新增 `candidate_rows`（翻页时摊开几行）。缺省 5。
+    // 这是**新增显示能力**，不打开也完全不影响原来的单行翻页，所以老用户升级后
+    // 直接拿到 5 行——没人会因为「候选变多了」而不会打字。
 
     // 原子镜像必须在锁外同步：`pinyin_mode()` / `no_popup()` 是热路径，读的是原子量
     sync_mirrors(&cfg);
@@ -452,6 +488,7 @@ fn parse(text: &str) -> (Config, u32) {
             "popup" => cfg.popup = PopupMode::from_key(v),
             "reading" => cfg.reading = parse_bool(v),
             "assist_direct" => cfg.assist_direct = parse_bool(v),
+            "candidate_rows" => cfg.candidate_rows = v.parse().map_or(5, clamp_rows),
             // v5 及更早的键名。`no_popup=1` 是用户勾过的 → 保持「一律不弹」；
             // `0` 是默认值 → 升级到自动检测（见 `load` 里的 v5→v6 说明）。
             "no_popup" | "uileless" => {
@@ -569,7 +606,8 @@ pub fn save(cfg: &Config) {
          learn={}\n\
          popup={}\n\
          reading={}\n\
-         assist_direct={}\n",
+         assist_direct={}\n\
+         candidate_rows={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -582,7 +620,8 @@ pub fn save(cfg: &Config) {
         cfg.learn as u8,
         cfg.popup.key(),
         cfg.reading as u8,
-        cfg.assist_direct as u8
+        cfg.assist_direct as u8,
+        clamp_rows(cfg.candidate_rows)
     );
     // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
     // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程
@@ -711,5 +750,16 @@ mod tests {
         let (cfg, _) = parse(&format!("config_ver={CONFIG_VER}\ntraditional=1\n"));
         assert!(cfg.learn);
         assert!(cfg.traditional);
+    }
+
+    /// 候选行数：缺省 5；手改配置写到离谱的值（0 / 99 / 乱写）要夹回 1..=9。
+    #[test]
+    fn candidate_rows_defaults_and_clamps() {
+        assert_eq!(parse("").0.candidate_rows, 5);
+        assert_eq!(parse("candidate_rows=3\n").0.candidate_rows, 3);
+        assert_eq!(parse("candidate_rows=1\n").0.candidate_rows, 1);
+        assert_eq!(parse("candidate_rows=0\n").0.candidate_rows, ROWS_MIN);
+        assert_eq!(parse("candidate_rows=99\n").0.candidate_rows, ROWS_MAX);
+        assert_eq!(parse("candidate_rows=乱写\n").0.candidate_rows, 5);
     }
 }

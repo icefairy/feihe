@@ -106,8 +106,14 @@ pub struct FeiheTextService {
     candidates: RefCell<Vec<Cow<'static, str>>>,
     /// 当前页内选中索引
     selected: Cell<usize>,
-    /// 当前页号
+    /// 当前页号（多行摊开时是**活动页**：数字键选的就是这一页）
     page: Cell<usize>,
+    /// 候选窗摊开成多行了没有。`+` / `=` 第一次按下时展开，回到第一页再按 `-` 收起。
+    ///
+    /// 摊开几行来自 `config::candidate_rows()`（默认 5）。这个位**只影响显示**：
+    /// 翻页的步子仍然是一行，数字键仍然只认活动页——所以展开与不展开，打出来的
+    /// 字完全一样，只是「能一眼看到多少」不同。
+    expanded: Cell<bool>,
     /// 上一次算出的光标位置（屏幕坐标），翻页/移动选择时复用
     caret_x: Cell<i32>,
     caret_y: Cell<i32>,
@@ -150,6 +156,7 @@ impl FeiheTextService {
             candidates: RefCell::new(Vec::new()),
             selected: Cell::new(0),
             page: Cell::new(0),
+            expanded: Cell::new(false),
             caret_x: Cell::new(0),
             caret_y: Cell::new(0),
             pending_op: RefCell::new(None),
@@ -177,6 +184,7 @@ impl FeiheTextService {
         self.candidates.borrow_mut().clear();
         self.selected.set(0);
         self.page.set(0);
+        self.expanded.set(false);
         self.pending_op.borrow_mut().take();
         self.hide_candidates();
     }
@@ -951,6 +959,24 @@ impl FeiheTextService {
         self.page.set(0);
     }
 
+    /// 退格该不该进逐字（纯函数，`self` 里有 COM 句柄，测试造不出来）。
+    ///
+    /// 见 `backspace_into_segments` 的说明：判据是「第一候选是多字词」。
+    fn backspace_splits(cands: &[Cow<'static, str>]) -> bool {
+        match cands.first() {
+            // 还没打完 / 查不到：退格就是删字母
+            None => false,
+            // 整串只有一个候选，且它是个词 → 这个码被一个词占满
+            Some(_) if cands.len() == 1 => true,
+            // 多候选时只看第一条：上屏结果是个词（xrji → 璇玑）才进逐字；
+            // 是单字（de → 的）说明这码本来就是「一堆同码字」，退格不该劫持。
+            Some(first) => {
+                first.chars().count() >= 2
+                    && first.chars().all(|c| !c.is_ascii_alphanumeric())
+            }
+        }
+    }
+
     /// 组合串显示内容。
     ///
     /// 分词模式下把每一段已选的词拼起来，当前段用 `[]` 括住——这样用户能从
@@ -1228,19 +1254,26 @@ impl FeiheTextService_Impl {
         true
     }
 
-    /// 退格：整串**只有一个候选**时，不删字母，改成切成段逐字选。
+    /// 退格：整串的**上屏结果已经是一个词**时，不删字母，改成切成段逐字选。
     ///
     /// 这是用户按搜狗手感要求的入口：打 `zuci` 出来「组词」，想再造一个「祖祠」，
     /// 以前只能用 `←` 硬拐进分词模式，退格却是「删一个字母」——一个键干两件事才对。
     ///
-    /// 为什么要求「候选恰好一个」而不是「能拆就拆」：退格最常见的用法仍然是改错，
-    /// 满屏候选时把它劫持成「逐字选」，用户改个错要按三次退格。只有整串已经**唯一**
-    /// 命中一个词（`zuci`→组词）时，「这个码被一个词占满了」才成立，逐字选才有意义。
+    /// ## 判据为什么从「恰好一个候选」放宽
+    ///
+    /// 原来是「候选恰好 1 条」——那时候选确实只有整串那一个词。但只要用户用这个
+    /// 入口造过一个同码词（造过「祖祠」之后 `zuci` 就有两条），或者动态词频把
+    /// 同码的别的词顶上来，判据就永远不成立，入口等于消失。用户报的
+    /// 「`xrji` 按退格只会少一个字母、候选还是那堆词组」就是这个。
+    ///
+    /// 现在的判据是**第一候选是不是多字词**：整串的上屏结果是个词（`xrji`→璇玑、
+    /// `zuci`→组词），说明这个码是「一个词占着」；第一候选是单字（`de`→的）或
+    /// 根本没候选（还没打完）时，退格仍然是删字母——那才是改错的常用场景。
     fn backspace_into_segments(&self) -> bool {
         if !self.segments.borrow().is_empty() {
             return false;
         }
-        if self.candidates.borrow().len() != 1 {
+        if !FeiheTextService::backspace_splits(&self.candidates.borrow()) {
             return false;
         }
         if !self.try_segment(&[], true) {
@@ -1610,9 +1643,14 @@ impl FeiheTextService_Impl {
         }
     }
 
-    /// 数字键选词（n 从 1 开始）
+    /// 数字键选词（n 从 1 开始，**活动页**内）
     fn pick(&self, n: usize) {
-        let idx = self.page.get() * candidate::PAGE_SIZE + (n - 1);
+        self.pick_index(self.page.get() * candidate::PAGE_SIZE + (n - 1));
+    }
+
+    /// 按**全表下标**上屏。多行摊开时鼠标可能点的是任意可见页里的项，
+    /// 所以鼠标路径必须能直接指定全表下标，不能再假设「点的都在当前页」。
+    fn pick_index(&self, idx: usize) {
         let word = self.candidates.borrow().get(idx).map(|s| s.to_string());
         match word {
             Some(w) => {
@@ -1674,8 +1712,7 @@ impl FeiheTextService_Impl {
     /// 而多页签程序里 `Ctrl+1..9` 被浏览器抢去切页签，用户需要一个纯鼠标入口。
     /// 切换后立刻重新查候选：钉上的词跳到第一位、取消的回到原位，这就是反馈，
     /// 不用再弹任何提示。
-    fn toggle_pin_candidate(&self, page_index: usize) -> bool {
-        let idx = self.page.get() * candidate::PAGE_SIZE + page_index;
+    fn toggle_pin_candidate(&self, idx: usize) -> bool {
         let Some((code, word)) = self.pin_target(idx) else {
             return false;
         };
@@ -1730,22 +1767,21 @@ impl FeiheTextService_Impl {
         self.toggle_pin_candidate(index);
     }
 
-    /// 候选窗被点了页内第 `index` 项（0 基）。
+    /// 候选窗被点了第 `index` 项（**全表下标**，0 基）。
     ///
-    /// 行为和对应的数字键完全一致——鼠标只是「按数字键」的另一种入口，
-    /// 不应该有第二套语义。
+    /// 行为和「翻到那一页再按对应数字键」完全一致——鼠标只是数字键的另一种入口，
+    /// 不应该有第二套语义。多行摊开后每一行属于不同的页，所以窗口传过来的必须是
+    /// 全表下标（`candidate::hit` 已经按行换算好了），不能再加 `page` 偏移。
     fn on_candidate_click(&self, index: usize) {
         // 窗口可能还挂在屏幕上，但组合态已经结束（宿主刚提交、或按了 Esc）
         if !self.is_composing() {
             return;
         }
         if !self.segments.borrow().is_empty() {
-            // 分词模式：确认当前段并跳到下一段（最后一段则整体上屏）。
-            // `index` 是页内序号，`confirm_segment` 收全表下标——翻过页就必须补上页偏移。
-            self.confirm_segment(self.page.get() * candidate::PAGE_SIZE + index);
+            // 分词模式：确认当前段并跳到下一段（最后一段则整体上屏）
+            self.confirm_segment(index);
         } else {
-            // 普通模式的 `pick` 是 1 基（数字键 1-9），这里补 1
-            self.pick(index + 1);
+            self.pick_index(index);
         }
     }
 }
@@ -1791,20 +1827,58 @@ impl FeiheTextService {
         }
     }
 
+    /// 翻页：`+` / `=` 往下走**一行**，`-` / `↑` 往上走一行。
+    ///
+    /// ## 为什么「一行」而不是「一页」
+    ///
+    /// 候选窗收起时一行就是一页（9 个），和以前完全一样；展开成多行之后一屏能看
+    /// 5 页，如果翻页还是一翻 5 页，用户刚看见的那几页就整块跳过去了——「在第 3 行
+    /// 看到想要的字，按两下 `=` 让它在最下面一行，数字键选它」这条路就走不通。
+    ///
+    /// 所以步子永远是「一行」，也就是 `page` 永远加一减一。视觉上：
+    /// 活动页贴着窗口最后一行（见 `candidate::window_of`），每按一次 `=` 整窗上滚
+    /// 一行，新的第 6 行从底下来、第 1 行从上面走。
+    ///
+    /// ## 展开 / 收起
+    ///
+    /// - 第一次按 `=`：展开（摊成设置里的行数），同时走到第 2 页
+    /// - 退回第 1 页再按 `-`：收起回单行
+    ///
+    /// 收起放在「第 1 页再往上」这个位置，是因为那时再往上也没有候选了——一个按了
+    /// 本来就不会有反应的键，用来收起窗口正好。想连续翻回去的人也不会误收起：
+    /// 从第 3 页连按两下 `-` 到第 1 页，第三下才收起。
     fn turn_page(&self, delta: isize) -> bool {
         let total = self.candidates.borrow().len();
         if total == 0 {
             return false;
         }
-        let pages = total.div_ceil(candidate::PAGE_SIZE) as isize;
-        let next = (self.page.get() as isize + delta).clamp(0, pages - 1);
-        if next as usize != self.page.get() {
-            self.page.set(next as usize);
+        let pages = total.div_ceil(candidate::PAGE_SIZE).max(1);
+        let old = self.page.get();
+
+        if delta > 0 {
+            // 只要不止一页就摊开：哪怕已经翻不动了，摊开也能把上面几页露出来
+            if !self.expanded.get() && pages > 1 {
+                self.expanded.set(true);
+            }
+            self.page.set((old + 1).min(pages - 1));
+        } else if old > 0 {
+            self.page.set(old - 1);
+        } else if self.expanded.get() {
+            // 已经在第一页，再往上就是收起
+            self.expanded.set(false);
             self.selected.set(0);
             self.show_candidates();
             return true;
+        } else {
+            return false;
         }
-        false
+
+        if self.page.get() == old && !self.expanded.get() {
+            return false;
+        }
+        self.selected.set(0);
+        self.show_candidates();
+        true
     }
 
     fn show_candidates(&self) {
@@ -1834,10 +1908,18 @@ impl FeiheTextService {
         }
 
         let items: Vec<&str> = snapshot.iter().map(|s| s.as_ref()).collect();
+        // 行数：收起时 1 行（老样子），展开时取设置里的值。真正画几行还要看候选
+        // 够不够、屏幕放不放得下，那些 `candidate::show` 自己会夹。
+        let rows = if self.expanded.get() {
+            config::candidate_rows()
+        } else {
+            1
+        };
         candidate::show(
             &items,
             self.selected.get(),
             self.page.get(),
+            rows,
             self.caret_x.get(),
             self.caret_y.get(),
         );
@@ -2671,7 +2753,7 @@ mod tests {
         assert_eq!(pos % candidate::PAGE_SIZE, 2);
     }
 
-    /// 用户报的「zuci 只有组词一个候选，想再造祖祠」：判据是候选恰好 1 条、
+    /// 用户报的「zuci 只有组词一个候选，想再造祖祠」：判据是「第一候选是个词」
     /// 且能切成两段。`backspace_into_segments` 就卡这两个条件。
     #[test]
     fn zuci_unique_candidate_is_splittable() {
@@ -2693,6 +2775,50 @@ mod tests {
         let ci = FeiheTextService::lookup_any("ci", 45);
         assert!(zu.iter().any(|w| w.as_ref() == "祖"), "zu 应该有 祖");
         assert!(ci.iter().any(|w| w.as_ref() == "祠"), "ci 应该有 祠");
+    }
+
+    /// 退格进逐字的判据：**第一候选是不是词**。
+    ///
+    /// 原来是「候选恰好 1 条」，用户造过一个同码词之后这个条件就永远不成立，
+    /// 入口等于消失（`xrji` 按退格只会少一个字母）。现在放宽成「第一候选是多字词」，
+    /// 单字（`de` → 的）仍然走删字母——那才是退格最常用的场景。
+    #[test]
+    fn backspace_splits_only_when_top_candidate_is_a_word() {
+        fn cand(v: &[&'static str]) -> Vec<Cow<'static, str>> {
+            v.iter().map(|s| Cow::Borrowed(*s)).collect()
+        }
+        assert!(!FeiheTextService::backspace_splits(&[]), "没候选就删字母");
+        assert!(
+            FeiheTextService::backspace_splits(&cand(&["组词"])),
+            "唯一命中一个词 → 逐字"
+        );
+        // xrji 的实际情况：璇玑在，但同码词不止一条
+        assert!(
+            FeiheTextService::backspace_splits(&cand(&["璇玑", "玄机", "悬记"])),
+            "第一候选是词就该进逐字，哪怕候选有一屏"
+        );
+        // de 这类：第一候选是单字，退格仍然是改错
+        assert!(
+            !FeiheTextService::backspace_splits(&cand(&["的", "得", "地"])),
+            "第一候选是单字时不许劫持退格"
+        );
+        assert!(
+            !FeiheTextService::backspace_splits(&cand(&["abc", "abd"])),
+            "英文候选不是「一个词占满」，不该进逐字"
+        );
+
+        // 用真实词库再钉一次：用户报的那个码必须真的会进逐字
+        let xrji = FeiheTextService::lookup_any("xrji", 9);
+        assert!(!xrji.is_empty(), "xrji 应该有候选");
+        assert!(
+            xrji[0].chars().count() >= 2,
+            "xrji 的第一候选应该是词（实际 {:?}）",
+            xrji.first()
+        );
+        assert!(
+            FeiheTextService::backspace_splits(&xrji),
+            "xrji 按退格必须进逐字（用户报的就是这个）"
+        );
     }
 
     /// 用户报的「璇玑的第二个字打不出来」。

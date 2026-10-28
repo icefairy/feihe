@@ -35,7 +35,7 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 696;
+const CLIENT_H: i32 = 752;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -60,6 +60,7 @@ const ID_POPUP_AUTO: i32 = 136;
 const ID_POPUP_ALWAYS: i32 = 137;
 const ID_POPUP_NEVER: i32 = 138;
 const ID_READING: i32 = 139;
+const ID_ROWS: i32 = 140;
 const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
 const ID_PIN_HINT: i32 = 143;
@@ -147,6 +148,40 @@ fn check(parent: HWND, text: &str, x: i32, y: i32, w: i32, id: i32) -> HWND {
     }
 }
 
+/// 下拉列表（行数这种「一串小整数」用它最省地方，不用排一长排单选按钮）
+fn combo(parent: HWND, x: i32, y: i32, w: i32, id: i32) -> HWND {
+    unsafe {
+        // 四个参数的 h 对下拉列表是「展开后列表的高度」，不是控件高度
+        mk(
+            parent,
+            w!("COMBOBOX"),
+            "",
+            WINDOW_STYLE(CBS_DROPDOWNLIST as u32) | WS_VSCROLL | WS_TABSTOP,
+            x,
+            y,
+            w,
+            200,
+            id,
+        )
+    }
+}
+
+unsafe fn combo_add(h: HWND, text: &str) {
+    let wide = to_wide(text);
+    SendMessageW(
+        h,
+        CB_ADDSTRING,
+        None,
+        Some(LPARAM(wide.as_ptr() as isize)),
+    );
+}
+
+/// 当前选中项；没选中（CB_ERR）返回 None
+unsafe fn combo_pick(h: HWND) -> Option<usize> {
+    let r = SendMessageW(h, CB_GETCURSEL, None, None).0;
+    (r >= 0).then_some(r as usize)
+}
+
 fn push(parent: HWND, text: &str, x: i32, y: i32, w: i32, h: i32, id: i32) -> HWND {
     unsafe {
         mk(
@@ -204,6 +239,10 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_READING, cfg.reading);
     set_checked(h, ID_ASSIST_DIRECT, cfg.assist_direct);
     set_checked(h, ID_LEARN, cfg.learn);
+    if let Ok(cb) = GetDlgItem(Some(h), ID_ROWS) {
+        let idx = config::clamp_rows(cfg.candidate_rows) - config::ROWS_MIN;
+        SendMessageW(cb, CB_SETCURSEL, Some(WPARAM(idx)), None);
+    }
     let learned = crate::freq::len();
     let phrases = crate::phrase::len();
     set_text(
@@ -343,6 +382,14 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_READING => {
             let on = checked(GetDlgItem(Some(h), ID_READING).unwrap_or_default());
             config::set_reading(on);
+        }
+        ID_ROWS => {
+            let sel = GetDlgItem(Some(h), ID_ROWS)
+                .ok()
+                .and_then(|cb| combo_pick(cb));
+            if let Some(i) = sel {
+                config::set_candidate_rows(i + config::ROWS_MIN);
+            }
         }
         ID_ASSIST_DIRECT => {
             let on = checked(GetDlgItem(Some(h), ID_ASSIST_DIRECT).unwrap_or_default());
@@ -526,7 +573,25 @@ unsafe fn build(h: HWND) {
         420,
         ID_READING,
     );
-    y += 24;
+    y += 26;
+
+    // 候选窗摊开几行：多行找字比一页 9 个快得多，但又不能替用户决定，
+    // 所以做成下拉——1 行就是老样子，谁都不被迫改变习惯。
+    label(h, "翻页时显示行数", 16, y, 110, 0);
+    let cb = combo(h, 130, y - 4, 60, ID_ROWS);
+    for n in config::ROWS_MIN..=config::ROWS_MAX {
+        combo_add(cb, &n.to_string());
+    }
+    label(h, "行", 196, y, 20, 0);
+    label(
+        h,
+        "按 + / = 进翻页时摊开成多行，回到第一页再按 - / ↑ 收起",
+        216,
+        y,
+        226,
+        0,
+    );
+    y += 26;
 
     y += 12;
     check(h, "动态调频（按实际选词调整候选顺序）", 16, y - 2, 300, ID_LEARN);
@@ -560,6 +625,7 @@ unsafe fn build(h: HWND) {
         .iter()
         .map(|(k, name)| format!("{}{k} {name}", crate::quick::PREFIX))
         .collect();
+    let rows = quick.chunks(4).count() as i32;
     for (i, chunk) in quick.chunks(4).enumerate() {
         let text = if i == 0 {
             format!("快捷输入：{}", chunk.join(" · "))
@@ -574,7 +640,7 @@ unsafe fn build(h: HWND) {
         h,
         "标点：全角时 \\ 出「、」，Shift+\\ 出「|」 · 翻页：- = ↑ ↓",
         16,
-        y + 68,
+        y + 26 + rows * 20 + 4,
         428,
         0,
     );
@@ -592,8 +658,8 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_COMMAND => {
             let id = (w.0 & 0xFFFF) as i32;
             let code = ((w.0 >> 16) & 0xFFFF) as u32;
-            // 只处理点击；忽略控件自身的通知噪音
-            if code == BN_CLICKED || code == 0 {
+            // 只处理点击（普通控件）和下拉框的「换了一项」；忽略其它通知噪音
+            if code == 0 || code == CBN_SELCHANGE {
                 on_command(h, id);
             }
             LRESULT(0)
