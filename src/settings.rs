@@ -297,7 +297,8 @@ unsafe fn sync(h: HWND) {
         h,
         ID_STATS,
         &format!(
-            "词库：共 {total} 条，其中用户词 {user} 条 · 当前编码方案：{}",
+            "词库：共 {total} 条，其中用户词 {user} 条（{}）· 当前编码方案：{}",
+            dict::user_source_label(),
             scheme.label()
         ),
     );
@@ -556,7 +557,14 @@ unsafe fn build(h: HWND) {
     radio(h, "繁体", 190, y - 2, 70, ID_HANZI_TRAD, false);
 
     y += 40;
-    check(h, "全角标点（，。、；等）", 16, y - 2, 220, ID_FULLWIDTH);
+    check(
+        h,
+        "全角符号（英文态下标点占一个汉字宽：，．；／；中文态恒为中文标点）",
+        16,
+        y - 2,
+        428,
+        ID_FULLWIDTH,
+    );
 
     y += 30;
     check(h, "状态浮窗跟随光标（默认固定在屏幕右下角，可拖动）", 16, y - 2, 420, ID_FOLLOW);

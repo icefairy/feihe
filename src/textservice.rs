@@ -884,17 +884,55 @@ impl FeiheTextService {
         Some(ch)
     }
 
-    /// 这个键在当前配置下要不要**自己**输出全角标点。
+    /// 这个键在**中文态**下要不要自己输出中文标点。
     ///
-    /// 两个门：用户开了「全角标点」、且没按 Shift（Shift 组合如 `?` `:` `|`
-    /// 交给应用自己算，免得我们算的和键盘布局对不上）。
-    /// 把这两个门收在一处，是因为「没在组合态」和「正在组合态」两条路都要用，
-    /// 分开写必然有一边漏掉。
-    fn fullwidth_punct_for(vk: u8) -> Option<char> {
-        if !config::get().fullwidth || Self::shift_down() {
+    /// 「用哪套标点」跟**中英切换**走：中文态恒出中文标点（，。、；……本来就占
+    /// 一个汉字宽），英文态恒出半角标点。以前这里还受「全角标点」开关控制——
+    /// 关掉它中文态就出半角逗号句号，等於把「标点语言」和「字符宽度」两件事
+    /// 混在一个开关上，用户关掉它多半只是想要半角宽度，得到的却是英文标点。
+    /// 现在全角开关只管宽度（见 `fullwidth_ascii_for`），这里不再看它。
+    ///
+    /// 唯一的门是 Shift：Shift 组合（`?` `:` `|`）交给应用自己算，免得我们算的
+    /// 和键盘布局对不上。「没在组合态」和「正在组合态」两条路都要用，收在一处。
+    fn chinese_punct_for(vk: u8) -> Option<char> {
+        if Self::shift_down() {
             return None;
         }
         Self::fullwidth_punct(vk)
+    }
+
+    /// 英文态 + 全角开关打开时，标点键换成**全角英文标点**。
+    ///
+    /// 全角 = 字符占一个汉字的宽度，和半角是**不同的码位**（Unicode FF0x 区）：
+    /// 句号是「．」（FF0E）不是中文的「。」（3002），逗号「，」（FF0C）与中文
+    /// 逗号共用一个码位。这样英文态下也能让标点跟汉字对齐排——这正是全角
+    /// 开关的本意，而不是「换成中文标点」。
+    ///
+    /// 同样只认不带 Shift 的键位（理由同 `chinese_punct_for`）；字母数字仍为
+    /// 半角（主流输入法的全角字母是另一个开关的事，这里不掺和）。
+    fn fullwidth_ascii_for(vk: u8) -> Option<char> {
+        if !config::get().fullwidth || Self::shift_down() {
+            return None;
+        }
+        Self::fullwidth_ascii(vk)
+    }
+
+    /// 全角英文标点表（纯表，不含开关判断，见 `fullwidth_ascii_for`）。
+    fn fullwidth_ascii(vk: u8) -> Option<char> {
+        let ch = match vk {
+            v if v == VK_OEM_COMMA.0 as u8 => '，',
+            v if v == VK_OEM_PERIOD.0 as u8 => '．',
+            v if v == VK_OEM_1.0 as u8 => '；',
+            v if v == VK_OEM_7.0 as u8 => '＇',
+            v if v == VK_OEM_MINUS.0 as u8 => '－',
+            v if v == VK_OEM_PLUS.0 as u8 => '＝',
+            v if v == VK_OEM_2.0 as u8 => '／',
+            v if v == VK_OEM_4.0 as u8 => '［',
+            v if v == VK_OEM_6.0 as u8 => '］',
+            v if v == VK_OEM_5.0 as u8 => '＼',
+            _ => return None,
+        };
+        Some(ch)
     }
 
     /// 该虚拟键是否属于当前方案的编码键。
@@ -1026,6 +1064,11 @@ impl FeiheTextService {
         // 手动分隔符只影响切分，查询时要去掉：`ni'hao` 和 `nihao` 查同一批候选
         let query = FeiheTextService::query_code(&code);
         let query: &str = query.as_ref();
+
+        // 新敲的字母 = 新一轮找字：收起摊开的多行、回到第一行。不然上一轮翻到
+        // 6 行开外再打字，候选窗还停在原地，得按好几下 `-` 才回得来。
+        // （翻页本身走 turn_page，不经过这里，所以「翻着看」不受影响。）
+        self.expanded.set(false);
 
         let assist_prefix = self.assist.borrow().clone();
         let mode = config::get().assist_mode;
@@ -1652,7 +1695,7 @@ impl FeiheTextService_Impl {
                 // 以前这条分支会把它当成编码键 push 进去，`de` 变 `de/`、
                 // 候选整列清空，用户还得退格才能继续。
                 if ch == quick::PREFIX {
-                    if let Some(p) = FeiheTextService::fullwidth_punct_for(v) {
+                    if let Some(p) = FeiheTextService::chinese_punct_for(v) {
                         let mut buf = [0u8; 4];
                         self.commit_segments(p.encode_utf8(&mut buf));
                         return Ok(BOOL::from(true));
@@ -1677,16 +1720,23 @@ impl FeiheTextService_Impl {
                 self.segments.borrow_mut().clear();
                 self.refresh();
                 // 新编码可能整串就有候选了（或音节还没打完），那就退出分词模式
-                if !self.try_segment(&prev, false) {
-                    self.update_composition();
+                if self.try_segment(&prev, false) {
+                    // 焦点跟到**新打出来的最后一段**上。停在旧段的话，候选窗会对齐
+                    // 到旧段已选的词——那个词可能是翻了很多页才选中的，表现就是
+                    // 「打了新字母，候选窗还停在 6 行开外，要按好几下 - 才回第一行」。
+                    let n = self.segments.borrow().len();
+                    self.seg_idx.set(n.saturating_sub(1));
+                    self.expanded.set(false);
+                    self.refresh();
                 }
+                self.update_composition();
                 Ok(BOOL::from(true))
             }
             // 其他键（标点、Tab 之类）：整体上屏，键再交给应用。
             // 标点上屏是主流输入法的通行做法，也是长句的自然结束方式。
             // 全角标点自己粘上去并吞键，理由同普通组合态。
             _ => {
-                if let Some(ch) = FeiheTextService::fullwidth_punct_for(vk) {
+                if let Some(ch) = FeiheTextService::chinese_punct_for(vk) {
                     let mut buf = [0u8; 4];
                     let punct = ch.encode_utf8(&mut buf);
                     // 有段根本选不出字（音节不像拼音，多半是在打英文）→ 整体上屏
@@ -2302,10 +2352,12 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         if FeiheTextService::modifiers_down() {
             return Ok(BOOL::from(false));
         }
-        // 英文态：一个键都不吃，全部交给应用。
+        // 英文态：默认一个键都不吃，全部交给应用。
         // 这一步不能省——宿主不会替我们挡住按键（见 insert::CHINESE 的注释）。
+        // 全角开关开着时例外：标点键要接过来换成全角形式（占一个汉字宽），
+        // 不认下来 OnKeyDown 就没机会插字。
         if !insert::chinese() {
-            return Ok(BOOL::from(false));
+            return Ok(BOOL::from(FeiheTextService::fullwidth_ascii_for(vk).is_some()));
         }
         if self.is_composing() {
             return Ok(BOOL::from(true));
@@ -2315,7 +2367,7 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 全角标点开关等于失效。返回 TRUE 只是「让我看一眼」，OnKeyDown 里
         // 该拒绝的照样返回 FALSE，键最终还是会交给应用。
         let take = FeiheTextService::is_code_key(vk)
-            || FeiheTextService::fullwidth_punct_for(vk).is_some();
+            || FeiheTextService::chinese_punct_for(vk).is_some();
         Ok(BOOL::from(take))
     }
 
@@ -2459,10 +2511,17 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             return Ok(BOOL::from(false));
         }
 
-        // 英文态：不组合、不拦键
+        // 英文态：不组合、不拦键——**标点除外**。全角开关开着时，标点键自己
+        // 插全角形式（，．；……占一个汉字宽），然后把键吞掉，否则应用会插半角。
+        // 全角关着（半角）时维持老样子：一切原样进应用，标点由键盘布局决定。
         if !insert::chinese() {
             if self.is_composing() {
                 self.commit_current();
+            }
+            if let Some(ch) = FeiheTextService::fullwidth_ascii_for(vk) {
+                let mut buf = [0u8; 4];
+                self.insert_direct(ch.encode_utf8(&mut buf));
+                return Ok(BOOL::from(true));
             }
             return Ok(BOOL::from(false));
         }
@@ -2490,7 +2549,7 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             }
 
             // 全角标点：自己插字，不建组合串
-            if let Some(ch) = FeiheTextService::fullwidth_punct_for(vk) {
+            if let Some(ch) = FeiheTextService::chinese_punct_for(vk) {
                 let mut buf = [0u8; 4];
                 self.insert_direct(ch.encode_utf8(&mut buf));
                 return Ok(BOOL::from(true));
@@ -2595,7 +2654,7 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                     // 消失，候选窗照旧，没有任何反馈；分词态更糟，那条路会把它塞进编码
                     // （`de` → `de/`），候选当场清空。
                     if ch == quick::PREFIX && !self.code.borrow().is_empty() {
-                        if let Some(p) = FeiheTextService::fullwidth_punct_for(v) {
+                        if let Some(p) = FeiheTextService::chinese_punct_for(v) {
                             let mut buf = [0u8; 4];
                             self.commit_with(p.encode_utf8(&mut buf));
                             return Ok(BOOL::from(true));
@@ -2641,7 +2700,7 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             // 全角标点例外——不能把键还给应用，应用会插半角。自己粘上去，
             // 并且要吞掉这个键（返回 true），否则用户会得到「，,」两个字符。
             _ => {
-                if let Some(ch) = FeiheTextService::fullwidth_punct_for(vk) {
+                if let Some(ch) = FeiheTextService::chinese_punct_for(vk) {
                     let mut buf = [0u8; 4];
                     self.commit_with(ch.encode_utf8(&mut buf));
                     return Ok(BOOL::from(true));
@@ -3094,6 +3153,29 @@ mod tests {
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
         assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
+    }
+
+    /// 英文态的全角标点是**全角英文**，不是中文标点。
+    ///
+    /// 全角 = 占一个汉字宽（Unicode FF0x 区的独立码位），句号是「．」不是「。」。
+    /// 「用哪套标点」跟中英切换走：中文态恒出中文标点（`fullwidth_punct`），
+    /// 英文态全角开才出这套。两张表必须是不同的映射。
+    #[test]
+    fn fullwidth_ascii_differs_from_chinese_punct() {
+        use FeiheTextService as S;
+        // 句号：英文全角「．」(FF0E) ≠ 中文「。」(3002)
+        assert_eq!(S::fullwidth_ascii(VK_OEM_PERIOD.0 as u8), Some('．'));
+        assert_ne!(S::fullwidth_ascii(VK_OEM_PERIOD.0 as u8), S::fullwidth_punct(VK_OEM_PERIOD.0 as u8));
+        // 逗号共用「，」；分号引号括号斜杠都是全角形式
+        assert_eq!(S::fullwidth_ascii(VK_OEM_COMMA.0 as u8), Some('，'));
+        assert_eq!(S::fullwidth_ascii(VK_OEM_1.0 as u8), Some('；'));
+        assert_eq!(S::fullwidth_ascii(VK_OEM_7.0 as u8), Some('＇'));
+        assert_eq!(S::fullwidth_ascii(VK_OEM_2.0 as u8), Some('／'));
+        assert_eq!(S::fullwidth_ascii(VK_OEM_4.0 as u8), Some('［'));
+        assert_eq!(S::fullwidth_ascii(VK_OEM_6.0 as u8), Some('］'));
+        // 反引号、字母照旧不接
+        assert_eq!(S::fullwidth_ascii(VK_OEM_3.0 as u8), None);
+        assert_eq!(S::fullwidth_ascii(0x41), None);
     }
 
     /// 空的引导符必须有候选，而且第一项就是斜杠本身。

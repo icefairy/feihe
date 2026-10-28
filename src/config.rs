@@ -120,7 +120,12 @@ pub struct Config {
     pub scheme: Scheme,
     /// 辅助码（助记码）方案：关闭 / 自然码 / 小鹤音形
     pub assist_mode: AssistMode,
-    /// 全角标点 / 全角字母数字
+    /// 全角符号开关（浮窗「全/半」、设置窗勾选）。
+    ///
+    /// 只管**宽度**，不管「用哪套标点」：中文态恒出中文标点（跟中英切换走），
+    /// 英文态标点默认半角、开了全角才换成全角英文标点（．，；……FF0x 区，
+    /// 占一个汉字宽）。以前这个开关关掉会让中文态出半角逗号句号——等于把
+    /// 「标点语言」和「字符宽度」混在一处，见 `textservice::chinese_punct_for`。
     pub fullwidth: bool,
     /// 状态浮窗配色
     pub skin: Skin,

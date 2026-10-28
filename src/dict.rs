@@ -379,6 +379,18 @@ fn search(
     // `oo` 里选过的「哦」跑到 `ee` 的第一位，顶掉饿 / 呃 / 额。
     crate::freq::rank(&mut out, &lens, prefix);
 
+    // 完整辅助码：形码打满（自然码 1 键 / 小鹤 2 键）时，首字形码与输入**完全相等**
+    // 的单字就是用户要的那个字（`jm` + `vo` → 简），提到最前。
+    //
+    // 为什么必须做：筛选只按「首字形码是输入的前缀」算，单字和词组一视同仁，
+    // 排序只看词频——「简单」比「简」常用，形码打满后第一候选还是「简单」，
+    // 用户要的精确单字沉在后面，3 键直出 + 完整形码等于白打。形码打满意味着
+    // 用户已经把首字「指定到字」了，此时精确命中的单字理应赢过仅前缀命中的词组。
+    //
+    // 只在打满时做：形码没打满时还是前缀筛选语义（`v` 该出所有 v 部首的字），
+    // 不能提前抢排序。置顶仍然在最后执行，用户显式钉的词照赢。
+    promote_exact_shape(&mut out, assist_prefix, mode);
+
     // 自造词组：用户一段一段拼出来的、词库里本来没有的词（`limkyr`→李明远）。
     // 码打满就出，并且排在最前面——这是用户刚造的词，他下次敲这个码要的就是它。
     //
@@ -445,6 +457,39 @@ fn search(
         promote(&mut out, &w, true, limit);
     }
     out
+}
+
+/// 完整辅助码下，把「首字形码与输入完全相等」的单字稳定地提到候选最前。
+///
+/// 稳定 = 提上去的若干单字保持原有相对顺序（同为精确命中时词频高的还在前），
+/// 其余候选原顺序跟在后面。只重排、不插入：形码相等的字不在候选里就说明它
+/// 被读音前缀筛掉了，硬塞进来反而是错字。
+/// 抽成独立函数是为了单测（`search` 依赖 mmap 的词库，测试进程构造不自由）。
+fn promote_exact_shape(out: &mut Vec<Cow<'static, str>>, assist_prefix: &str, mode: AssistMode) {
+    if mode == AssistMode::Off || assist_prefix.is_empty() {
+        return;
+    }
+    // 没打满 = 还是前缀筛选语义，不动排序
+    if assist_prefix.chars().count() != mode.max_keys() {
+        return;
+    }
+    let exact = |w: &str| {
+        w.chars().count() == 1
+            && crate::assist::code_of(w.chars().next().unwrap(), mode)
+                .is_some_and(|c| c.split('|').any(|one| one == assist_prefix))
+    };
+    let mut head = Vec::new();
+    let mut rest = Vec::with_capacity(out.len());
+    for w in out.drain(..) {
+        if exact(&w) {
+            head.push(w);
+        } else {
+            rest.push(w);
+        }
+    }
+    out.reserve(head.len() + rest.len());
+    out.extend(head);
+    out.extend(rest);
 }
 
 /// 把 `word` 提到候选最前面。
@@ -776,6 +821,19 @@ pub fn stats() -> (usize, usize, Scheme) {
         UserSrc::None => 0,
     };
     (dictbin::get().count() + user, user, scheme())
+}
+
+/// 用户词库当前**实际生效**的来源（设置窗展示用）。
+///
+/// 「user.bin 存在」不等于「在用」：`user_dict.txt` 比 bin 新（手改了没重新编译）
+/// 或 bin 读不出来时，运行时退回文本。把这个状态亮出来，用户就不用猜
+/// 「编译出来的 user.bin 到底有没有被用」。
+pub fn user_source_label() -> &'static str {
+    match user_source() {
+        UserSrc::Mapped(_) => "user.bin 已启用",
+        UserSrc::Heap(_) => "user_dict.txt 文本回退（重新编译后启用 user.bin）",
+        UserSrc::None => "未导入个人词库",
+    }
 }
 
 /// 导出全部词库到 `词<TAB>全拼` 文本。返回条目数。
@@ -1461,5 +1519,46 @@ pub(crate) mod tests {
             single
         );
         assert!(!r.is_empty());
+    }
+
+    /// 完整辅助码：形码打满时，首字形码**完全相等**的单字提到最前。
+    ///
+    /// 用户报的现场：3 键直出开着，`jm` + `vo`（简 的官方形码）出来的第一候选
+    /// 是「简单」——筛选只按前缀、排序只看词频，精确指定的单字沉在后面。
+    /// 用真 assist 表（静态数据，和 `split_trailing_assist_hits_real_table` 同理）。
+    #[test]
+    fn full_assist_promotes_exact_shape_chars() {
+        use crate::assist::AssistMode;
+
+        // 简 的小鹤形码是 vo（assist.txt 官方码），单 的不是
+        assert_eq!(crate::assist::code_of('简', AssistMode::Xiaohe), Some("vo"));
+        assert_ne!(crate::assist::code_of('单', AssistMode::Xiaohe), Some("vo"));
+
+        let mut out = vec![
+            Cow::Borrowed("简单"),
+            Cow::Borrowed("简"),
+            Cow::Borrowed("单"),
+        ];
+        promote_exact_shape(&mut out, "vo", AssistMode::Xiaohe);
+        assert_eq!(
+            out.iter().map(|w| w.as_ref()).collect::<Vec<_>>(),
+            vec!["简", "简单", "单"],
+            "形码打满：精确单字置顶，其余相对顺序不变"
+        );
+
+        // 形码没打满 = 前缀筛选语义，不动排序
+        let mut out = vec![Cow::Borrowed("简单"), Cow::Borrowed("简")];
+        promote_exact_shape(&mut out, "v", AssistMode::Xiaohe);
+        assert_eq!(out[0], "简单");
+
+        // 多字词的首字即使精确命中也不提（用户打满形码要的是字不是词）
+        let mut out = vec![Cow::Borrowed("简报"), Cow::Borrowed("件")];
+        promote_exact_shape(&mut out, "vo", AssistMode::Xiaohe);
+        assert_eq!(out.iter().any(|w| w.as_ref() == "简"), false);
+
+        // 自然码 1 键打满同理：部首码相等的单字置顶（的→白→b）
+        let mut out = vec![Cow::Borrowed("地方"), Cow::Borrowed("的")];
+        promote_exact_shape(&mut out, "b", AssistMode::Ziranma);
+        assert_eq!(out[0], "的");
     }
 }
