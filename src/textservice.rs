@@ -46,9 +46,13 @@ const MAX_CANDIDATES: usize = 90;
 /// 敲一个 `n` 能查出 90 个候选 = 10 页，第 4 页往后基本是生僻字，翻过去也没用，
 /// 但「一直能翻」这件事本身就会让人怀疑是不是翻不完。所以：
 ///
-/// - 1 键：18 个（2 页）
-/// - 2 键：45 个（5 页）
-/// - 3 键及以上：满额 90
+/// - 1 键：18 个（2 页）——单键还只是半截音节，候选意义本来就弱
+/// - 2 键及以上：满额 90（10 页）
+///
+/// 2 键**曾经**砍到 45，理由是「完整音节也不用那么多」。这是错的：2 键就是一个完整
+/// 音节，单字音节动辄上百（`yi` 136 个、`ji` 128 个），45 条等于把后半截字全藏起来。
+/// 用户报的「打不出璇玑的玑」就是这么来的——`玑` 在 `ji` 的单字里排第 57 位，
+/// 45 的上限刚好吃掉它，翻页到底也没有。所以 2 键与 3 键及以上一样给满额。
 ///
 /// 按**去掉手动分隔符和空白后的字符数**算，`ni'hao` 和 `nihao` 拿同样的额度。
 fn candidate_limit(code: &str) -> usize {
@@ -58,7 +62,6 @@ fn candidate_limit(code: &str) -> usize {
         .count();
     match n {
         0 | 1 => 18,
-        2 => 45,
         _ => MAX_CANDIDATES,
     }
 }
@@ -2648,6 +2651,39 @@ mod tests {
         let ci = FeiheTextService::lookup_any("ci", 45);
         assert!(zu.iter().any(|w| w.as_ref() == "祖"), "zu 应该有 祖");
         assert!(ci.iter().any(|w| w.as_ref() == "祠"), "ci 应该有 祠");
+    }
+
+    /// 用户报的「璇玑的第二个字打不出来」。
+    ///
+    /// `玑` 在 `ji` 的单字里排第 57 位。两键的候选上限一度是 45（5 页），
+    /// 翻页到底也够不着它——不是词库缺字，是被额度截断了。这条测试同时钉住
+    /// 两件事：额度得给到 10 页；`玑` 真能落在额度之内。
+    #[test]
+    fn rare_single_char_fits_two_key_limit() {
+        let limit = candidate_limit("ji");
+        assert!(
+            limit >= MAX_CANDIDATES,
+            "两键是完整音节，单字音节动辄上百（yi 136 / ji 128），额度必须给满，当前 {limit}"
+        );
+        let list = FeiheTextService::lookup_any("ji", limit);
+        let pos = list
+            .iter()
+            .position(|w| w.as_ref() == "玑")
+            .expect("ji 的候选里应该能翻到「玑」");
+        assert!(pos < limit, "「玑」在下标 {pos}，超了上限 {limit} 就会翻不到");
+    }
+
+    /// 「璇玑」是整词，不该逼用户去逐个选字。`extra_dict.txt` 里补了它。
+    #[test]
+    fn xuanji_is_a_whole_word() {
+        // 码由 `encode_pinyin` 生成，不手写（手写双拼码太容易错）
+        let code = shuangpin::encode_pinyin(Scheme::Xiaohe, "xuan ji").expect("xuan ji");
+        assert!(
+            FeiheTextService::lookup_any(&code, MAX_CANDIDATES)
+                .iter()
+                .any(|w| w.as_ref() == "璇玑"),
+            "敲 {code}（xuan ji）的候选里应该有「璇玑」"
+        );
     }
 
     /// 不弹窗模式下候选要拼进组合串：没有候选窗，这是用户唯一能看到候选的地方。

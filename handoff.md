@@ -512,12 +512,18 @@ let alive = Arc::downgrade(&self.alive);                    // 存活令牌
 ```rust
 fn candidate_limit(code: &str) -> usize {
     let n = code.chars().filter(|c| *c != SEP && !c.is_whitespace()).count();
-    match n { 0 | 1 => 18, 2 => 45, _ => MAX_CANDIDATES }   // 90
+    match n { 0 | 1 => 18, _ => MAX_CANDIDATES }   // 90
 }
 ```
 
 单键（`n`）能命中几千个字，取前 90 个里绝大多数是用户永远不会选的。
-18 = 2 页，正好覆盖「我要的那个字在第二页」这种常见情况；三键以上才可能真的需要 90。
+18 = 2 页，正好覆盖「我要的那个字在第二页」这种常见情况。
+
+**两键曾经是 45（5 页），这是错的**，用户报「`璇玑` 的第二个字打不出来」才发现：
+两键已经是一个完整音节，单字音节动辄上百（`yi` 136、`ji` 128、`yu` 117），45 条
+等于把后半截全藏起来。`玑` 在 `ji` 的单字里排第 57 位，翻页到底也没有它——
+用户以为词库缺字，其实是额度截断。现在两键与三键以上一样给满 90。
+判断依据别再用「两键候选少」这种直觉：**看该音节的单字总数**。
 
 改的是一个函数，但所有查询入口都得换：`refresh` 的两条路径、`confirm_segment`、
 分词 `lookup_any`。漏一处就会出现「分词时又冒出 90 个」。
@@ -539,10 +545,10 @@ fn candidate_limit(code: &str) -> usize {
    的 `pinyin.txt` 取音，只补「整个字都没收录」的（避免多音字被塞进别的码），词频记 0。
 
 覆盖率自检：8105 表 7896 可编码全中、GB2312 6763 全中、去重 8006，缺 0。补字后
-`base.bin`（发布构建）2895 KB / 46492 条。
+`base.bin`（发布构建）2895 KB / 46493 条。
 GBK 那两万多字（异形字 / 繁体 / 日韩汉字）不收：繁体靠 `zhconv` 实时转，异体字收了
 只会让候选变长。（`dict.txt` 38573 行 + `extra_dict.txt` 183 行 + 12 份 `extra_*.txt`
-共 7749 条，`build.rs` 按「词 + 全拼」去重后剩 46492 条。）
+共 7749 条，`build.rs` 按「词 + 全拼」去重后剩 46493 条。）
 
 ### 分类词表（`src/extra_*.txt`，自动生成）
 
@@ -1294,7 +1300,7 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 
 ```
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# → dist\Feihe-Setup-0.3.0.exe（1.61 MB，内嵌 3776 KB + 3820 KB 的双架构 DLL）
+# → dist\Feihe-Setup-0.3.1.exe（1.61 MB，内嵌 3776 KB + 3820 KB 的双架构 DLL）
 ```
 
 设计取舍：
