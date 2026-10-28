@@ -507,26 +507,35 @@ let alive = Arc::downgrade(&self.alive);                    // 存活令牌
 > 另外窗口要响应 `WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATE`，否则点候选窗会把
 > 输入框的焦点抢走，点完继续打字就打到别处去了。
 
-## 候选数按码长衰减（`textservice.rs`）
+## 候选数不设上限（`textservice.rs`）
 
 ```rust
-fn candidate_limit(code: &str) -> usize {
-    let n = code.chars().filter(|c| *c != SEP && !c.is_whitespace()).count();
-    match n { 0 | 1 => 18, _ => MAX_CANDIDATES }   // 90
-}
+/// usize::MAX = 不截断
+const CANDIDATE_LIMIT: usize = usize::MAX;
 ```
 
-单键（`n`）能命中几千个字，取前 90 个里绝大多数是用户永远不会选的。
-18 = 2 页，正好覆盖「我要的那个字在第二页」这种常见情况。
+这里**曾经**按码长衰减（1 键 18 / 2 键 45 / 3 键 90），理由写得挺像回事：
+「后面都是生僻字，翻不完反而让人怀疑有 bug」。这是拿大多数情况替用户做决定，
+而输入法唯一的硬指标是「想打的字能打出来」。
 
-**两键曾经是 45（5 页），这是错的**，用户报「`璇玑` 的第二个字打不出来」才发现：
-两键已经是一个完整音节，单字音节动辄上百（`yi` 136、`ji` 128、`yu` 117），45 条
-等于把后半截全藏起来。`玑` 在 `ji` 的单字里排第 57 位，翻页到底也没有它——
-用户以为词库缺字，其实是额度截断。现在两键与三键以上一样给满 90。
-判断依据别再用「两键候选少」这种直觉：**看该音节的单字总数**。
+代价是真实存在的：`ji` 的单字 128 个、`yi` 136 个、`yu` 117 个。45 条上限把第 46 名
+之后**静默藏掉**，用户不知道它们存在，只会以为词库缺字——`玑` 排第 57，「璇玑」的
+第二个字就是这么打不出来的。别再用「候选少一点更清爽」这种直觉，判断依据是
+**该音节的单字总数**。
 
-改的是一个函数，但所有查询入口都得换：`refresh` 的两条路径、`confirm_segment`、
-分词 `lookup_any`。漏一处就会出现「分词时又冒出 90 个」。
+放开之后有三处必须配套，漏一个就会卡或出错：
+
+1. **`dict::top_by_rank` 要有全排序快路径**。原实现是「二分插入 + 超出就 pop」，
+   O(n × limit)；limit = MAX 时退化成 O(n²)，单键 1000 条当场 2 ms 起。
+   现在 `range.len() <= limit` 直接 `sort_by_key`（稳定排序，同键保序），O(n log n)。
+2. **`collect` 的去重容器换 `HashSet`**。原来是 `Vec<&str>` + 线性 `contains`，
+   候选上千条就是 O(n²) 的另一半。换完 `n` 从 2.03 ms → 0.61 ms（release 实测：
+   `n` 1036 条 0.61 ms、`ji` 734 条 0.29 ms、`xrji` 1 条 1.6 µs）。
+   量化入口：`cargo test --release --lib candidate_lookup_timing -- --ignored --nocapture`。
+3. **翻页按列表长度算页数**（`turn_page` 已经 `div_ceil` + clamp），别再写死 10 页。
+
+改 limit 是所有查询入口一起换：`refresh` 的两条路径、`confirm_segment`、
+分词 `lookup_any`、辅助码筛选。漏一处就会出现「某个入口还在截断」的怪现象。
 
 ## 词库架构（v3：静态二进制 + 运行时覆盖层）
 
@@ -1300,7 +1309,7 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 
 ```
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# → dist\Feihe-Setup-0.3.1.exe（1.61 MB，内嵌 3776 KB + 3820 KB 的双架构 DLL）
+# → dist\Feihe-Setup-0.3.2.exe（1.61 MB，内嵌 3786 KB + 3832 KB 的双架构 DLL）
 ```
 
 设计取舍：

@@ -582,6 +582,17 @@ fn top_by_rank(
     limit: usize,
     key_of: impl Fn(usize) -> (usize, usize),
 ) -> Vec<usize> {
+    // 额度不小于候选数（含 `usize::MAX` = 不设上限）时没有「挑前 K 个」可言，
+    // 直接全排序：O(n log n) 一次搞定。走下面的插入式挑选会退化成 O(n × limit)——
+    // 单键（`n` 命中几千条）传 MAX 就等于几千次二分插入 + 搬移，按键当场卡住。
+    //
+    // `sort_by_key` 是稳定排序，同键保持词库原顺序，和插入式挑选的结果一致。
+    if range.len() <= limit {
+        let mut all: Vec<((usize, usize), usize)> = range.map(|p| (key_of(p), p)).collect();
+        all.sort_by_key(|x| x.0);
+        return all.into_iter().map(|(_, p)| p).collect();
+    }
+
     let mut best: Vec<((usize, usize), usize)> = Vec::with_capacity(limit.min(64));
     for p in range {
         let key = key_of(p);
@@ -623,8 +634,10 @@ fn collect(
     // 每个候选的码长，和 `out` 一一对应。动态词频排序要用它守住「短码 = 更完整」，
     // 否则学过一次「程序」就会把 `ig` 的「成」挤下去（程序只是前缀匹配，4 键）。
     let mut lens: Vec<u8> = Vec::with_capacity(limit.min(16));
-    // 去重用的短列表：候选最多 limit 条，线性扫比建 HashSet 划算（也免了分配）
-    let mut seen: Vec<&str> = Vec::with_capacity(limit.min(16));
+    // 去重集合。以前是 `Vec` + 线性 `contains`，候选少时确实更快；但候选不设上限
+    // 之后单键能到上千条，那就是 O(n²)（`n` 键 1000 条 ≈ 2 ms，按键能感觉到）。
+    // `HashSet` 一次插入替代「扫一遍 + push」，上千条降到几百微秒。
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
     let pass = |w: &str| -> bool { assist::word_matches(w, mode, assist_prefix) };
 
@@ -638,10 +651,9 @@ fn collect(
             let (ps, pe) = b.prefix_range(which, prefix);
             for p in top_by_rank(ps..pe, limit, |p| b.rank_key(which, p)) {
                 let w = b.word_at(which, p);
-                if !pass(w) || seen.contains(&w) {
+                if !pass(w) || !seen.insert(w) {
                     continue;
                 }
-                seen.push(w);
                 out.push(Cow::Borrowed(w));
                 lens.push(b.rank_key(which, p).0.min(u8::MAX as usize) as u8);
                 if out.len() >= limit {
@@ -653,10 +665,9 @@ fn collect(
             let (ps, pe) = ov.prefix_range(which, prefix);
             for p in top_by_rank(ps..pe, limit, |p| ov.rank_key(which, p)) {
                 let w = ov.word_at(which, p);
-                if !pass(w) || seen.contains(&w) {
+                if !pass(w) || !seen.insert(w) {
                     continue;
                 }
-                seen.push(w);
                 out.push(Cow::Owned(w.to_string()));
                 lens.push(ov.rank_key(which, p).0.min(u8::MAX as usize) as u8);
                 if out.len() >= limit {
@@ -673,10 +684,9 @@ fn collect(
         let (ps, pe) = bin.prefix_range(which, prefix);
         for p in top_by_rank(ps..pe, limit, |p| bin.rank_key(which, p)) {
             let w = bin.word_at(which, p);
-            if !pass(w) || seen.contains(&w) {
+            if !pass(w) || !seen.insert(w) {
                 continue;
             }
-            seen.push(w);
             out.push(Cow::Borrowed(w));
             lens.push(bin.rank_key(which, p).0.min(u8::MAX as usize) as u8);
             if out.len() >= limit {

@@ -2,8 +2,8 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.3.1** ｜ 安装包 1.61 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号 ｜ 187 项单元测试 ｜ 用户级安装，不需要 UAC
+**当前版本 0.3.2** ｜ 安装包 1.61 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
+不联网、不弹窗、无账号 ｜ 188 项单元测试 ｜ 用户级安装，不需要 UAC
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
 > `freq.txt`、`phrases.txt`、`pinned.txt`。**压缩一份安装目录就是完整备份**，
@@ -249,9 +249,10 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 
 
 **鼠标也能选词**：直接点候选窗里的那一项就上屏。窗口不抢输入框焦点，点完继续打字
-仍然进组合态；按下后拖到窗外再松开算取消，不会误上屏。候选数量按码长衰减——
-单键 18 个（2 页），**两键及以上满 90（10 页）**。两键已经是一个完整音节，砍到 45
-会让后半截单字永远翻不到（`ji` 的「玑」排第 57 位，就是被这样藏起来的）。
+仍然进组合态；按下后拖到窗外再松开算取消，不会误上屏。候选**不设上限**：这个词码下
+有多少条就出多少条，按 `+` / `-` 一直能翻到最后一个。早期按码长砍过（1 键 18、2 键 45、
+3 键 90），代价是生僻字被静默藏起来——`ji` 的单字有 128 个，45 条上限吃掉了第 46 名
+之后的全部，「玑」排第 57 位，用户只会以为词库没这个字。
 
 **单击 Shift** 切中英文（按住期间按过别的键就不算单击）。**`Shift + 字母` 直接上屏大写**：
 中文态下 Shift 不进编码，按住它敲 `A` 得到的就是 `A`，不会像以前那样和直接敲 `a` 没区别；
@@ -627,7 +628,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 187 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 188 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -651,7 +652,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.1.exe
+# 产物：dist\Feihe-Setup-0.3.2.exe
 ```
 
 不弹 UAC 的原因不只是「省一步」：输入法的 DLL 跑在记事本 / Word / 浏览器这些普通权限
@@ -690,7 +691,7 @@ unregister.cmd    :: 全部移除
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.1.exe
+# 产物：dist\Feihe-Setup-0.3.2.exe
 ```
 
 `build_setup.ps1` 做四件事：

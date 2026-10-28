@@ -231,7 +231,7 @@
 
 <header>
   <div class="wrap hero">
-    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.3.1</b></span>
+    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.3.2</b></span>
     <h1>一个只有几 MB 的<br><span class="thin">双拼输入法</span></h1>
     <p class="lede">
       飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼（含一简 26 字 + 二简 370 词），词库在构建期预编码成
@@ -345,8 +345,8 @@
       </div>
       <div class="card">
         <h3>候选不堆山</h3>
-        <p>候选数按码长衰减：单键 18 个（2 页），两键起就给满 90（10 页）。
-          两键已经是一个完整音节，砍太狠会把后半截生僻单字藏起来——<code>ji</code> 里的「玑」就在第 57 位。</p>
+        <p>候选<strong>不设上限</strong>：这个码下有多少条就出多少条，按 <code>+</code> 能一直翻到最后一个。
+          宁可多翻几页，也不能让想打的字根本不在列表里——<code>ji</code> 有 128 个单字，砍到 45 条时「玑」就永远出不来。</p>
       </div>
       <div class="card">
         <h3>不写临时文件</h3>
@@ -464,7 +464,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <span class="c"># 3. 打安装包（发布模式，排除本机个人词库）</span>
 <span class="p">powershell</span> -ExecutionPolicy Bypass -File installer\build_setup.ps1
-<span class="c"># → dist\Feihe-Setup-0.3.1.exe</span></pre>
+<span class="c"># → dist\Feihe-Setup-0.3.2.exe</span></pre>
 
     <div class="grid" style="margin-top:20px">
       <div class="card">
@@ -518,7 +518,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <footer>
   <div class="wrap row">
-    <span>飞鹤输入法 v0.3.1 · Rust + windows-rs · Windows TSF</span>
+    <span>飞鹤输入法 v0.3.2 · Rust + windows-rs · Windows TSF</span>
     <a href="https://github.com/icefairy/feihe">源码</a>
     <a href="https://github.com/icefairy/feihe/blob/main/README.md">文档</a>
     <a href="https://github.com/icefairy/feihe/blob/main/handoff.md">实现笔记</a>

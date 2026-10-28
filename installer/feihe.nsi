@@ -28,7 +28,7 @@ Unicode true
 ; ── 基本信息 ────────────────────────────────────────────────────
 !define APP_NAME      "飞鹤拼音"
 !define APP_NAME_EN   "Feihe IME"
-!define APP_VER       "0.3.1"
+!define APP_VER       "0.3.2"
 !define APP_PUBLISHER "feihe"
 !define APP_URL       "https://github.com/icefairy/feihe"
 
@@ -90,7 +90,7 @@ ShowInstDetails show
 ShowUninstDetails show
 BrandingText "${APP_NAME} ${APP_VER} — 小鹤双拼 / 全拼 输入法"
 
-VIProductVersion "0.3.1.0"
+VIProductVersion "0.3.2.0"
 VIAddVersionKey /LANG=2052 "ProductName"     "${APP_NAME}"
 VIAddVersionKey /LANG=2052 "FileDescription" "${APP_NAME} 安装程序"
 VIAddVersionKey /LANG=2052 "FileVersion"     "${APP_VER}"

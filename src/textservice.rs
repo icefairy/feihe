@@ -38,33 +38,18 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// 一次最多取多少候选（10 页 × 9）。单键 / 两键会按码长衰减，见 `candidate_limit`。
-const MAX_CANDIDATES: usize = 90;
-
-/// 候选上限按码长衰减。
+/// 候选不设上限：有多少取多少（`usize::MAX` 就是「不截断」）。
 ///
-/// 敲一个 `n` 能查出 90 个候选 = 10 页，第 4 页往后基本是生僻字，翻过去也没用，
-/// 但「一直能翻」这件事本身就会让人怀疑是不是翻不完。所以：
+/// 这里曾经按码长衰减（1 键 18、2 键 45、3 键 90），理由是「后面都是生僻字，
+/// 翻不完反而让人怀疑」。那是拿**大多数情况**替用户做了决定，而输入法唯一的硬
+/// 指标是「想打的字能打出来」：`ji` 的单字有 128 个、`yi` 136 个、`yu` 117 个，
+/// 45 条上限把第 46 名之后全藏了——用户不知道它们存在，只会以为词库缺字。
+/// （`玑` 在 `ji` 里排第 57，「璇玑」的第二个字当初就是这么打不出来的。）
 ///
-/// - 1 键：18 个（2 页）——单键还只是半截音节，候选意义本来就弱
-/// - 2 键及以上：满额 90（10 页）
-///
-/// 2 键**曾经**砍到 45，理由是「完整音节也不用那么多」。这是错的：2 键就是一个完整
-/// 音节，单字音节动辄上百（`yi` 136 个、`ji` 128 个），45 条等于把后半截字全藏起来。
-/// 用户报的「打不出璇玑的玑」就是这么来的——`玑` 在 `ji` 的单字里排第 57 位，
-/// 45 的上限刚好吃掉它，翻页到底也没有。所以 2 键与 3 键及以上一样给满额。
-///
-/// 按**去掉手动分隔符和空白后的字符数**算，`ni'hao` 和 `nihao` 拿同样的额度。
-fn candidate_limit(code: &str) -> usize {
-    let n = code
-        .chars()
-        .filter(|c| *c != FeiheTextService::SEP && !c.is_whitespace())
-        .count();
-    match n {
-        0 | 1 => 18,
-        _ => MAX_CANDIDATES,
-    }
-}
+/// 代价是每次按键要把该码下的条目全排一遍，见 `dict::top_by_rank` 的全排序快路径：
+/// 最大的一档是单键（`n` 命中几千条），仍是毫秒级；候选列表只影响这一次查询，
+/// 不会常驻内存。
+const CANDIDATE_LIMIT: usize = usize::MAX;
 
 enum EditOp {
     /// 建立 composition 并写入首个双拼码。
@@ -891,7 +876,7 @@ impl FeiheTextService {
             let idx = self.seg_idx.get().min(self.segments.borrow().len() - 1);
             let code = self.segments.borrow()[idx].code.clone();
             let word = self.segments.borrow()[idx].word.clone();
-            let list = FeiheTextService::lookup_any(&code, candidate_limit(&code));
+            let list = FeiheTextService::lookup_any(&code, CANDIDATE_LIMIT);
             // 选中项对齐到这一段当前选中的词，左右移动时不会跳回第一项。
             // 页号也要跟着算出来：`sel` 可能落在第二页（「鹤」在 `he` 的第 12 位），
             // 只把 `selected` 设成 12 会让高亮框跑到页外，翻页也从错的页起翻。
@@ -922,7 +907,7 @@ impl FeiheTextService {
 
         let assist_prefix = self.assist.borrow().clone();
         let mode = config::get().assist_mode;
-        let limit = candidate_limit(&code);
+        let limit = CANDIDATE_LIMIT;
         let mut list = if config::pinyin_mode() {
             // 全拼模式：前缀是「全拼去掉空格」的串（nihao），走另一套索引
             dict::lookup_pinyin_filtered(query, &assist_prefix, mode, limit)
@@ -1287,7 +1272,7 @@ impl FeiheTextService_Impl {
             let segs = self.segments.borrow();
             let list = FeiheTextService::lookup_any(
                 &segs[idx].code,
-                candidate_limit(&segs[idx].code),
+                CANDIDATE_LIMIT,
             );
             list.get(sel)
                 .or_else(|| list.first())
@@ -2655,22 +2640,38 @@ mod tests {
 
     /// 用户报的「璇玑的第二个字打不出来」。
     ///
-    /// `玑` 在 `ji` 的单字里排第 57 位。两键的候选上限一度是 45（5 页），
-    /// 翻页到底也够不着它——不是词库缺字，是被额度截断了。这条测试同时钉住
-    /// 两件事：额度得给到 10 页；`玑` 真能落在额度之内。
+    /// `玑` 在 `ji` 的单字里排第 57 位，当年两键的候选额度是 45（5 页），
+    /// 翻页到底也够不着——不是词库缺字，是被额度截断了。现在不设上限：
+    /// 这条同时钉住「列表长度超过旧上限」和「玑真的在列表里」。
+    /// **不要断言它的具体名次**——本机词频会把它往前挪。
     #[test]
-    fn rare_single_char_fits_two_key_limit() {
-        let limit = candidate_limit("ji");
+    fn rare_single_char_is_reachable() {
+        let list = FeiheTextService::lookup_any("ji", CANDIDATE_LIMIT);
         assert!(
-            limit >= MAX_CANDIDATES,
-            "两键是完整音节，单字音节动辄上百（yi 136 / ji 128），额度必须给满，当前 {limit}"
+            list.len() > 90,
+            "ji 的候选应该超过旧上限 90（实际 {}），否则说明还在截断",
+            list.len()
         );
-        let list = FeiheTextService::lookup_any("ji", limit);
-        let pos = list
-            .iter()
-            .position(|w| w.as_ref() == "玑")
-            .expect("ji 的候选里应该能翻到「玑」");
-        assert!(pos < limit, "「玑」在下标 {pos}，超了上限 {limit} 就会翻不到");
+        assert!(
+            list.iter().any(|w| w.as_ref() == "玑"),
+            "ji 的候选里应该有「玑」"
+        );
+    }
+
+    /// 单键也要全量：`n` 这种键命中几千条，旧上限只给 18 个。
+    #[test]
+    fn single_key_returns_every_candidate() {
+        let one = FeiheTextService::lookup_any("n", CANDIDATE_LIMIT);
+        assert!(
+            one.len() > 500,
+            "单键 n 的候选应该是几千条量级，实际 {}",
+            one.len()
+        );
+        // 同一个码查两次长度必须一致：全量、不截断，也不受翻页状态影响
+        assert_eq!(
+            FeiheTextService::lookup_any("n", CANDIDATE_LIMIT).len(),
+            one.len()
+        );
     }
 
     /// 「璇玑」是整词，不该逼用户去逐个选字。`extra_dict.txt` 里补了它。
@@ -2679,7 +2680,7 @@ mod tests {
         // 码由 `encode_pinyin` 生成，不手写（手写双拼码太容易错）
         let code = shuangpin::encode_pinyin(Scheme::Xiaohe, "xuan ji").expect("xuan ji");
         assert!(
-            FeiheTextService::lookup_any(&code, MAX_CANDIDATES)
+            FeiheTextService::lookup_any(&code, CANDIDATE_LIMIT)
                 .iter()
                 .any(|w| w.as_ref() == "璇玑"),
             "敲 {code}（xuan ji）的候选里应该有「璇玑」"
@@ -3498,6 +3499,24 @@ mod tests {
         );
     }
 
+    /// 手动基准（`cargo test --release -- --ignored --nocapture candidate_lookup_timing`）。
+    ///
+    /// 候选不设上限之后，最坏情况是单键把几千条全排一遍。输入法的按键延迟是硬指标，
+    /// 所以这里留一个能量化的入口：超过 2 ms 就该回头看 `top_by_rank` 的快路径了。
+    #[test]
+    #[ignore]
+    fn candidate_lookup_timing() {
+        use std::time::Instant;
+        for code in ["n", "ni", "ji", "a", "xrji"] {
+            let mut len = 0;
+            let t = Instant::now();
+            for _ in 0..100 {
+                len = FeiheTextService::lookup_any(code, CANDIDATE_LIMIT).len();
+            }
+            println!("{code:5} len={len:5}  平均 {:?}", t.elapsed() / 100);
+        }
+    }
+
     #[test]
     fn rare_name_chars_are_reachable() {
         let _g = lock();
@@ -3525,8 +3544,8 @@ mod tests {
         let mut missing = Vec::new();
         for (word, py) in NAMES {
             let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect(py);
-            // 用 MAX_CANDIDATES（候选窗能翻到的上限），不是随手取 10
-            let list = dict::lookup(&code, MAX_CANDIDATES);
+            // 用 CANDIDATE_LIMIT（就是用户实际能翻到的范围），不是随手取 10
+            let list = dict::lookup(&code, CANDIDATE_LIMIT);
             if !list.iter().any(|w| w.as_ref() == *word) {
                 missing.push(format!("{word}({py}) -> {code}"));
             }
