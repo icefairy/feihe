@@ -154,14 +154,17 @@ pub struct Config {
     /// 5 行就是 45 个一屏，找字快得多。行数是「一次能看多少」，不是「一次翻多少」：
     /// `=` 仍然一次只挪一行（见 `textservice::turn_page`），否则翻过头就等于没看见。
     pub candidate_rows: usize,
-    /// 中文态（true）/ 英文态（false）。
+    /// 启动时默认进入的模式：中文态（true）/ 英文态（false）。
     ///
-    /// 以前中英状态只活在 `insert::CHINESE` 这个原子量里，进程一退就没了：用户按
-    /// Shift 切到英文、关掉程序，下次打开又回到中文（或者反过来）。而中英状态是
-    /// **用户明确按过一次键**的结果，属于设置，不该每次重来。
+    /// 这是**设置项**（设置窗「启动默认」），不是上次会话的残留：每次 Activate /
+    /// 开机都回到这里选的模式，Shift 切换只影响当前会话、不再落盘。
+    ///
+    /// 为什么改掉「记住上次状态」的语义：状态被悄悄落盘后，用户根本不知道自己哪次
+    /// 按 Shift 的结果被记住了，表现就是「输入法默认是英文，不知道为什么」——中英
+    /// 默认应该是用户明确选择的东西，所以挪进设置窗由用户挑。
     ///
     /// 这里只存「初值」：`Activate` 时读出来初始化 `insert`，之后进程内的切换照旧
-    /// 只改进程内缓存（顺带写回这一项），不会因为别处改了配置就打断正在打的字。
+    /// 只改进程内缓存，不会因为别处改了配置就打断正在打的字。
     pub chinese: bool,
 }
 
@@ -408,7 +411,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 9;
+const CONFIG_VER: u32 = 10;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -451,8 +454,15 @@ pub fn load() -> Config {
     //
     // v8 → v9：新增 `chinese`（中英状态）。缺省 true = 中文，和以前「每次启动都是
     // 中文」完全一致，老用户升级后不会突然变英文。
-    // 这是**新增显示能力**，不打开也完全不影响原来的单行翻页，所以老用户升级后
-    // 直接拿到 5 行——没人会因为「候选变多了」而不会打字。
+
+    // v9 → v10：`chinese` 语义从「记住上次会话的中英状态」改成「启动默认模式」
+    // （设置窗「启动默认」，Shift 切换不再落盘）。旧文件里存的 `chinese=0` 是某次
+    // 按 Shift 的残留，不是用户对「默认模式」的选择——把它当默认值就是对旧语义的
+    // 误读，用户报的「输入法默认是英文，不知道为什么」就是它。一次性回到中文，
+    // 想默认英文的人去设置窗显式选。
+    if ver < 10 {
+        cfg.chinese = true;
+    }
 
     // 原子镜像必须在锁外同步：`pinyin_mode()` / `no_popup()` 是热路径，读的是原子量
     sync_mirrors(&cfg);
@@ -585,17 +595,6 @@ pub fn refresh_if_changed() -> bool {
         }
     }
     changed
-}
-
-/// 记下中英状态（用户按 Shift / 点浮窗切换时调用）。
-///
-/// 单独一个入口而不是让 `insert` 直接调 `update`：`insert::set_chinese` 在按键
-/// 路径上，这里要保证「先改进程内状态、再落盘」，落盘失败也不能影响打字。
-pub fn set_chinese(open: bool) {
-    if get().chinese == open {
-        return; // 没变就不写盘：切输入法/点浮窗可能连着来好几次
-    }
-    update(|c| c.chinese = open);
 }
 
 /// 改配置并立即写盘
@@ -790,7 +789,7 @@ mod tests {
     }
 
     /// 候选行数：缺省 5；手改配置写到离谱的值（0 / 99 / 乱写）要夹回 1..=9。
-    /// 中英状态要能落盘、能读回；老配置没有这个键时必须回到中文。
+    /// 启动默认模式要能落盘、能读回；老配置没有这个键时必须回到中文。
     #[test]
     fn chinese_state_round_trips() {
         assert!(Config::DEFAULT.chinese, "全新配置默认中文");
@@ -798,10 +797,11 @@ mod tests {
         assert!(!parse("chinese=0\n").0.chinese);
         assert!(parse("chinese=1\n").0.chinese);
 
-        // 0.3.5 及更早的配置里没有 `chinese`，升级后不能把用户变成英文
-        let (cfg, ver) = parse("config_ver=8\nfullwidth=1\n");
+        // v9 及更早的配置里没有/语义不同的 `chinese`：迁移（ver<10）一次性回到中文。
+        // parse 层面老值照样读出来，重置发生在 load()（见 v9→v10 说明）。
+        let (cfg, ver) = parse("config_ver=8\nchinese=0\n");
         assert_eq!(ver, 8);
-        assert!(cfg.chinese);
+        assert!(!cfg.chinese);
 
         // save 的文本能被 parse 读回来（键名拼错、漏格式化参数都会在这里炸）
         let mut c = Config::DEFAULT;

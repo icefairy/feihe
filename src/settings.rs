@@ -35,11 +35,13 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 752;
+const CLIENT_H: i32 = 810;
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
 const ID_MODE_FULL: i32 = 162;
+const ID_DEF_CN: i32 = 163;
+const ID_DEF_EN: i32 = 164;
 const ID_SCHEME_XH: i32 = 101;
 const ID_SCHEME_MS: i32 = 102;
 const ID_ASSIST_OFF: i32 = 111;
@@ -221,6 +223,9 @@ unsafe fn sync(h: HWND) {
     let cfg = config::get();
     set_checked(h, ID_MODE_DS, !cfg.pinyin_mode);
     set_checked(h, ID_MODE_FULL, cfg.pinyin_mode);
+    // 启动默认模式是设置项，和当前会话的中英状态无关（Shift 切换不落盘）
+    set_checked(h, ID_DEF_CN, cfg.chinese);
+    set_checked(h, ID_DEF_EN, !cfg.chinese);
     set_checked(h, ID_SCHEME_XH, cfg.scheme == Scheme::Xiaohe);
     set_checked(h, ID_SCHEME_MS, cfg.scheme == Scheme::Ms);
     set_checked(h, ID_ASSIST_OFF, cfg.assist_mode == AssistMode::Off);
@@ -347,6 +352,9 @@ unsafe fn on_command(h: HWND, id: i32) {
     match id {
         ID_MODE_DS => config::set_pinyin_mode(false),
         ID_MODE_FULL => config::set_pinyin_mode(true),
+        // 启动默认：只改设置，不动当前会话的中英状态——下次激活/开机才生效
+        ID_DEF_CN => config::update(|c| c.chinese = true),
+        ID_DEF_EN => config::update(|c| c.chinese = false),
         ID_SCHEME_XH => apply_scheme(Scheme::Xiaohe),
         ID_SCHEME_MS => apply_scheme(Scheme::Ms),
         ID_ASSIST_OFF => config::update(|c| c.assist_mode = AssistMode::Off),
@@ -495,6 +503,19 @@ unsafe fn build(h: HWND) {
     radio(h, "全拼", 190, y - 2, 70, ID_MODE_FULL, false);
 
     y += 40;
+    label(h, "启动默认", 16, y, 90, 0);
+    radio(h, "中文", 110, y - 2, 70, ID_DEF_CN, true);
+    radio(h, "英文", 190, y - 2, 70, ID_DEF_EN, false);
+    label(
+        h,
+        "每次激活输入法时进入的模式；Shift 切换只影响当前会话",
+        16,
+        y + 18,
+        428,
+        0,
+    );
+
+    y += 58; // 上面多了一行说明
     label(h, "双拼方案", 16, y, 90, 0);
     radio(h, "小鹤双拼", 110, y - 2, 100, ID_SCHEME_XH, true);
     radio(h, "微软双拼", 220, y - 2, 100, ID_SCHEME_MS, false);

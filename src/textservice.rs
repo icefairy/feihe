@@ -431,7 +431,8 @@ impl FeiheTextService {
     ///
     /// 拆完把 `assist_active` 置真，等价于用户自己按了一下 `Tab`：组合串显示成
     /// `dd j`，Tab 再按一次退回（清掉辅助码）。后续字母进辅助码而不是编码——
-    /// 这是刻意的，第 4 键如果还能出词，说明用户想要的本来就不是这个开关。
+    /// 这是刻意的，猜错了由 `undo_auto_assist` 兜底（筛空或并回整串有词时退回去，
+    /// 见 `assist_should_fold_back`：`ykwf` 这种两字词就靠它救回来）。
     fn auto_assist(&self) {
         let cfg = config::get();
         let mode = cfg.assist_mode;
@@ -457,24 +458,29 @@ impl FeiheTextService {
 
     /// 自动拆出来的辅助码该不该并回编码（纯函数）。
     ///
-    /// 判据只有一条：**自动拆的 + 现在筛空了**。
+    /// 两个触发条件，**满足任一就并回**：
     ///
-    /// 为什么不问「并回整串查得到东西」：辅助码筛选是**前缀**匹配，一旦这个码+辅助码
-    /// 筛空，再往辅助码上加字母只会更空（集合只会缩小）。也就是说——只要空了，留在
-    /// 辅助码态就永远看不到候选；而并回编码至少还有分词模式这条出路
-    /// （`assist_active` 为真时 `try_segment` 直接返回 false，两个出口同时关死）。
+    /// 1. **筛空了**：辅助码筛选是前缀匹配，一旦这个码+辅助码筛空，再往辅助码上
+    ///    加字母只会更空（集合只会缩小）。空着留在辅助码态永远看不到候选；并回
+    ///    编码至少还有分词模式这条出路（`assist_active` 为真时 `try_segment` 直接
+    ///    返回 false，两个出口同时关死）。
+    /// 2. **并回整串是一个有候选的完整码**：3 键直出本质是在猜。用户打两字词
+    ///    `ykwf`（英文）时，第 3 键被拆成 `yk`+`w`（恰好筛得出「赢」），第 4 键
+    ///    进辅助码后 `yk`+`wf` 仍然筛得出「赢 x」——条件 1 永远不触发，而 `英文`
+    ///    被挡在筛选外面，翻页也翻不到（筛选是过滤不是排序）。第 4 键把一个两字词
+    ///    的码补完整了，用户要的显然是词不是筛选；整串一查有候选，就该并回。
     ///
-    /// 具体翻车现场：`lmhdilvi`（联海创智，词库里没有的四字词）第 3 键被拆成
-    /// `lm`+`h`（筛出「炼」），第 5 键 `lm`+`hdi` 空了，而整串 `lmhdi` 也查不到
-    /// （词库里没这个词）——旧规则要求「并回查得到」，于是永远并不回去，用户卡在
-    /// 空候选窗里，连分词都进不去。
-    ///
-    /// 为什么必须有这个撤销：3 键直出是在「第 3 键」这个位置猜的，而双拼的
-    /// 4 键码（`xrji` → 璇玑）前 3 键正好长得像「1 个音节 + 1 个形码」。
-    /// 没有撤销时，猜错一次就把用户锁在空候选里，打开这个开关的用户（从自然码/小鹤
-    /// 带过来的）会以为输入法坏了。
-    fn assist_should_fold_back(auto: bool, code: &str, assist: &str, hit: bool) -> bool {
-        auto && !code.is_empty() && !assist.is_empty() && !hit
+    /// 为什么不是回到旧规则：旧规则把「整串查得到」当**必要条件**——词库里没有的
+    /// 词（`lmhdilvi` 联海创智）整串永远查不到，于是筛空了也并不回去，用户卡在空
+    /// 候选窗里连分词都进不去。现在它是**充分条件之一**，两个条件取或，两条逃生路都在。
+    fn assist_should_fold_back(
+        auto: bool,
+        code: &str,
+        assist: &str,
+        hit: bool,
+        merged_hit: bool,
+    ) -> bool {
+        auto && !code.is_empty() && !assist.is_empty() && (!hit || merged_hit)
     }
 
     fn undo_auto_assist(&self) {
@@ -492,7 +498,21 @@ impl FeiheTextService {
         };
         // 并回整串（双拼下没有分隔符，直接拼）
         let merged = format!("{code}{assist}");
-        if !FeiheTextService::assist_should_fold_back(auto, &code, &assist, !hit.is_empty()) {
+        // 「整串是一个有候选的完整码」也是并回的理由：两字词的第 4 键把它补完整了
+        // （`yk`+`wf` 筛得出「赢 x」，但用户要的是并回去之后的「英文」）。
+        // 注意这里必须查**不带筛选**的整串——带筛选查等于没并。
+        let merged_hit = if config::pinyin_mode() {
+            dict::lookup_pinyin(&merged, 1)
+        } else {
+            dict::lookup(&merged, 1)
+        };
+        if !FeiheTextService::assist_should_fold_back(
+            auto,
+            &code,
+            &assist,
+            !hit.is_empty(),
+            !merged_hit.is_empty(),
+        ) {
             return;
         }
         self.code.borrow_mut().clone_from(&merged);
@@ -2600,9 +2620,10 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                         self.code.borrow_mut().push(ch);
                     } else if self.assist_active.get() {
                         self.assist.borrow_mut().push(ch);
-                        // 自动拆出来的辅助码，加一个字母之后一条候选都没有 →
-                        // 说明第 3 键那一下猜错了（用户其实在打更长的码）。
-                        // 趁现在退回去，别让他卡在一个空候选窗里。
+                        // 自动拆出来的辅助码，加一个字母之后筛空了（第 3 键猜错，
+                        // 用户其实在打更长的码）或者刚好把一个两字词的码补完整了
+                        // （`yk`+`wf` ← `ykwf` 英文）→ 趁现在并回编码，别把用户
+                        // 锁在辅助码态里翻不到想要的词。见 `assist_should_fold_back`。
                         self.undo_auto_assist();
                     } else {
                         self.code.borrow_mut().push(ch);
@@ -3457,7 +3478,13 @@ mod tests {
         let merged = dict::lookup("xrji", 1);
         assert!(!merged.is_empty(), "xrji 整串必须有候选，否则没法并回去");
         assert!(
-            FeiheTextService::assist_should_fold_back(true, "xr", "ji", !hit.is_empty()),
+            FeiheTextService::assist_should_fold_back(
+                true,
+                "xr",
+                "ji",
+                !hit.is_empty(),
+                !merged.is_empty()
+            ),
             "自动拆错 + 现在空 + 并回去有东西 → 必须并回编码"
         );
     }
@@ -3467,14 +3494,29 @@ mod tests {
     fn fold_back_needs_auto_and_an_empty_filter() {
         use FeiheTextService as S;
         // 自动拆的 + 筛空了 → 并回
-        assert!(S::assist_should_fold_back(true, "xr", "ji", false));
+        assert!(S::assist_should_fold_back(true, "xr", "ji", false, false));
         // 用户手动 Tab 拆的：不许动（那是明确意图，他自己再按一下 Tab 就退出）
-        assert!(!S::assist_should_fold_back(false, "xr", "ji", false));
-        // 还筛得出东西：拆对了，别动
-        assert!(!S::assist_should_fold_back(true, "ji", "wj", true));
+        assert!(!S::assist_should_fold_back(false, "xr", "ji", false, false));
+        // 还筛得出东西、整串也不是词：拆对了，别动
+        assert!(!S::assist_should_fold_back(true, "ji", "wj", true, false));
         // 空码不算
-        assert!(!S::assist_should_fold_back(true, "", "ji", false));
-        assert!(!S::assist_should_fold_back(true, "xr", "", false));
+        assert!(!S::assist_should_fold_back(true, "", "ji", false, false));
+        assert!(!S::assist_should_fold_back(true, "xr", "", false, false));
+    }
+
+    /// 两字词被「3 键直出」抢走时必须能并回（用户报的 `ykwf` → 英文）。
+    ///
+    /// 第 3 键 `ykw` 被拆成 `yk`+`w`（恰好筛得出「赢」），第 4 键进辅助码后
+    /// `yk`+`wf` 仍然筛得出「赢 x」——旧的「筛空才并回」永远不触发，`英文`
+    /// 被挡在筛选外面：翻页翻不到（筛选是过滤不是排序）、Tab 之外的分词也进不去。
+    /// 「并回整串有候选」是唯一的出口。一律用假值，不碰真实词库。
+    #[test]
+    fn two_syllable_word_folds_back_even_when_filter_still_hits() {
+        use FeiheTextService as S;
+        // 筛选有结果，但整串 ykwf 是个词 → 并回
+        assert!(S::assist_should_fold_back(true, "yk", "wf", true, true));
+        // 整串无词且筛得出 → 尊重筛选，别动
+        assert!(!S::assist_should_fold_back(true, "yk", "wf", true, false));
     }
 
     /// 筛空就并回，**不看**「并回整串查不查得到」。
@@ -3486,9 +3528,9 @@ mod tests {
     fn empty_assist_folds_back_even_when_whole_code_is_unknown() {
         use FeiheTextService as S;
         // `lm`+`hdi` 空，`lmhdi` 也查不到 —— 照样要并回
-        assert!(S::assist_should_fold_back(true, "lm", "hdi", false));
+        assert!(S::assist_should_fold_back(true, "lm", "hdi", false, false));
         // 辅助码还没到上限、但已经空了，同样并回（更早恢复，用户少看一会儿空窗）
-        assert!(S::assist_should_fold_back(true, "dd", "j", false));
+        assert!(S::assist_should_fold_back(true, "dd", "j", false, false));
     }
 
     /// 真表验证「筛出单字」这道门槛：`dd` + `j`（自然码，部首 巾）第一项是单字，
@@ -4022,7 +4064,11 @@ mod tests {
 
         // 第 5 键筛空 → 必须并回，且**不要求**「整串查得到」（词库里没有的话永远不成立）
         assert!(FeiheTextService::assist_should_fold_back(
-            true, "lm", "hdi", false
+            true,
+            "lm",
+            "hdi",
+            false,
+            false
         ));
 
         // 并回后整串无候选，分词给出四段——这就是用户要的「单字模式」
