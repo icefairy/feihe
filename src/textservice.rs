@@ -35,7 +35,14 @@ use windows_core::{implement, IUnknownImpl};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
+
+/// 「按键被拒」的原因码，只在变化时写一行日志（见 `diag::log_change`）。
+///
+/// 用户报「字母直接进文档」时，最需要知道的就是**在哪一步被拒的**：modifiers、
+/// 密码框、还是根本没进 TIP。这几条从外面看完全一样。
+static KEY_REFUSE: AtomicU8 = AtomicU8::new(255);
 
 /// 候选不设上限：有多少取多少（`usize::MAX` 就是「不截断」）。
 ///
@@ -2114,6 +2121,15 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         let chinese = config::get().chinese;
         insert::init_chinese(chinese);
 
+        crate::dlog!(
+            "Activate: tid={} chinese={} no_popup={} fullscreen={} fg={}",
+            tid,
+            chinese,
+            config::no_popup(),
+            crate::fullscreen::active(),
+            crate::diag::fg_class()
+        );
+
         let keystroke_mgr: ITfKeystrokeMgr = tim.cast()?;
         let key_sink: ITfKeyEventSink = self.to_interface();
         // 第三个参数 fForeground 必须是 TRUE。
@@ -2123,6 +2139,10 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 传 FALSE 会导致 Activate 成功、sink 挂上，但 OnTestKeyDown 永远不被调用，
         // 表现就是「切到输入法后字母直接进应用、没有候选窗」。
         let hr = unsafe { keystroke_mgr.AdviseKeyEventSink(tid, &key_sink, true) };
+        if let Err(e) = &hr {
+            // 挂不上就等于「输入法装了但收不到键」——外部表现和没注册一样
+            crate::dlog!("  AdviseKeyEventSink FAILED: {e:?}");
+        }
         hr?;
 
         self.thread_mgr.borrow_mut().replace(tim);
@@ -2135,6 +2155,8 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
     }
 
     fn Deactivate(&self) -> Result<()> {
+        crate::dlog!("Deactivate: tid={}", self.tid.get());
+        KEY_REFUSE.store(255, std::sync::atomic::Ordering::Relaxed);
         self.deactivate_sink();
         // 浮窗、软键盘、设置窗都属于本 TIP，反激活时一并销毁，
         // 否则切走输入法后它们还挂在屏幕上（而且窗口过程指针会随 DLL 卸载失效）。
@@ -2168,6 +2190,22 @@ fn ui_less_requested(tim: &ITfThreadMgr, dwflags: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// 宿主声明 UILess 时，**只有真全屏才照办**（纯函数）。
+///
+/// `TF_TMAE_UIELEMENTENABLEDONLY` 只说明「宿主愿意接 UIElement」，不等于
+/// 「我们自己开的窗口画不出来」。而 Windows 11 的记事本（WinUI3 文本控件）就是
+/// 带着这个标志激活 TSF 的：它在 `BeginUIElement` 里回 `show = FALSE`（表示
+/// 「我来画」），然后**什么都没画**。用户看到的就是「能上字，但一个候选框都没有，
+/// 连状态浮窗也没了」——因为浮窗那边我们主动 `hide()` 了，理由同样是「全屏时画了
+/// 也看不见」，而这条理由在窗口化宿主身上根本不成立。
+///
+/// 判据借 `fullscreen::active()`（QUNS）：真全屏（游戏 / 演示 / 全屏 UWP）时自绘
+/// 窗口确实上不了屏，交给宿主是对的；窗口化的宿主 DWM 正常，自绘一定能显示——
+/// 那就该我们画。
+fn ui_less_allowed(requested: bool, fullscreen: bool) -> bool {
+    requested && fullscreen
+}
+
 impl ITfTextInputProcessorEx_Impl for FeiheTextService_Impl {
     fn ActivateEx(&self, ptim: Ref<'_, ITfThreadMgr>, tid: u32, dwflags: u32) -> Result<()> {
         // 先留一份再交给 Activate——`Ref` 不实现 Copy，先 clone 才不会被 move 走
@@ -2176,7 +2214,13 @@ impl ITfTextInputProcessorEx_Impl for FeiheTextService_Impl {
 
         // 宿主把线程管理器按 UI-less 方式激活了（典型：独占全屏游戏）。全屏下 DWM
         // 被绕开，我们自己开的窗口画了也不上屏，候选只能交给宿主画——见 `uielement`。
-        let ui_less = ui_less_requested(&tim, dwflags);
+        let requested = ui_less_requested(&tim, dwflags);
+        let fs = crate::fullscreen::active();
+        let ui_less = ui_less_allowed(requested, fs);
+        crate::dlog!(
+            "ActivateEx: dwflags=0x{dwflags:x} requested={requested} fullscreen={fs} ui_less={ui_less} fg={}",
+            crate::diag::fg_class()
+        );
         self.ui_less.set(ui_less);
         if ui_less {
             self.setup_uielement();
@@ -2298,6 +2342,12 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 self.pw.set(crate::secure::is_password(&context));
             }
             if self.pw.get() {
+                crate::dlog_change!(
+                    KEY_REFUSE,
+                    1,
+                    "OnKeyDown 被密码框判断拦下（fg={}）——所有按键都会直出",
+                    crate::diag::fg_class()
+                );
                 // 万一上一处留了组合串（焦点从普通框切进来的极端情况），先收干净
                 if self.is_composing() {
                     self.clear_state();
@@ -2769,6 +2819,22 @@ unsafe fn caret_screen_rect(context: &ITfContext, ec: u32, range: &ITfRange) -> 
 
 #[cfg(test)]
 mod tests {
+    /// UILess 只在**真全屏**时生效。
+    ///
+    /// 反例就是用户报的那次：Windows 11 记事本带着 `TF_TMAE_UIELEMENTENABLEDONLY`
+    /// 激活 TSF，`BeginUIElement` 回 `show = FALSE` 表示「我来画」，然后什么都没画。
+    /// 窗口化宿主 DWM 正常，自绘窗口一定能上屏，没有理由把候选交出去。
+    #[test]
+    fn ui_less_only_when_really_fullscreen() {
+        assert!(ui_less_allowed(true, true), "真全屏：交给宿主画，这是游戏里唯一能显示的路");
+        assert!(
+            !ui_less_allowed(true, false),
+            "窗口化宿主（记事本 / 浏览器）：必须自绘，交出去就是一片空白"
+        );
+        assert!(!ui_less_allowed(false, true), "宿主没要求就照旧自绘");
+        assert!(!ui_less_allowed(false, false));
+    }
+
     use super::*;
 
     /// 反引号已经彻底退出键位表，只有测试还要断言「它确实什么都不做」。
@@ -3938,46 +4004,32 @@ mod tests {
         assert!(!FeiheTextService::is_shift(0x0D));
     }
 
-    /// 词库里没有的四字词，靠分词照样能打出来（用户报：`lmhdilvi` → 联海创智
-    /// 一条候选都没有，连单字模式都进不去）。
+    /// 词库里没有的长词：3 键直出猜错后必须并回，继续打完能进分词。
     ///
-    /// 卡住的原因不是分词坏了——整串切成 `lm|hd|il|vi` 完全正常——而是「3 键直出」
-    /// 在第 3 键就把 `lmh` 拆成 `lm`+`h`（`lm`+`h` 确实筛得出「炼」，判定拆得对），
-    /// 之后 `d` 进来辅助码还是 `hd`（仍筛得出「炼」），到第 5 键 `hdi` 才空。
-    /// 旧规则要求「并回整串查得到东西」，而 `lmhdi` 压根不在词库里 → 永远并不回去，
-    /// 用户就永远停在 `lm`+`hdi…` 这个空窗里，`assist_active` 又让分词进不去。
-    ///
-    /// 现在「辅助码超长」本身就是铁证，直接并回。
+    /// **一律用假闭包，不碰真实词库。** `dict::lookup` 会读安装目录里的个人词库
+    /// （用户可能刚导入搜狗词表），断「某个码查不到」必然随词库漂移——这条测试就
+    /// 这么红过一次：用户导入 `lmhdi`（联海创智的简拼）之后，「`lmhdi` 查不到」
+    /// 当场不成立。词库内容不是代码契约，不该拿来断言。
     #[test]
     fn unknown_four_char_word_folds_back_then_segments() {
-        let _g = dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        dict::set_scheme(Scheme::Xiaohe);
         let mode = AssistMode::Xiaohe;
 
-        // 第 3 键会被拆
+        // 第 3 键被自动拆开：`lm` + `h` 在假词库里命中
         let got = FeiheTextService::auto_assist_split("lmh", mode.max_keys(), |p, a| {
-            FeiheTextService::assist_hit_single(p, a, mode)
+            p == "lm" && "h".starts_with(a)
         });
         assert_eq!(got, Some(("lm".into(), "h".into())));
 
-        // 第 4 键还筛得出东西（所以旧规则在这里不会并回）
-        let hit = dict::lookup_filtered("lm", "hd", mode, 1);
-        assert!(!hit.is_empty());
-        // 第 5 键才空，而整串 `lmhdi` 也查不到——旧规则就是死在这里
-        assert!(dict::lookup_filtered("lm", "hdi", mode, 1).is_empty());
-        assert!(dict::lookup("lmhdi", 1).is_empty());
-        assert!(
-            FeiheTextService::assist_should_fold_back(true, "lm", "hdi", false),
-            "辅助码 3 键已超过小鹤音形上限，必须并回"
-        );
+        // 第 5 键筛空 → 必须并回，且**不要求**「整串查得到」（词库里没有的话永远不成立）
+        assert!(FeiheTextService::assist_should_fold_back(
+            true, "lm", "hdi", false
+        ));
 
-        // 并回之后整串（8 键）无候选，分词给出 4 段——这正是用户要的「单字模式」
-        assert!(dict::lookup("lmhdilvi", 1).is_empty());
+        // 并回后整串无候选，分词给出四段——这就是用户要的「单字模式」
         let units = FeiheTextService::syllables("lmhdilvi");
-        let segs =
-            FeiheTextService::split_segments_units(&units, |p| !FeiheTextService::lookup_any(p, 1).is_empty());
+        let segs = FeiheTextService::split_segments_units(&units, |p| {
+            matches!(p, "lm" | "hd" | "il" | "vi")
+        });
         assert_eq!(segs, vec!["lm", "hd", "il", "vi"]);
     }
 }

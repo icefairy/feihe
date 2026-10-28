@@ -11,6 +11,7 @@ mod config;
 mod dict;
 mod dictbin;
 mod dictenc;
+mod diag;
 mod dllcount;
 mod fancha;
 mod font;

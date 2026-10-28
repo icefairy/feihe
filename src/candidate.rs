@@ -24,7 +24,7 @@
 //! 命中区**必须和绘制用同一份几何**（`layout()`），否则会出现「看着点到了、
 //! 实际没中」这种最难查的偏差。
 
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows::core::*;
@@ -529,7 +529,13 @@ fn window_of(page: usize, rows: usize, pages: usize) -> (usize, usize) {
 /// `rows` = 这次最多摊开几行（1 = 老的单行横向布局）。实际行数会被「候选总页数」
 /// 和「屏幕放不放得下」夹小。
 pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y: i32) {
+    // 上次「窗口为什么没弹」的原因码，0 = 正常显示。只在这个码变化时写一行日志，
+    // 按键路径上不会刷盘。见 `diag`。
+    static REFUSE: AtomicU8 = AtomicU8::new(255);
+
     if items.is_empty() {
+        // 空候选就收窗是正常路径（码还没拼完、打错了），不值得记
+        REFUSE.store(0, Ordering::Relaxed);
         hide();
         return;
     }
@@ -541,11 +547,19 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
     //
     // 注意这是**我们这边**的判断；宿主驱动的 UILess 走 `uielement`，不经过这里。
     if config::no_popup() {
+        crate::dlog_change!(
+            REFUSE,
+            1,
+            "candidate::show 被 no_popup 拦下（fullscreen={} fg={}）",
+            crate::fullscreen::active(),
+            crate::diag::fg_class()
+        );
         hide();
         return;
     }
     unsafe {
         if !ensure_class() {
+            crate::dlog_change!(REFUSE, 2, "candidate::show：窗口类注册失败");
             return;
         }
     }
@@ -555,6 +569,7 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
     unsafe {
         let hwnd = ensure_window();
         if hwnd.is_invalid() {
+            crate::dlog_change!(REFUSE, 3, "candidate::show：CreateWindowEx 失败");
             return;
         }
 

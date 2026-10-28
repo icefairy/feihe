@@ -2074,6 +2074,90 @@ API——会把它**不认可的 TIP 定义整棵删掉**，而且只清当前�
 
 验证清单：M3.37（244-249）。
 
+## 记事本里「能上字但一个窗口都没有」：UILess 交给宿主的锅（0.3.8 内改）
+
+用户报：导入搜狗词库、在设置里编译成二进制之后，重开记事本打字——**空格能上字，
+但候选框和状态浮窗都不见了**。
+
+### 为什么先排除词库
+
+候选窗（`candidate`）和浮窗（`statusbar`）是两个独立模块，各自 `create()` 自己的
+窗口，唯一的共同前置判断就是「该不该弹」。而「能不能算出候选」只影响前者。
+两个一起消失，一定是那个共同判断，不是词库。
+
+共同判断只有两条，而且**症状完全一样**：
+
+1. `config::no_popup()` —— `popup=auto` 时问 `fullscreen::active()`（QUNS）
+2. `self.ui_less` —— 宿主声明 UILess，候选交给它画；`ActivateEx` 里同时
+   `statusbar::hide()`（理由写的是「全屏时画了也看不见」）
+
+### 定位到第 2 条
+
+Windows 11 的记事本不是老 Win32 编辑器，它的文本控件（WinUI3）激活 TSF 时**带着
+`TF_TMAE_UIELEMENTENABLEDONLY`**。于是：
+
+```
+ActivateEx(dwflags 带 UIELEMENTENABLEDONLY)
+  → ui_less_requested() = true
+  → self.ui_less = true
+  → statusbar::hide()                        ← 浮窗没了
+  → candidate::show 把候选塞给 uielement.Session
+      BeginUIElement 返回 show = FALSE（=「我来画」）
+      → 我们返回 true，不弹自绘窗              ← 候选窗没了
+      → 而它其实什么都没画
+```
+
+`BeginUIElement` 的 `show = FALSE` 语义是「宿主自己画」，我们据此放弃自绘——这是
+协议规定的，没错。错的是**无条件相信它**：`TF_TMAE_UIELEMENTENABLEDONLY` 只说明
+「宿主愿意接 UIElement」，不等于「我们自己开的窗口画不出来」。
+
+### 修法：加一道「真全屏」的闸
+
+```rust
+fn ui_less_allowed(requested: bool, fullscreen: bool) -> bool {
+    requested && fullscreen
+}
+```
+
+判据直接复用 `fullscreen::active()`（QUNS）：真全屏（D3D 全屏游戏 / 演示模式 /
+全屏 UWP）时自绘窗口确实上不了屏，交给宿主是唯一的路；窗口化宿主 DWM 正常，
+自绘一定能显示——那就该我们画。
+
+注意全屏时 `no_popup()` 也为真，所以我们本来就不弹窗，`ui_less` 这条通道仍然只在
+「全屏」这一种场景下有用。加了闸之后行为不变，只是不再误伤窗口化宿主。
+
+### 顺带：加诊断日志（这次真的需要）
+
+「没有候选窗」这句话背后至少四种成因（no_popup / UILess / 密码框误判 / 按键通道
+没挂上），**从外面看一模一样**。这次靠读代码猜了两轮，代价太大。
+
+新增 `src/diag.rs`，写 `<安装目录>\feihe.log`：
+
+- 只在**生命周期**和**状态变化**时写（每种拒绝原因只记第一次，用 `AtomicU8` 槽位），
+  按键路径上不刷盘；
+- 上限 256 KB，超了停写；写失败一律静默——诊断不许影响输入；
+- 打点：`Activate`（tid / chinese / no_popup / fullscreen / 前台窗口类名）、
+  `AdviseKeyEventSink` 结果、`Deactivate`、`ActivateEx`（dwflags / requested /
+  fullscreen / 最终 ui_less）、密码框误命中、`candidate::show` 与 `statusbar::show`
+  的拦截原因码。
+
+**读法本身就是结论**：记事本里打字之后
+
+- `feihe.log` 有 `Activate` 行 → TIP 被调用了，看后续哪一行拒绝；
+- 文件根本不存在 / 没有新行 → TIP 压根没被激活，问题在系统侧（键盘列表、ctfmon），
+  跟 DLL 无关。
+
+这条判据比任何猜测都硬，以后「输入法不工作」先看它。
+
+### 顺手修：一条测试违反了「不依赖真实词库」
+
+用户导入搜狗词表之后，`unknown_four_char_word_folds_back_then_segments` 红了：
+它断言 `dict::lookup("lmhdi")` 查不到，而用户的个人词库里正好有 `lmhdi`
+（联海创智的简拼）。词库内容不是代码契约——改成全用假闭包（`p == "lm" && "h".starts_with(a)`、
+`matches!(p, "lm" | "hd" | "il" | "vi")`），和项目里其它词库相关单测保持一致。
+
+验证清单：M3.38（250-256）。
+
 ## 已知问题
 
 - `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现

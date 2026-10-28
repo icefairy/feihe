@@ -16,7 +16,7 @@
 //! 拖动：按下后超过 3px 视为拖动（移动窗口并记住位置），否则在抬起时按按钮命中
 //! 分发点击。这样一条窗口里既能拖又能点，不用额外的标题栏。
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU8, Ordering};
 use std::sync::Mutex;
 
 use windows::core::*;
@@ -186,11 +186,22 @@ unsafe fn create() -> Option<HWND> {
 
 /// 显示状态浮窗（幂等）
 pub fn show() {
+    // 同 `candidate::show`：只在「不弹的原因」变化时记一行。
+    static REFUSE: AtomicU8 = AtomicU8::new(255);
+
     // 不弹窗模式下一个窗口都不弹，理由同 `candidate::show`。
     if config::no_popup() {
+        crate::dlog_change!(
+            REFUSE,
+            1,
+            "statusbar::show 被 no_popup 拦下（fullscreen={} fg={}）",
+            crate::fullscreen::active(),
+            crate::diag::fg_class()
+        );
         hide();
         return;
     }
+    REFUSE.store(0, Ordering::Relaxed);
     let raw = WND.load(Ordering::Acquire);
     let h = if raw != 0 {
         HWND(raw as *mut core::ffi::c_void)
@@ -200,7 +211,10 @@ pub fn show() {
                 WND.store(h.0 as isize, Ordering::Release);
                 h
             }
-            None => return,
+            None => {
+                crate::dlog_change!(REFUSE, 2, "statusbar::show：窗口创建失败");
+                return;
+            }
         }
     };
     unsafe {
