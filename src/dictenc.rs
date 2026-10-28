@@ -266,4 +266,62 @@ mod tests {
         assert_eq!(b.count, 2);
         assert_eq!(b.xh, 1);
     }
+
+    /// 从 `src/*.txt` 收集词条，和 `build.rs` 用同一份顺序与去重规则。
+    fn load_all_entries(include_user: bool) -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .expect("读 src 目录")
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| {
+                if !n.ends_with(".txt") {
+                    return false;
+                }
+                // 和 build.rs 同一份来源：dict.txt + 各 extra_*.txt（含手工的 extra_dict.txt）
+                n == "dict.txt" || n.starts_with("extra_") || (include_user && n == "user_dict.txt")
+            })
+            .collect();
+        files.sort();
+        let mut seen = HashSet::new();
+        let mut entries = Vec::new();
+        for f in files {
+            let Ok(t) = std::fs::read_to_string(dir.join(&f)) else {
+                continue;
+            };
+            push_entries(&t, &mut seen, &mut entries);
+        }
+        entries
+    }
+
+    /// 全量审计：哪些词条编不出码（= 该方案下永远打不出来）。
+    ///
+    /// 这条不做断言，只打印清单。它会随词库更新而变化，
+    /// 断言「必须为 0」会变成维护负担；真正的门槛靠下面那条
+    /// `every_entry_reachable_in_xiaohe` 来守。
+    #[test]
+    #[ignore = "全量审计，cargo test --lib audit_unencodable -- --ignored --nocapture"]
+    fn audit_unencodable_entries() {
+        let entries = load_all_entries(false);
+        let bad_xh: Vec<&(String, String)> = entries
+            .iter()
+            .filter(|(_, py)| encode_pinyin(Scheme::Xiaohe, py).is_none())
+            .collect();
+        let bad_ms: Vec<&(String, String)> = entries
+            .iter()
+            .filter(|(_, py)| encode_pinyin(Scheme::Ms, py).is_none())
+            .collect();
+        println!(
+            "总条目 {} / 小鹤编不出 {} / 微软编不出 {}",
+            entries.len(),
+            bad_xh.len(),
+            bad_ms.len()
+        );
+        for (w, py) in bad_xh.iter().take(60) {
+            println!("  [小鹤] {w}\t{py}");
+        }
+        for (w, py) in bad_ms.iter().take(60) {
+            println!("  [微软] {w}\t{py}");
+        }
+    }
 }

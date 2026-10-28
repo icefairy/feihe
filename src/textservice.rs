@@ -259,6 +259,23 @@ impl FeiheTextService {
         }
     }
 
+    /// 快捷输入（`/` 引导）的候选列表。
+    ///
+    /// **空的引导符也要有候选**：第一项固定是斜杠本身。以前这一栏只有命令预览，
+    /// 于是用户想打一个 `/`（「他/她」、路径、分数），按 `/` 再按空格，上屏的是
+    /// 「2026年10月28日」——一个最基本的字符打不出来。把 `/` 放第一位之后，
+    /// `/`+空格 就是 `/`，命令预览仍然排在后面，一条路都没少。
+    fn quick_list(key: &str, fullwidth: bool) -> Vec<Cow<'static, str>> {
+        let mut list: Vec<Cow<'static, str>> = quick::candidates(key)
+            .into_iter()
+            .map(Cow::Owned)
+            .collect();
+        if key.is_empty() {
+            list.insert(0, Cow::Owned(Self::prefix_literal(fullwidth).to_string()));
+        }
+        list
+    }
+
     /// 去掉手动分隔符，得到真正拿去查词库的编码。
     ///
     /// 分隔符只影响**怎么切**，不影响**查什么**：`nihao'ma` 和 `nihaoma`
@@ -754,6 +771,9 @@ impl FeiheTextService {
             v if v == VK_OEM_7.0 as u8 => '’',
             v if v == VK_OEM_MINUS.0 as u8 => '－',
             v if v == VK_OEM_PLUS.0 as u8 => '＝',
+            // `/` 只在「编码为空」时是快捷输入的引导符（见 `is_code_key` 的调用顺序）。
+            // 已经有编码时它是普通标点，全角模式下也该给全角。
+            v if v == VK_OEM_2.0 as u8 => '／',
             _ => return None,
         };
         Some(ch)
@@ -891,10 +911,7 @@ impl FeiheTextService {
 
         // 快捷输入：`\rq` 这类，不走词库
         if let Some(key) = code.strip_prefix(quick::PREFIX) {
-            let list: Vec<Cow<'static, str>> = quick::candidates(key)
-                .into_iter()
-                .map(Cow::Owned)
-                .collect();
+            let list = FeiheTextService::quick_list(key, config::get().fullwidth);
             self.candidates.borrow_mut().clone_from(&list);
             self.selected.set(0);
             self.page.set(0);
@@ -1439,7 +1456,10 @@ impl FeiheTextService_Impl {
     fn on_segment_key(&self, vk: u8) -> Result<BOOL> {
         let n = self.segments.borrow().len();
         // 翻页：分词模式下候选是「当前这一段」的，翻的就是它的页
-        if self.handle_page_key(vk) {
+        if let Some(turned) = self.handle_page_key(vk) {
+            if turned && config::no_popup() {
+                self.update_composition();
+            }
             return Ok(BOOL::from(true));
         }
         match vk {
@@ -1498,6 +1518,18 @@ impl FeiheTextService_Impl {
                 let Some(ch) = FeiheTextService::code_char(v) else {
                     return Ok(BOOL::from(true));
                 };
+                // 分词态里按 `/` 同理：它不是引导符（编码非空），是标点。
+                // 以前这条分支会把它当成编码键 push 进去，`de` 变 `de/`、
+                // 候选整列清空，用户还得退格才能继续。
+                if ch == quick::PREFIX {
+                    if let Some(p) = FeiheTextService::fullwidth_punct_for(v) {
+                        let mut buf = [0u8; 4];
+                        self.commit_segments(p.encode_utf8(&mut buf));
+                        return Ok(BOOL::from(true));
+                    }
+                    self.commit_segments("");
+                    return Ok(BOOL::from(false));
+                }
                 if ch == FeiheTextService::SEP
                     && !FeiheTextService::can_insert_sep(&self.code.borrow())
                 {
@@ -1745,24 +1777,24 @@ impl FeiheTextService {
         }
     }
 
-    /// 翻页键处理：是翻页键就翻页并返回 true（键已吃掉）。
+    /// 翻页键处理：是翻页键就吃掉并返回 `Some(是否真的换了页)`。
     ///
     /// 哪怕只有一页也吃掉，行为才可预测——否则「按了没反应」和「突然上屏一个＝」
     /// 会随机出现。想打 `－` `＝` 先按空格把候选上屏再敲。
-    fn handle_page_key(&self, vk: u8) -> bool {
+    ///
+    /// 返回「有没有真的翻」是给「不弹窗」模式用的：那个模式下候选是拼进组合串的，
+    /// 翻页必须连组合串一起刷，否则数字键选的是新一页、屏幕上还显示着旧一页。
+    fn handle_page_key(&self, vk: u8) -> Option<bool> {
         match Self::page_delta(vk) {
-            Some(d) => {
-                self.turn_page(d);
-                true
-            }
-            None => false,
+            Some(d) => Some(self.turn_page(d)),
+            None => None,
         }
     }
 
-    fn turn_page(&self, delta: isize) {
+    fn turn_page(&self, delta: isize) -> bool {
         let total = self.candidates.borrow().len();
         if total == 0 {
-            return;
+            return false;
         }
         let pages = total.div_ceil(candidate::PAGE_SIZE) as isize;
         let next = (self.page.get() as isize + delta).clamp(0, pages - 1);
@@ -1770,7 +1802,9 @@ impl FeiheTextService {
             self.page.set(next as usize);
             self.selected.set(0);
             self.show_candidates();
+            return true;
         }
+        false
     }
 
     fn show_candidates(&self) {
@@ -2205,7 +2239,11 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // - / = 和 ↑ / ↓：翻页。放在 match 之前，因为 match 里没法写
         // `VK_OEM_MINUS.0 as u8` 这种带转换的模式；而且分词模式要走同一套，
         // 所以抽成 handle_page_key 而不是在 match 里列四条 arm。
-        if self.handle_page_key(vk) {
+        if let Some(turned) = self.handle_page_key(vk) {
+            // 不弹窗模式下候选在组合串里，翻页要一起刷（见 handle_page_key 的注释）
+            if turned && config::no_popup() {
+                self.update_composition();
+            }
             return Ok(BOOL::from(true));
         }
 
@@ -2286,9 +2324,20 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             // 编码键：累积双拼码；辅助码态下累积辅助码
             v if FeiheTextService::is_code_key(v) => {
                 if let Some(ch) = FeiheTextService::code_char(v) {
-                    // 引导符只能出现在开头，否则吞掉不改码
+                    // `/` 是快捷输入的引导符，只能出现在**开头**。已经有编码时它不是
+                    // 引导符，而是普通标点：先上屏当前候选，再让斜杠落到文档里。
+                    //
+                    // 以前这里直接 `return true` 把键吞掉——用户打「你好/」，斜杠凭空
+                    // 消失，候选窗照旧，没有任何反馈；分词态更糟，那条路会把它塞进编码
+                    // （`de` → `de/`），候选当场清空。
                     if ch == quick::PREFIX && !self.code.borrow().is_empty() {
-                        return Ok(BOOL::from(true));
+                        if let Some(p) = FeiheTextService::fullwidth_punct_for(v) {
+                            let mut buf = [0u8; 4];
+                            self.commit_with(p.encode_utf8(&mut buf));
+                            return Ok(BOOL::from(true));
+                        }
+                        self.commit_current();
+                        return Ok(BOOL::from(false));
                     }
                     if ch == FeiheTextService::SEP {
                         // 一简次选键：单键后面本来就插不了分隔符（见 `brief_alt`），
@@ -2731,13 +2780,34 @@ mod tests {
     fn fullwidth_punct_only_for_unshifted_keys() {
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_COMMA.0 as u8), Some('，'));
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_PERIOD.0 as u8), Some('。'));
-        // 顿号只留 `\` 一个键（搜狗习惯），`/` 让给快捷输入引导符
+        // 顿号只留 `\` 一个键（搜狗习惯）
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_5.0 as u8), Some('、'));
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_2.0 as u8), None);
+        // `/` 只在**已有编码**时当标点（编码为空时它是快捷输入引导符）；
+        // 全角模式下给全角，别让用户打出一个半角斜杠夹在汉字中间
+        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_2.0 as u8), Some('／'));
         // 反引号既不是引导符也不是间隔号，原样交给应用
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
         assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
+    }
+
+    /// 空的引导符必须有候选，而且第一项就是斜杠本身。
+    ///
+    /// 回归的是「打不出 `/`」：以前 `/`+空格 上屏的是「2026年10月28日」。
+    #[test]
+    fn bare_slash_is_its_own_first_candidate() {
+        let half = FeiheTextService::quick_list("", false);
+        assert_eq!(half.first().map(|s| s.as_ref()), Some("/"), "第一项该是半角斜杠");
+        // 命令预览还在后面，发现性没丢（至少还有日期/时间这些）
+        assert!(half.len() > 1, "命令预览不能因为插了斜杠就没了：{half:?}");
+
+        let full = FeiheTextService::quick_list("", true);
+        assert_eq!(full.first().map(|s| s.as_ref()), Some("／"), "全角模式给全角斜杠");
+
+        // 非空的 key 不插：`/rq` 的第一项仍然是日期
+        let rq = FeiheTextService::quick_list("rq", false);
+        assert!(!rq.is_empty());
+        assert_ne!(rq.first().map(|s| s.as_ref()), Some("/"));
     }
 
     #[test]

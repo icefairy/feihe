@@ -372,11 +372,9 @@ fn search(
     // 动态词频只在这一层做：双拼/全拼、带不带辅助码的查询全都汇到这里，
     // 不会出现「某个入口忘了排序」这种只在特定模式下复现的怪事。
     //
-    // 注意排序发生在**截断之后**：已经按 limit 收满的候选才会被重排。
-    // 所以学习记录只能把「本来就在候选列表里」的词往前挪，不能把排到
-    // 90 名以外的词捞进来。这个限制是刻意的——真去全量扫描会让每次按键
-    // 都多扫几万条，换来的收益是「某个极冷僻词被选过一次就能上第一页」，
-    // 不值。
+    // 注意：这里**不再有**「先截断再排序」这一步。早期候选有 90 条上限时，
+    // 学习记录只能把「本来就在前 90 名里」的词往前挪，排在外面的冷僻词永远
+    // 捞不进来；现在候选不设上限，整段都参与排序，学过的词再冷门也能浮上来。
     // 学到的次数按「码 + 词」记：多音字同一个词挂多条读音，只按词记会让在
     // `oo` 里选过的「哦」跑到 `ee` 的第一位，顶掉饿 / 呃 / 额。
     crate::freq::rank(&mut out, &lens, prefix);
@@ -839,7 +837,10 @@ pub(crate) mod tests {
                     continue;
                 };
                 total += 1;
-                let r = lookup(&code, 90);
+                // 不设上限：`lookup(code, 90)` 会让「同码条目排到 90 名之后」被误判成
+                // 「查不到」。用户报的「玑」就是这么被藏起来的——候选额度一砍，
+                // 测试也跟着学坏，两边一起把字弄丢。
+                let r = lookup(&code, usize::MAX);
                 if !r.iter().any(|x| &**x == w) {
                     bad.push(format!("{w} 查不到 code={code} py={py}"));
                 }
@@ -858,6 +859,44 @@ pub(crate) mod tests {
     fn dict_not_empty() {
         let (total, _, _) = stats();
         assert!(total > 1000, "dict too small: {total}");
+    }
+
+    /// 全量审计：`dict.txt` 里每一条，按它自己的拼音编出小鹤码后都得能查回来。
+    ///
+    /// 上面的 `generated_words_are_all_searchable` 只覆盖 `extra_*.txt`（自动生成的
+    /// 分类词表），主词库 4.6 万条一直没人这样验。这条补上，并且**不设候选上限**——
+    /// 「同码条目多、排到后面」不算查不到，那种情况下用户翻页能翻到。
+    ///
+    /// 跑法：`cargo test --lib audit_dict_entries_reachable -- --ignored --nocapture`
+    #[test]
+    #[ignore = "全量审计（4.6 万条），平时不跑"]
+    fn audit_dict_entries_reachable() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        let text = std::fs::read_to_string("src/dict.txt").unwrap_or_default();
+        let mut bad: Vec<String> = Vec::new();
+        let mut total = 0usize;
+        for line in text.lines() {
+            let Some((w, py)) = line.split_once('\t') else {
+                continue;
+            };
+            let (w, py) = (w.trim(), py.trim());
+            if w.is_empty() || py.is_empty() {
+                continue;
+            }
+            let Some(code) = shuangpin::encode_pinyin(Scheme::Xiaohe, py) else {
+                bad.push(format!("{w}\t{py}\t编码失败"));
+                continue;
+            };
+            total += 1;
+            if !lookup(&code, usize::MAX).iter().any(|x| &**x == w) {
+                bad.push(format!("{w}\t{py}\tcode={code}"));
+            }
+        }
+        println!("dict.txt {} 条，查不到 {} 条", total, bad.len());
+        for b in bad.iter().take(40) {
+            println!("  {b}");
+        }
     }
 
     #[test]

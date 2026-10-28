@@ -1,6 +1,6 @@
 [package]
 name = "feihe"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "飞鹤输入法 - TSF (Text Services Framework) 中文输入法，小鹤双拼"
 license = "MIT"

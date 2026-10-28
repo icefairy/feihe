@@ -2,8 +2,8 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.3.2** ｜ 安装包 1.61 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号 ｜ 188 项单元测试 ｜ 用户级安装，不需要 UAC
+**当前版本 0.3.3** ｜ 安装包 1.61 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
+不联网、不弹窗、无账号 ｜ 190 项单元测试 ｜ 用户级安装，不需要 UAC
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
 > `freq.txt`、`phrases.txt`、`pinned.txt`。**压缩一份安装目录就是完整备份**，
@@ -410,8 +410,13 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 >
 > **引导符为什么是 `/`？** 顿号只留 `\` 一个键（搜狗习惯）就够了，`/` 位置好记好按，
 > 拿来当功能入口更划算。中间一度搬到反引号（理由是「`/` 和 `\` 都要出顿号」），
-> 但反引号太偏、记不住，最后还是换回 `/`。代价是中文态下 `/` 不再出 `、`——
-> 想打半角斜杠，敲 `/` 再回车（只敲了引导符本身时，回车原样上屏 `/` 或 `／`）。
+> 但反引号太偏、记不住，最后还是换回 `/`。代价是中文态下 `/` 不再出 `、`。
+>
+> **想打斜杠**：敲 `/` 再按空格或回车——只打了引导符本身时，第一候选就是 `/` 本身
+> （全角模式是 `／`），命令预览排在它后面。
+>
+> **已经打了一半的编码时按 `/`**：先把你当前选的候选上屏，再把斜杠落进文档
+> （`de` + `/` → `的/`）。这条以前是直接把键吞掉，斜杠凭空消失。
 
 ## 标点
 
@@ -425,7 +430,7 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 | `[` `]` | `【` `】` |
 | `'` | `’` |
 | `-` `=` | `－` `＝` |
-| `/` | 不是标点，是快捷输入引导符 |
+| `/` | 编码为空时是快捷输入引导符；已有编码时先上屏候选，再出 `/`（全角 `／`） |
 
 Shift 组合里**只有字母由飞鹤处理**（直接上屏大写，见上面「怎么打字」末尾那两段）。其余一律交给应用自己算：
 `Shift+\` 出 `|`、`Shift+/` 出 `?`、`Shift+,` 出 `<`——这些字符由键盘布局决定，
@@ -628,7 +633,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 188 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 190 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -652,7 +657,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.2.exe
+# 产物：dist\Feihe-Setup-0.3.3.exe
 ```
 
 不弹 UAC 的原因不只是「省一步」：输入法的 DLL 跑在记事本 / Word / 浏览器这些普通权限
@@ -691,7 +696,7 @@ unregister.cmd    :: 全部移除
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.2.exe
+# 产物：dist\Feihe-Setup-0.3.3.exe
 ```
 
 `build_setup.ps1` 做四件事：

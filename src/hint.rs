@@ -214,4 +214,28 @@ mod tests {
         // 太短的前缀不查：否则敲第一个键「重庆」就跟出来了
         assert!(wrong_reading("zh", true, 4).is_empty());
     }
+
+    /// 同一个错音码的变体数不能超过调用方要的数量。
+    ///
+    /// `textservice::append_wrong_reading` 传的是 `limit = 2`，超出的部分会被
+    /// **静默丢掉**——和「玑」被候选上限吃掉是同一类问题：字没丢，但永远出不来。
+    /// 哪天往 `hint.txt` 里加词把某个码凑到 3 条，这条会红，提醒把调用处的
+    /// limit 一起放开（或者在生成脚本里就限制成 2 条）。
+    #[test]
+    fn wrong_codes_fit_the_callers_limit() {
+        let t = table();
+        let mut per: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (code, _) in &t.wrong_flat {
+            *per.entry(code.as_str()).or_default() += 1;
+        }
+        let worst = per
+            .iter()
+            .max_by_key(|(_, n)| **n)
+            .map(|(c, n)| format!("{c} ×{n}"))
+            .unwrap_or_default();
+        assert!(
+            per.values().all(|&n| n <= 2),
+            "有错音码超过 2 条（最坏 {worst}），append_wrong_reading 的 limit=2 会丢掉后面的"
+        );
+    }
 }
