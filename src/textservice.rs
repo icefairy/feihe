@@ -3091,14 +3091,23 @@ mod tests {
         );
     }
 
-    /// 单键也要全量：`n` 这种键命中几千条，旧上限只给 18 个。
+    /// 单键不截断：`n` 开头的单字一个不少（旧上限只给 18 个）。
+    ///
+    /// 这里**不**断言「候选里没有词组」：一简次选（`n` → 「内容」）会刻意往单键候选里
+    /// 插一个常用两字词放在第二位，那是设计不是漏网。词库层「单键只出单字」由
+    /// `dict::tests::single_key_yields_only_single_chars` 守。
+    ///
+    /// 这条原来叫 `single_key_returns_every_candidate`，断言「单键几千条」——那是
+    /// 「候选不设上限」时期的样子。后来加了「词的码长最多比输入多一个音节」的收窄，
+    /// 单键（半个音节）就只剩码长 ≤ 3 的单字，两字词（4 键）不再列进来：`n` 之后
+    /// 还可能是 `ni`/`nu`/`na` 任何音节，这时把「你好」排进去纯属噪音。
     #[test]
-    fn single_key_returns_every_candidate() {
+    fn single_key_shows_every_single_char() {
         let one = FeiheTextService::lookup_any("n", CANDIDATE_LIMIT);
+        let chars = one.iter().filter(|w| w.chars().count() == 1).count();
         assert!(
-            one.len() > 500,
-            "单键 n 的候选应该是几千条量级，实际 {}",
-            one.len()
+            chars > 100,
+            "单键 n 的单字应该上百个，实际 {chars}（截断或者码长收窄写错了）"
         );
         // 同一个码查两次长度必须一致：全量、不截断，也不受翻页状态影响
         assert_eq!(

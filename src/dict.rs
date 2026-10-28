@@ -793,6 +793,15 @@ fn top_by_rank(
     best.into_iter().map(|(_, p)| p).collect()
 }
 
+/// 长词收窄的**尺度**：词码长度最多比输入长一个音节。
+///
+/// 双拼一个音节 2 键，全拼取 4 个字母（`yu lan` 这类最常见的情况）。
+/// 抽成函数是为了能单测这条边界——它一旦算错，症状是「候选太多，翻不到想要的」
+/// 或者「长词永远不出现」，两种都不像代码错误。
+fn reach_cap(prefix_len: usize, pinyin: bool) -> usize {
+    prefix_len + if pinyin { 4 } else { 2 }
+}
+
 /// 往候选序列里放一条。
 ///
 /// `sorted` 为真时按**码长**插入（同码长排在已有条目之后，所以用户词库天然在
@@ -894,6 +903,22 @@ fn collect(
     // 全排序分支，过滤后再由下面的 `out.len() >= limit` 提前收工。
     let scan = if assist_prefix.is_empty() { limit } else { usize::MAX };
 
+    // **长词收窄：词的码长最多比输入多「一个音节」。**
+    //
+    // 前缀匹配的方向是「输入串是词码的前缀」，这是增量输入必需的：打 `wfjmyulj`
+    // 的过程中，前 6 键必须能看见「文件预览」，否则这个码根本打不出来。但前缀匹配
+    // 本身没有远近概念——任何更长的词只要码以它开头就合格，于是两个音节的输入
+    // （`wfjm` = wen jian）会把个人词库里所有「文件X」的短语全捞出来：实测 178 条，
+    // 3 字词、4 字词一路排下去，用户要的「文件」只在第一条。
+    //
+    // 收窄尺度取「一个音节」：双拼 2 键、全拼 4 字母。它刚好保住「快到手的长词现在
+    // 就能看见」（`wfjmyu` 时出现「文件预览」），又不让两个音节的输入被四字词淹掉。
+    // 比这更严（必须打满才出现）会在打长词的中途出现空候选窗——`wfjmyul`（7 键）
+    // 时既没有 7 键的词、长词又被藏了，用户会以为输入法卡死。
+    //
+    // 迭代顺序是 `(码长, 行号)` 升序，所以一旦超出就可以直接 `break`，不用逐条比。
+    let cap = reach_cap(prefix.len(), pinyin);
+
     // 1) 用户词库优先。常态是 mmap 的 user.bin（和 base.bin 同一条零解析路径，
     //    多进程共享页缓存）；只有 bin 缺失或比 txt 旧时才退回堆索引。
     //
@@ -903,6 +928,10 @@ fn collect(
         UserSrc::Mapped(b) => {
             let (ps, pe) = b.prefix_range(which, prefix);
             for p in top_by_rank(ps..pe, scan, |p| b.rank_key(which, p)) {
+                let code_len = b.rank_key(which, p).0;
+                if code_len > cap {
+                    break; // 迭代按码长升序，后面只会更长
+                }
                 let w = b.word_at(which, p);
                 if !pass(w) || !seen.insert(w) {
                     continue;
@@ -911,7 +940,7 @@ fn collect(
                     &mut out,
                     &mut lens,
                     Cow::Borrowed(w),
-                    b.rank_key(which, p).0.min(u8::MAX as usize) as u8,
+                    code_len.min(u8::MAX as usize) as u8,
                     limit,
                     filtered, // 带辅助码：统一按码长插；否则用户词库内部已有序，直接追加
                 );
@@ -926,6 +955,10 @@ fn collect(
         UserSrc::Heap(ov) => {
             let (ps, pe) = ov.prefix_range(which, prefix);
             for p in top_by_rank(ps..pe, scan, |p| ov.rank_key(which, p)) {
+                let code_len = ov.rank_key(which, p).0;
+                if code_len > cap {
+                    break;
+                }
                 let w = ov.word_at(which, p);
                 if !pass(w) || !seen.insert(w) {
                     continue;
@@ -934,7 +967,7 @@ fn collect(
                     &mut out,
                     &mut lens,
                     Cow::Owned(w.to_string()),
-                    ov.rank_key(which, p).0.min(u8::MAX as usize) as u8,
+                    code_len.min(u8::MAX as usize) as u8,
                     limit,
                     filtered,
                 );
@@ -957,6 +990,10 @@ fn collect(
         // 前 limit 条命中就是码长最短的 limit 条，后面的插不进候选。
         let mut taken = 0usize;
         for p in top_by_rank(ps..pe, scan, |p| bin.rank_key(which, p)) {
+            let code_len = bin.rank_key(which, p).0;
+            if code_len > cap {
+                break;
+            }
             let w = bin.word_at(which, p);
             if !pass(w) || !seen.insert(w) {
                 continue;
@@ -965,7 +1002,7 @@ fn collect(
                 &mut out,
                 &mut lens,
                 Cow::Borrowed(w),
-                bin.rank_key(which, p).0.min(u8::MAX as usize) as u8,
+                code_len.min(u8::MAX as usize) as u8,
                 limit,
                 filtered, // 带辅助码：按码长插进用户词库那一段里
             );
@@ -1099,6 +1136,43 @@ pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
+
+
+
+    /// 长词收窄的边界：最多比输入长一个音节。
+    ///
+    /// 现场：`wfjm`（wen jian，4 键）返回 178 条——个人词库里所有「文件X」的短语
+    /// 都因为「码以 wfjm 开头」被捞出来，3 字词、4 字词一路排下去，用户要的
+    /// 「文件」只在第一条，翻页翻半天。
+    #[test]
+    fn reach_allows_one_extra_syllable() {
+        // 双拼：一个音节 2 键
+        assert_eq!(reach_cap(4, false), 6, "两音节输入：最多看到三字词");
+        assert_eq!(reach_cap(1, false), 3, "单键：只看到单字");
+        assert_eq!(reach_cap(6, false), 8, "三音节输入：四字词该出现了");
+        assert_eq!(reach_cap(8, false), 10, "码打满：自己一定能出");
+        // 全拼：一个音节按 4 个字母算
+        assert_eq!(reach_cap(7, true), 11);
+        assert_eq!(reach_cap(12, true), 16);
+    }
+
+    /// 两音节输入里不该出现四字以上的词（`wfjm` 不该带出「文件预览」）。
+    ///
+    /// 只断言上界，不假设词库里有哪条长词——那条规矩踩过两次。
+    #[test]
+    fn two_syllable_input_has_no_long_words() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        for code in ["wfjm", "ddj", "xrji", "nihc"] {
+            let list = lookup(code, usize::MAX);
+            assert!(
+                list.iter().all(|w| w.chars().count() <= 3),
+                "`{code}`（{} 键）不该有两字以上的词：{:?}",
+                code.len(),
+                list.iter().filter(|w| w.chars().count() > 3).take(5).collect::<Vec<_>>()
+            );
+        }
+    }
 
     /// **探测入口与候选上限无关**：`first*` 拿到的必须是 `lookup(..., 上限)` 的第一条。
     ///
