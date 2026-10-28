@@ -733,20 +733,28 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ## 安装 / 卸载
 
-安装包是**用户级**的（`RequestExecutionLevel user`），默认装到 `%LOCALAPPDATA%\Feihe`：
+安装包需要**管理员权限**（`RequestExecutionLevel admin`，会弹一次 UAC），默认装到
+`%LOCALAPPDATA%\Feihe`：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 # 产物：dist\Feihe-Setup-0.3.8.exe
 ```
 
-不弹 UAC 的原因不只是「省一步」：输入法的 DLL 跑在记事本 / Word / 浏览器这些普通权限
-进程里，它们写不了 `Program Files`。而 0.3.0 起配置和词频都存在安装目录，装到
-`Program Files` 的话写入会被 UAC 重定向到 `VirtualStore`（32 位宿主）或直接失败
-（64 位宿主），「压缩目录即备份」就变成假象。注册表也全部走 HKCU（COM CLSID + CTF TIP），
-卸载同样不需要提权。
+**为什么必须提权**：输入法的 COM / TSF 注册要写
+`HKLM\SOFTWARE\Microsoft\CTF\TIP`。写在 HKCU 行不通——注册表结构看着完全正确、
+`CoCreateInstance` 也成功，但 `ITfInputProcessorProfiles::GetLanguageProfileDescription`
+只查 HKLM，Win+Space 的切换列表同样只来自 HKLM。用户看到的结果是「设置里多出一个
+不可用的输入法，切换列表里根本没有飞鹤」。0.3.8 及以前一直写 HKCU，唯一能用的原因
+是更早的管理员安装在 HKLM 留过一份残留；等清理步骤把它删掉，就彻底失效了。
+机器上所有能用的第三方输入法（搜狗、小狼毫、微软拼音）都注册在 HKLM。
 
-开发期也可以直接用脚本（同样不需要管理员）：
+**安装目录仍在用户目录下**，运行期不需要提权：输入法的 DLL 跑在记事本 / Word /
+浏览器这些普通权限进程里，它们写不了 `Program Files`；而配置和词频都存在安装目录，
+装到 `Program Files` 的话写入会被 UAC 重定向到 `VirtualStore`（32 位宿主）或直接失败
+（64 位宿主），「压缩目录即备份」就变成假象。
+
+开发期也可以直接用脚本（**需要管理员**，注册要写 HKLM）：
 
 ```cmd
 cd installer
@@ -766,17 +774,18 @@ COM / TSF 注册和键盘列表（几秒钟，**不动任何文件**，不碰词
 卸载同理，正常不会留下需要重启才能删的文件；万一某个宿主还占着 DLL，日志里会说明
 「重启后可手动删除」，但不会弹重启提示。
 
-**从 0.2.x 升级**：旧版装在 `C:\Program Files\Feihe` 且注册在 HKLM。新版装到
-`%LOCALAPPDATA%\Feihe`、注册在 HKCU（优先级高于 HKLM），所以装完直接生效；
+**从 0.2.x / 0.3.x 升级**：旧版装在 `C:\Program Files\Feihe`，注册在 HKLM（更早）或
+HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Feihe`；
 `config.ini` / `freq.txt` / `phrases.txt` / `pinned.txt` 会在首次启动时从
 `%APPDATA%\Feihe` **自动复制**过来（复制不删原件）。旧目录可以在「程序和功能」里卸掉。
+0.3.8 及以前写下的 HKCU 注册会被安装脚本清掉，不会留下「不可用的输入法」幽灵项。
 
 注册链路上踩过的坑（DLL 部署到稳定路径、User Profile 不是 `SortOrder`、`input.dll` 没有
 `UninstallLayoutOrTip`、隐藏的 `Enable = 0`）都记在 `handoff.md`「关键事实」里。
 
 ## 打安装包（NSIS）
 
-开发期用 `register.cmd` 就够；要发给别人则用安装包，一键装到 `%LOCALAPPDATA%\Feihe`（用户级，不需要 UAC）：
+开发期用 `register.cmd` 就够（需要管理员，因为要写 HKLM）；要发给别人则用安装包，一键装到 `%LOCALAPPDATA%\Feihe`（会弹一次 UAC）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1

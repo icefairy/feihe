@@ -1,11 +1,22 @@
 ﻿<#
-  Feihe IME - install / register (per-user, NO Administrator required).
+  Feihe IME - install / register (**必须管理员**，注册写 HKLM).
+
+  为什么必须是 HKLM（2026-10-28 实测，用户报「设置里多出一个不可用的输入法，
+  Win+Space 里没有飞鹤」）：
+    之前一直是写 HKCU\SOFTWARE\Microsoft\CTF\TIP。注册表结构看起来完全正确，
+    `CoCreateInstance(CLSID)` 也成功，但系统的输入法列表**读不到它**：
+      - `ITfInputProcessorProfiles::GetLanguageProfileDescription` 只查 HKLM，
+        HKCU 那份的 Description 拿不到 → 设置页显示成「不可用的输入法」；
+      - Win+Space 的切换列表同样只来自 HKLM → 根本不列出飞鹤。
+    机器上所有能用的第三方输入法（搜狗、小狼毫 weasel、微软拼音）无一例外都在
+    HKLM\SOFTWARE\Microsoft\CTF\TIP，HKCU 下只有我们自己一条 —— 这就是铁证。
+    以前「能用」是因为更早的管理员安装在 HKLM 留过一份残留，HKCU 缺了会回落到它；
+    等脚本第 6 步把 HKLM 清干净，就彻底没了。
 
   What it does:
-    1. COM registration (HKCU\SOFTWARE\Classes\CLSID\{...}) pointing at a STABLE dll path.
-       HKCU 优先于 HKLM，所以用户级注册能覆盖旧版本留下的机器级条目。
+    1. COM registration (HKLM\SOFTWARE\Classes\CLSID\{...}) pointing at a STABLE dll path.
        32-bit host 走 Wow6432Node 那一份（见下方 DllPath32 说明）。
-    2. HKCU CTF TIP definition (Category / Item / LanguageProfile)，32 位视图镜像一份。
+    2. HKLM CTF TIP definition (Category / Item / LanguageProfile)，32 位视图镜像一份。
     3. Adds Feihe to the CURRENT USER keyboard list via input.dll!InstallLayoutOrTip.
     4. Verifies the result and falls back to a direct registry write if needed.
     5. Restarts ctfmon so a freshly deployed DLL takes effect without sign-out.
@@ -21,10 +32,13 @@
   DllPath32（可选）——32 位宿主支持：
     in-proc COM 的位数必须和宿主一致，所以 64/32 位要各自一份 DLL。
     给 -DllPath32 时本脚本会额外写：
-      HKCU\SOFTWARE\Classes\Wow6432Node\CLSID\{CLSID}\InprocServer32 -> feihe32.dll
-      HKCU\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\{CLSID}            (镜像)
-    ⚠ HKCU\SOFTWARE\Microsoft\CTF\TIP 是被 WOW64 重定向的（不在共享键列表里），
+      HKLM\SOFTWARE\Classes\Wow6432Node\CLSID\{CLSID}\InprocServer32 -> feihe32.dll
+      HKLM\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\{CLSID}            (镜像)
+    ⚠ SOFTWARE\Microsoft\CTF\TIP 是被 WOW64 重定向的（不在共享键列表里），
       32 位进程读的是 Wow6432Node 那份，所以 TIP 定义必须写两遍。
+
+  用户级的部分仍然是 HKCU：键盘列表（User Profile）和 SortOrder 是「当前用户的
+  偏好」，本来就该按用户存，不需要管理员。
 
   This file is UTF-8 WITH BOM on purpose: PowerShell 5.1 needs the BOM to read the
   Chinese display name correctly. Do not re-save as plain UTF-8 or ASCII.
@@ -37,9 +51,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ── 必须是 64 位 PowerShell ──────────────────────────────────────
-# 本脚本要同时写两个注册表视图：HKCU\SOFTWARE\Classes\CLSID（64 位视图）
-# 和 HKCU\SOFTWARE\Classes\Wow6432Node\CLSID（32 位视图）。
-# 如果自己就跑在 32 位 PowerShell 里，WOW64 会把 HKCU\SOFTWARE\Classes 重定向到
+# 本脚本要同时写两个注册表视图：HKLM\SOFTWARE\Classes\CLSID（64 位视图）
+# 和 HKLM\SOFTWARE\Classes\Wow6432Node\CLSID（32 位视图）。
+# 如果自己就跑在 32 位 PowerShell 里，WOW64 会把 HKLM\SOFTWARE\Classes 重定向到
 # Wow6432Node，于是我们写的 "Wow6432Node\..." 会变成 Wow6432Node\Wow6432Node\...，
 # 32 位宿主反而查不到。而 NSIS / 32 位 cmd 启动 powershell 时拿到的正是 32 位实例，
 # 所以这里自动切到 64 位实例重跑。
@@ -53,6 +67,18 @@ if ([IntPtr]::Size -eq 4 -and $env:PROCESSOR_ARCHITEW6432) {
         & $ps64 @a
         exit $LASTEXITCODE
     }
+}
+
+# ── 必须管理员 ──────────────────────────────────────────────────
+# 注册项写到 HKLM（见文件头说明：HKCU 的话系统读不到，输入法显示成「不可用」）。
+# 非管理员时不要硬往下走——半套注册比不注册更难查。
+$isAdmin = ([Security.Principal.WindowsPrincipal] `
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Host "[FAIL] 需要管理员权限（注册项要写 HKLM，否则系统读不到，输入法会显示成「不可用」）。" -ForegroundColor Red
+    Write-Host "       请右键「以管理员身份运行」安装程序，或右键 Feihe-Repair.exe 选择「以管理员身份运行」。" -ForegroundColor Red
+    exit 2
 }
 
 $Clsid   = '{70CB823D-D08A-4B57-B8BE-08BCE2539FF3}'
@@ -98,7 +124,7 @@ function Set-RegValue {
 
 # -- 1 & 2. COM + CTF TIP 注册（同一份逻辑跑两遍：64 位视图 / 32 位视图）-----
 #
-# 参数化的原因：WOW64 把 HKCU\SOFTWARE\Classes 和 HKCU\SOFTWARE\Microsoft\CTF\TIP
+# 参数化的原因：WOW64 把 HKLM\SOFTWARE\Classes 和 HKLM\SOFTWARE\Microsoft\CTF\TIP
 # 都重定向了（CTF 只有 SystemShared 是共享键）。64 位宿主查前者，32 位宿主查
 # Wow6432Node 那份，两边必须各自有一套完整的 CLSID + TIP 定义。
 function Register-Com {
@@ -174,36 +200,50 @@ function Register-TipDef {
     Set-RegValue -Path $lp -ValueName 'IconIndex' -Value 0 -Type DWord
 }
 
-# -- 0. 清掉上一次留下的 TIP 定义（必须**在最前面**）------------------
+# -- 0. 清掉上一次留下的注册（必须**在最前面**）------------------------
 #
 # 老版本卸载后可能留下 Enable=0 的 LanguageProfile，那条会让输入法在语言列表里
 # 显示成灰色/不可用，所以每次安装都重建一遍。
 #
 # ⚠ 这段必须放在**所有写入之前**。它一度被夹在「注册完 TIP」和「加键盘列表」之间，
 # 等于把刚写好的 64 位 TIP 定义整棵删掉，然后照常往下走——CLSID 还在、TIP 没了，
-# 于是语言列表里根本看不到飞鹤，「添加键盘」也找不到它。32 位那份（Wow6432Node）
-# 因为写在后一步反而幸免，症状因此更迷惑：32 位宿主勉强能用，64 位宿主
-# （explorer / 记事本 / 浏览器 / 微信）全都看不见。
+# 于是语言列表里根本看不到飞鹤，「添加键盘」也找不到它。
 #
-# 为什么长期没暴露：旧的管理员安装曾在 HKLM 留过一份 TIP，HKCU 缺了会回落到它；
-# 等第 6 步把 HKLM 也清干净，输入法就彻底消失了。
-foreach ($tipRoot in @(
+# 现在清四个位置：HKLM/HKCU × 64/32 位视图。
+#   - HKLM 两份：上一次安装（管理员）留下的旧路径，必须换成当前 DLL 路径；
+#   - HKCU 两份：**0.3.8 及以前版本写在这里**，而 HKCU\Software\Classes 的优先级
+#     **高于** HKLM —— 不清掉的话，旧版写的 HKCU CLSID 会盖住我们刚写的 HKLM 那条，
+#     而且 HKCU 的 TIP 定义就是「设置里那个不可用的输入法」的来源。
+$staleRoots = @(
+    'HKLM:\SOFTWARE\Microsoft\CTF\TIP',
+    'HKLM:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP',
     'HKCU:\SOFTWARE\Microsoft\CTF\TIP',
     'HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'
-)) {
+)
+foreach ($tipRoot in $staleRoots) {
     $stale = Join-Path $tipRoot $Clsid
-    if (Test-Path $stale) {
-        Remove-Item $stale -Recurse -Force
+    if (Test-Path -LiteralPath $stale) {
+        Remove-Item -LiteralPath $stale -Recurse -Force
         Write-Host "[tip] removed stale TIP key: $stale"
+    }
+}
+foreach ($clsRoot in @(
+    'HKCU:\SOFTWARE\Classes\CLSID',
+    'HKCU:\SOFTWARE\Classes\Wow6432Node\CLSID'
+)) {
+    $stale = Join-Path $clsRoot $Clsid
+    if (Test-Path -LiteralPath $stale) {
+        Remove-Item -LiteralPath $stale -Recurse -Force
+        Write-Host "[com] removed stale HKCU CLSID: $stale"
     }
 }
 
 $script:IconDll = $DllPath
 
-Register-Com -ClassesRoot 'HKCU:\SOFTWARE\Classes' -Dll $DllPath
+Register-Com -ClassesRoot 'HKLM:\SOFTWARE\Classes' -Dll $DllPath
 
 if ($DllPath32) {
-    Register-Com -ClassesRoot 'HKCU:\SOFTWARE\Classes\Wow6432Node' -Dll $DllPath32
+    Register-Com -ClassesRoot 'HKLM:\SOFTWARE\Classes\Wow6432Node' -Dll $DllPath32
     Write-Host "[com] 32-bit host support enabled"
 } else {
     Write-Host "[com] 未提供 32 位 DLL，32 位宿主（32 位 Office / IE 插件等）无法使用飞鹤" -ForegroundColor Yellow
@@ -233,9 +273,9 @@ if ($ok) {
 }
 
 # -- 3b. 写 TIP 定义（**必须在上面那步之后**，见 Register-TipDef 的注释）-----
-Register-TipDef -CtfTipRoot 'HKCU:\SOFTWARE\Microsoft\CTF\TIP'
+Register-TipDef -CtfTipRoot 'HKLM:\SOFTWARE\Microsoft\CTF\TIP'
 if ($DllPath32) {
-    Register-TipDef -CtfTipRoot 'HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'
+    Register-TipDef -CtfTipRoot 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'
 }
 
 # -- 4. Verify + fallback ---------------------------------------------
@@ -356,39 +396,20 @@ if ($loaded.Count -gt 0) {
     Write-Host "[stale] 没有进程映射旧路径的 feihe.dll"
 }
 
-# -- 6. 尽力清理旧版本留下的机器级条目 ------------------------------
-# v0.3.0 之前是管理员安装，CLSID/TIP 写在 HKLM、DLL 在 Program Files。现在改成
-# 用户级：HKCU 的条目优先，旧的 HKLM 条目不会再生效，但留着会指向一个已经不存在的
-# 路径（升级安装时 Program Files 那份还在，反而可能被 32 位宿主加载到旧 DLL）。
-# 没有管理员权限就删不掉 —— 静默跳过，绝不能因此让安装失败。
-foreach ($view in @(
-    @{ Name = '64'; Tip = 'HKLM:\SOFTWARE\Microsoft\CTF\TIP';             Cls = 'HKLM:\SOFTWARE\Classes\CLSID' },
-    @{ Name = '32'; Tip = 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP'; Cls = 'HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID' }
-)) {
-    foreach ($path in @((Join-Path $view.Tip $Clsid), (Join-Path $view.Cls $Clsid))) {
-        if (Test-Path $path) {
-            try {
-                Remove-Item $path -Recurse -Force -ErrorAction Stop
-                Write-Host "[legacy] removed machine-wide entry ($($view.Name)-bit): $path"
-            } catch {
-                Write-Host "[legacy] 保留旧机器级条目（无管理员权限）：$path" -ForegroundColor DarkGray
-            }
-        }
-    }
-}
-
 # -- 6. 硬校验：注册项必须真的都在 ------------------------------------
 # 安装器只看退出码。0.3.8 就是「TIP 被自己删掉、脚本照样 exit 0」，用户装完发现
 # 语言列表里没有飞鹤、添加键盘也没有，却没有任何报错。这里把「定义在不在」变成
 # 失败退出码，让安装器当场弹窗，而不是留给用户去语言设置里瞎找。
+#
+# 验的是 HKLM —— 系统只认这一份。HKCU 那份即使存在也不会有用（见文件头）。
 $required = @(
-    "HKCU:\SOFTWARE\Classes\CLSID\$Clsid\InprocServer32",
-    "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid\Category\Item\$Clsid",
-    "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$LangId\$Profile"
+    "HKLM:\SOFTWARE\Classes\CLSID\$Clsid\InprocServer32",
+    "HKLM:\SOFTWARE\Microsoft\CTF\TIP\$Clsid\Category\Item\$Clsid",
+    "HKLM:\SOFTWARE\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$LangId\$Profile"
 )
 if ($DllPath32) {
-    $required += "HKCU:\SOFTWARE\Classes\Wow6432Node\CLSID\$Clsid\InprocServer32"
-    $required += "HKCU:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$LangId\$Profile"
+    $required += "HKLM:\SOFTWARE\Classes\Wow6432Node\CLSID\$Clsid\InprocServer32"
+    $required += "HKLM:\SOFTWARE\Wow6432Node\Microsoft\CTF\TIP\$Clsid\LanguageProfile\$LangId\$Profile"
 }
 $missing = @($required | Where-Object { -not (Test-Path -LiteralPath $_) })
 if ($missing.Count -gt 0) {

@@ -69,17 +69,23 @@ Unicode true
 ; 装到 `Program Files` 的话，写入会被 UAC 重定向到 VirtualStore（32 位宿主）或者
 ; 直接失败（64 位宿主），备份就成了假象，而且「有时能存有时不能存」最难查。
 ;
-; 用户级安装的连带好处：不需要 UAC，注册表全在 HKCU（含 CTF TIP），
-; 卸载不需要提权，多用户各装各的互不干扰。
+; 关于提权：注册项必须写 HKLM（系统只认这一份）。写 HKCU 的后果是——注册表结构
+; 看起来全对、CoCreateInstance 也成功，但 `GetLanguageProfileDescription` 读不到
+; 名字、Win+Space 也列不出来，用户看到的是「设置里多出一个不可用的输入法」。
+; 2026-10-28 实测确认（本机所有能用的第三方输入法都在 HKLM）。
+; 代价：装/卸各弹一次 UAC。
 ;
 ; `SELFTEST` 由 build_setup.ps1 -SelfTest 传入：装到临时目录，验证「真装一遍
 ; 再比对 SHA256」而不碰用户真实安装。
 !ifdef SELFTEST
   !define INSTALL_ROOT "$TEMP\feihe-selftest"
+  ; 自检跳过注册步骤（!ifndef SELFTEST 那段），不需要提权 —— 用 user 级才能
+  ; 无人值守跑完。
+  !define REQ_LEVEL "user"
 !else
   !define INSTALL_ROOT "$LOCALAPPDATA\Feihe"
+  !define REQ_LEVEL "admin"
 !endif
-!define REQ_LEVEL "user"
 
 Name "${APP_NAME}"
 OutFile "${OUTDIR}\Feihe-Setup-${APP_VER}.exe"

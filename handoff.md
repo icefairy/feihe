@@ -1938,6 +1938,58 @@ API——会把它**不认可的 TIP 定义整棵删掉**，而且只清当前�
 > 通用教训：**「注册」和「交给系统 API 确认」是两件事，顺序错了就会被系统清理掉。**
 > 遇到「我明明写了，读出来却没有」，先怀疑中间那个 API 调用，别只怀疑自己的赋值。
 
+### 第三层（真正的根因）：注册写在了 `HKCU`
+
+前两层修完，脚本末尾硬校验全绿、`CoCreateInstance(CLSID)` 也成功返回
+`System.__ComObject`——但用户看到的仍然是
+
+> 设置里多出来一个「**不可用的输入法**」，飞鹤没法用，`Win+Space` 里也没有。
+
+把机器上所有能用的输入法摊开对比，答案很干脆：
+
+| 输入法 | `CTF\TIP\{CLSID}` 位置 |
+|---|---|
+| 搜狗 `{CC43AF26}` | **HKLM** |
+| 小狼毫 weasel `{A3F4CDED}` | **HKLM** |
+| 微软拼音 `{9D2B2E2B}` | **HKLM** |
+| 飞鹤 `{70CB823D}`（0.3.8 及以前） | **HKCU** ← 全机器唯一一个 |
+
+原因是两个 API 的读法：
+
+- `ITfInputProcessorProfiles::GetLanguageProfileDescription` **只查 HKLM**；
+  HKCU 那份的 `Description` 读不到 → 设置页拿不到名字，退化成「不可用的输入法」；
+- `Win+Space` 的切换列表同样只来自 HKLM → 根本不列出飞鹤。
+
+而 `CoCreateInstance` 走的是 `HKCU\Software\Classes\CLSID`（**优先级高于 HKLM**），
+所以 DLL 能加载、对象能创建——这就是「一切看起来都对，但用户就是看不见」的原因。
+
+**为什么以前能用**：0.3.0 之前是管理员安装，往 HKLM 写过一份。后来改成用户级安装
+（`RequestExecutionLevel user`），只写 HKCU；脚本里又有一段「尽力清理旧版本留下的
+机器级条目」把 HKLM 那份删了。于是「能用的原因」（残留）被主动清掉，只留下「不能用的
+原因」（HKCU）。三个版本一直带着这个雷。
+
+**修法**：
+
+1. `feihe.nsi` 的 `REQ_LEVEL` 改成 `admin`（`SELFTEST` 分支仍是 `user`，自检跳过注册）；
+2. `install_tip.ps1` 的 `Register-Com` / `Register-TipDef` 根键全改 `HKLM`；
+3. 第 0 步清理**四个位置**：HKLM/HKCU × 64/32 位视图。HKCU 的两份必须清——它是
+   「不可用」幽灵项的来源，而且 `HKCU\Software\Classes` 优先级更高，留着会盖住新写的
+   HKLM 路径；
+4. **删掉**「尽力清理旧版本留下的机器级条目」整段（它会把刚写的 HKLM 删掉，同一类
+   错误犯第二次）；
+5. 脚本开头加管理员检查，非管理员 `exit 2` 并说明原因——半套注册比不注册更难查；
+6. `repair.nsi` 同步改 `admin`；
+7. 硬校验改成验 HKLM。
+
+`User Profile`（键盘列表）和 `SortOrder` 仍然写 HKCU —— 那是「当前用户的偏好」，
+本来就不该是机器级。
+
+> 通用教训：**「用户能看见的输入法列表」和「注册表里有没有这一项」是两件事。**
+> 自检要问的是「系统 UI 从哪个 hive 读」，不是「我写进去的那份在不在」。
+
+**代价**：装 / 卸 / 修复各弹一次 UAC。这是硬约束——HKLM 必须管理员，绕不过去。
+安装目录仍在 `%LOCALAPPDATA%\Feihe`（运行期写配置和词频，不能放 Program Files）。
+
 ## 「修复安装状态」小工具（Feihe-Repair.exe）
 
 用户要求：安装目录里放一个 exe，双击就能修好注册状态，不用重装。

@@ -12,7 +12,9 @@
 ;    或者本身就是旧版本（旧版本有个把 TIP 定义删掉的 bug）。
 ; 3. 安装目录优先读卸载注册项，读不到就用 exe 自身所在目录——用户把 exe 拷进
 ;    安装目录双击是最常见的用法。
-; 4. 用户级、不要管理员。所有注册都在 HKCU，弹 UAC 只会把人吓跑。
+; 4. **必须管理员**（改为 admin）。注册要写 HKLM——写 HKCU 的话系统读不到，
+;    表现就是「设置里多出一个不可用的输入法、Win+Space 里没有飞鹤」。修复工具
+;    如果还按用户级跑，恰好在修不了的那个故障上无能为力。代价是弹一次 UAC。
 ; 5. 结果必须**看得见**：成功弹一个、失败弹一个并带上退出码。静默结束等于让用户
 ;    自己猜，而这正是「装完没有输入法」这类问题的根源。
 ;
@@ -31,7 +33,7 @@ Unicode true
 
 Name "${APP_NAME} - 修复安装状态"
 OutFile "${OUTDIR}\Feihe-Repair.exe"
-RequestExecutionLevel user
+RequestExecutionLevel admin
 ShowInstDetails show
 BrandingText "${APP_NAME} 修复工具"
 
@@ -87,7 +89,7 @@ Section "修复"
   ${If} $2 == "0"
     MessageBox MB_ICONINFORMATION|MB_OK "修复完成。$\r$\n$\r$\n用 Win+Space 或 Ctrl+Shift 切到「${APP_NAME}」。$\r$\n如果列表里还看不到它，注销后重新登录一次（列表由 shell 缓存）。"
   ${Else}
-    MessageBox MB_ICONSTOP|MB_OK "修复失败（脚本退出码 $2）。$\r$\n$\r$\n本窗口的日志里有具体原因，最后几行就是。$\r$\n常见原因：安装目录里的 feihe.dll 被安全软件锁住，或者注册表 HKCU 没有写权限。"
+    MessageBox MB_ICONSTOP|MB_OK "修复失败（脚本退出码 $2）。$\r$\n$\r$\n本窗口的日志里有具体原因，最后几行就是。$\r$\n常见原因：安装目录里的 feihe.dll 被安全软件锁住，或者没有以管理员身份运行（注册要写 HKLM）。"
     SetErrorLevel 1
   ${EndIf}
 SectionEnd
