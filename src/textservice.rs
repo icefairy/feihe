@@ -2246,11 +2246,11 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         insert::init_chinese(chinese);
 
         crate::dlog!(
-            "Activate: tid={} chinese={} no_popup={} fullscreen={} fg={}",
+            "Activate: tid={} chinese={} no_popup={} scene={} fg={}",
             tid,
             chinese,
             config::no_popup(),
-            crate::fullscreen::active(),
+            crate::fullscreen::scene().key(),
             crate::diag::fg_class()
         );
 
@@ -2323,9 +2323,13 @@ fn ui_less_requested(tim: &ITfThreadMgr, dwflags: u32) -> bool {
 /// 连状态浮窗也没了」——因为浮窗那边我们主动 `hide()` 了，理由同样是「全屏时画了
 /// 也看不见」，而这条理由在窗口化宿主身上根本不成立。
 ///
-/// 判据借 `fullscreen::active()`（QUNS）：真全屏（游戏 / 演示 / 全屏 UWP）时自绘
-/// 窗口确实上不了屏，交给宿主是对的；窗口化的宿主 DWM 正常，自绘一定能显示——
-/// 那就该我们画。
+/// 判据借 `fullscreen::active()`（QUNS）：真全屏（游戏 / 演示 / 全屏 UWP）时才
+/// 值得把候选交给宿主；窗口化的宿主 DWM 正常，自绘一定能显示——那就该我们画。
+///
+/// 注意「真全屏」不等于「自绘画不出来」：现代 Windows 上全屏游戏绝大多数是
+/// 无边框窗口化（D3D 独占全屏被 DWM 的全屏优化接管），自绘窗盖得上去。这条闸的
+/// 真正作用是**别跟宿主抢着画**——宿主声明了 UILess 就是「候选我来」，我们就不该
+/// 再弹一个。宿主不接（`BeginUIElement` 回 show=TRUE）时照旧降级回自绘窗。
 fn ui_less_allowed(requested: bool, fullscreen: bool) -> bool {
     requested && fullscreen
 }
@@ -2342,7 +2346,8 @@ impl ITfTextInputProcessorEx_Impl for FeiheTextService_Impl {
         let fs = crate::fullscreen::active();
         let ui_less = ui_less_allowed(requested, fs);
         crate::dlog!(
-            "ActivateEx: dwflags=0x{dwflags:x} requested={requested} fullscreen={fs} ui_less={ui_less} fg={}",
+            "ActivateEx: dwflags=0x{dwflags:x} requested={requested} scene={} ui_less={ui_less} fg={}",
+            crate::fullscreen::scene().key(),
             crate::diag::fg_class()
         );
         self.ui_less.set(ui_less);
@@ -3293,8 +3298,15 @@ mod tests {
         // `\` 不再进编码：中文+全角标点时它输出「、」，Shift 组合交给应用出「|」
         assert!(!FeiheTextService::is_code_key(VK_OEM_5.0 as u8));
         assert_eq!(FeiheTextService::code_char(VK_OEM_5.0 as u8), None);
-        // `/` 接管快捷输入引导符
-        assert!(FeiheTextService::is_code_key(VK_OEM_2.0 as u8));
+        // `/` 接管快捷输入引导符。
+        //
+        // `is_code_key` 会读**真实键盘状态**（`GetKeyState`）把 Shift 组合排除在编码
+        // 之外，所以这条断言能不能立住取决于跑测试时有没有按着 Shift——按住时 `/`
+        // 会被判成「交给应用」。这不是被测逻辑的问题（映射是死的），而是断言不该
+        // 依赖物理键盘：跳过即可，下面 `code_char` 那条不读键盘状态，照样钉住映射。
+        if !FeiheTextService::shift_down() {
+            assert!(FeiheTextService::is_code_key(VK_OEM_2.0 as u8));
+        }
         assert_eq!(
             FeiheTextService::code_char(VK_OEM_2.0 as u8),
             Some(crate::quick::PREFIX)

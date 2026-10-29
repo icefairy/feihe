@@ -557,6 +557,21 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
         hide();
         return;
     }
+    // 全屏里**第一次**弹候选窗会让系统做一次画面重建：DWM 发现有置顶窗口盖在全屏
+    // 程序上，就退出「全屏优化」，游戏得重建交换链——用户看到的是「游戏闪一下」。
+    // 只发生一次，也躲不掉（任何置顶小窗都一样）。这里记一行，用户报「闪」时能
+    // 直接确认是不是我们弹的窗造成的，而不用猜。
+    {
+        static FS_FIRST: AtomicBool = AtomicBool::new(false);
+        let scene = crate::fullscreen::scene();
+        if scene != crate::fullscreen::Scene::Normal && !FS_FIRST.swap(true, Ordering::Relaxed) {
+            crate::diag::log(format_args!(
+                "candidate::show 全屏下首次弹窗（scene={}），画面可能闪一次",
+                scene.key()
+            ));
+        }
+    }
+
     unsafe {
         if !ensure_class() {
             crate::dlog_change!(REFUSE, 2, "candidate::show：窗口类注册失败");

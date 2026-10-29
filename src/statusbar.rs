@@ -231,9 +231,23 @@ pub fn show() {
         crate::dlog_change!(
             REFUSE,
             1,
-            "statusbar::show 被 no_popup 拦下（fullscreen={} fg={}）",
-            crate::fullscreen::active(),
+            "statusbar::show 被 no_popup 拦下（scene={} fg={}）",
+            crate::fullscreen::scene().key(),
             crate::diag::fg_class()
+        );
+        hide();
+        return;
+    }
+    // 全屏场景下浮窗单独再拦一道。**这和候选窗不是一回事**：候选窗是「按了键才
+    // 出现、选完就消失」，全屏游戏里必须有；浮窗是常驻的，全屏时会一直压在游戏
+    // 画面上挡视线。所以这里判的是 `scene` 而不是 `no_popup`——全屏游戏里
+    // `no_popup` 已经是 false（候选要弹）。
+    if crate::fullscreen::scene().hides_statusbar() {
+        crate::dlog_change!(
+            REFUSE,
+            3,
+            "statusbar::show 被全屏拦下（scene={}）",
+            crate::fullscreen::scene().key()
         );
         hide();
         return;

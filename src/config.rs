@@ -42,11 +42,11 @@ use windows::Win32::System::LibraryLoader::{
 /// 两种误判都要有手动出口，所以不是「要不要这个开关」的问题，是「默认怎么选」。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PopupMode {
-    /// 全屏时收起（默认）
+    /// 投影 / 演示时收起，其余照常弹（默认）
     Auto,
-    /// 一律弹（自动检测误判成「全屏」时用）
+    /// 一律弹（连投影时也弹）
     Always,
-    /// 一律不弹（远程桌面 / 自动检测认不出来的独占全屏）
+    /// 一律不弹（远程桌面、真独占全屏游戏、或嫌全屏里弹窗打断画面）
     Never,
 }
 
@@ -244,13 +244,17 @@ static POPUP_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 ///
 /// 判断顺序：临时覆盖 → 用户设置 → 自动检测。自动检测每次都问 `fullscreen`，
 /// 那边自带 400ms 缓存，热路径上没有真实开销。
+///
+/// **`Auto` 只在「投影 / 演示」时收起**，不再把全屏游戏算进来。全屏游戏里收起
+/// 候选窗等于让输入法没法用：游戏是自绘 UI，不画 IME 组合串，候选写进组合串也
+/// 没人看得见。这里的取舍见 `fullscreen::Scene` 的注释。
 pub fn no_popup() -> bool {
     match POPUP_OVERRIDE.load(Ordering::Acquire) {
         v if v >= 0 => v == 1,
         _ => match PopupMode::from_bits(POPUP_MODE.load(Ordering::Acquire)) {
             PopupMode::Always => false,
             PopupMode::Never => true,
-            PopupMode::Auto => crate::fullscreen::active(),
+            PopupMode::Auto => crate::fullscreen::scene() == crate::fullscreen::Scene::Presentation,
         },
     }
 }
