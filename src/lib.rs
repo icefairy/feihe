@@ -26,6 +26,7 @@ mod secure;
 mod settings;
 mod shuangpin;
 mod softkbd;
+mod sogou;
 mod statusbar;
 mod textservice;
 mod theme;

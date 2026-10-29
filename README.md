@@ -3,7 +3,7 @@
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
 **当前版本 0.3.9** ｜ 安装包 1.67 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 223 项单元测试 ｜ 安装需要管理员（注册写 HKLM）
+不联网、不弹窗、无账号、密码框不接管 ｜ 230 项单元测试 ｜ 安装需要管理员（注册写 HKLM）
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
 > `freq.txt`、`phrases.txt`、`pinned.txt`。**压缩一份安装目录就是完整备份**，
@@ -43,8 +43,8 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 
 | 维度 | 飞鹤 | 搜狗拼音 | 微软拼音 |
 |---|---|---|---|
-| 安装包 | **1.39 MB** | 百 MB 量级 | 随系统预装 |
-| 装完占用 | **约 6.0 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
+| 安装包 | **1.73 MB** | 百 MB 量级 | 随系统预装 |
+| 装完占用 | **约 7.6 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
 | 广告 / 热点推送 | **没有这功能** | 有（可在设置里关） | 无 |
 | 账号 / 联网 | **完全不需要** | 登录后云同步 | 微软账户可选 |
 | 开源 | **是**（Rust，全文可改） | 否 | 否 |
@@ -759,7 +759,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 223 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码，共 230 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -953,7 +953,8 @@ src/config.rs         配置读写（安装目录下 config.ini）
 src/assist.rs         辅助码查表（自然码 / 小鹤音形，多码用 | 分隔任一命中）
 src/assist.txt        辅助码表（gen_assist.py 生成，勿手改）
 tools/gen_dict.py     基础词库生成器（拉雾凇拼音 rime-ice，按词频取前 N 条）
-tools/import_sogou.py 搜狗词库导入器（解析本机搜狗用户词库 → user_dict.txt）
+tools/import_sogou.py 搜狗词库导入器（构建期：解析搜狗用户词库 → src/user_dict.txt）
+src/sogou.rs          同一个导入器的运行期版本（设置窗「从搜狗导入…」）
 tools/gen_assist.py   辅助码表生成器（自然码：Unihan 部首；小鹤：官方码表缓存）
 tools/fetch_xhup.py   小鹤官方形码抓取器（增量，结果存 tools/xhup_cache.txt，随仓库走）
 tools/xhup_cache.txt  小鹤官方形码缓存（字<TAB>形码，8000+ 字，勿手改）
@@ -1095,8 +1096,8 @@ rime-ice 是「书面语料」词表，缺一批日常真的会打的词：电�
 | `<安装目录>\user_dict.txt` | **源文件**（运行时拷到数据目录），人可读、可手改、可导出（`词<TAB>全拼`） |
 | `<安装目录>\user.bin` | 上面那份**编译出来的 FHDB 二进制**，运行时 mmap |
 
-设置窗里三个按钮：`导入词库…` / `导出词库…` / `编译个人词库`。**导入后会自动编译**，
-所以正常情况下你不用管 `user.bin`。
+设置窗里四个按钮：`导入词库…` / `从搜狗导入…` / `导出词库…` / `编译个人词库`。
+**导入后会自动编译**，所以正常情况下你不用管 `user.bin`。
 
 「编译个人词库」编译的是**你的** `user_dict.txt`，不是程序本身。从没导入过个人词库时
 那个文件不存在——这时点按钮不报错，只提示「还没有个人词库」，因为它本来就无事可做
@@ -1150,6 +1151,27 @@ https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip          -> _unihan.zip
 ## 导入本机搜狗拼音的词库
 
 飞鹤支持把你的搜狗个人词库搬过来——**打过什么词，飞鹤里就有什么词**。
+
+### 方式一：设置窗里点一下（普通用户走这条）
+
+`设置 → 从搜狗导入…`。和下面那个 Python 脚本读同一批文件、用同一套注音规则，
+区别是**结果直接并进你当前的个人词库**（`user_dict.txt` → 立刻编译 `user.bin`），
+不重新编译 DLL，也不需要管理员权限：
+
+1. 自动找搜狗安装目录（注册表 `SogouInput` → `Program Files` → `APPDATA` 三路），
+   都没有就弹一句「没找到」再让你手动选文件夹（装在别的盘 / 绿色版走这条）；
+2. 解析 `sgim_gd_usrbg.bin` / `sgim_gd_usr.bin` / `Scd/*.scel` / 导出的 txt；
+3. 注音：先查**编进 DLL 的基础词库**（多音字准），查不到再逐字注音；
+4. 只并**还没有的**词——重复点不会越并越多；点完立刻编译 `user.bin`。
+
+结果写在设置窗那条灰字里（`已从搜狗导入 N 个新词（…跳过 M 条注不出音）`）。
+每个文件解析出多少条、多少命中词库、多少逐字注音，记在 `<安装目录>\feihe.log`，
+用户报「导入后没变化」时先看它。
+
+实现的坑和脚本版完全一样（见下两节），代码在 `src/sogou.rs`——**解析和注音逻辑
+只有一份**，Python 那份是给构建期用的（把整份词库编进 DLL），两边改动要对齐。
+
+### 方式二：Python 脚本（构建期 / 换机器）
 
 ```bash
 python tools/import_sogou.py              # 自动发现并全量重建 src/user_dict.txt

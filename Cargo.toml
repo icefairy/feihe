@@ -44,7 +44,12 @@ windows = { version = "0.62", features = [
     # 简繁转换：LCMapStringEx + LCMAP_TRADITIONAL_CHINESE（Windows 自带 NLS 映射表）
     "Win32_Globalization",
     # 全屏检测：SHQueryUserNotificationState（判断是否全屏游戏 / 演示模式）
+    # 设置窗「从搜狗导入」还要 SHBrowseForFolderW（手动选目录）
     "Win32_UI_Shell",
+    # BROWSEINFOW / ITEMIDLIST：SHBrowseForFolderW 的参数类型在这里
+    "Win32_UI_Shell_Common",
+    # 从搜狗导入：读注册表里搜狗的安装目录（RegGetValueW）
+    "Win32_System_Registry",
 ] }
 
 # 必须保留：#[implement] 是 windows-core 导出的过程宏，代码里 `use windows_core::...`

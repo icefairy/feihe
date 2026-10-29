@@ -1080,7 +1080,18 @@ pub fn export_to(path: &Path) -> Result<usize, String> {
 /// 表示编译失败、退回文本覆盖层（导入本身是成功的）。
 pub fn import_from(path: &Path) -> Result<(usize, Option<(usize, usize)>), String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("读取失败：{e}"))?;
+    merge_text(&text)
+}
 
+/// 把一份「`词<TAB>全拼`」文本并进个人词库，然后立刻编译成 `user.bin`。
+///
+/// 和 `import_from` 的区别只是「文本从哪来」：一个是用户选的文件，一个是
+/// 搜狗词库解析出来的内存串（`sogou` 模块）。**合并规则只能有一份**——
+/// 两个入口各自实现一遍去重，迟早会变成「文件导入去重、搜狗导入不去重」。
+///
+/// 返回 `(新增条目数, Some((bin 条目数, bin 字节数)))`；第二个为 `None`
+/// 表示编译失败、退回文本覆盖层（导入本身是成功的）。
+pub fn merge_text(text: &str) -> Result<(usize, Option<(usize, usize)>), String> {
     let existing = std::fs::read_to_string(user_file()).unwrap_or_default();
     let mut known: HashSet<String> = existing
         .lines()

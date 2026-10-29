@@ -80,6 +80,7 @@ const ID_IMPORT: i32 = 151;
 const ID_EXPORT: i32 = 152;
 const ID_CLOSE: i32 = 153;
 const ID_COMPILE: i32 = 154;
+const ID_SOGOU: i32 = 157;
 const ID_ABOUT: i32 = 155;
 const ID_ABOUT_LINK: i32 = 156;
 
@@ -486,6 +487,32 @@ unsafe fn on_command(h: HWND, id: i32) {
                 }
             }
         }
+        ID_SOGOU => {
+            // 解析几个 MB 的 bin + 编译 user.bin 大概几百毫秒，同步做就行。
+            // 但必须换沙漏光标：不然用户会以为按钮没反应，连点好几下。
+            let r = with_wait_cursor(|| crate::sogou::import_auto(crate::sogou::MAX_LEN));
+            match r {
+                Ok(s) => set_text(h, ID_NOTE, &sogou_summary(&s)),
+                Err(e) => {
+                    // 自动发现失败（装在别的盘 / 用的是绿色版）就让他手选目录。
+                    // 不直接弹文件夹选择框，是为了让「为什么没找到」这句先说清楚。
+                    if ask_yes_no(h, "从搜狗导入", &format!("{e}\n\n要手动选择搜狗的用户数据文件夹吗？"))
+                    {
+                        if let Some(dir) = pick_folder(h) {
+                            let r = with_wait_cursor(|| {
+                                crate::sogou::import_dir(&dir, crate::sogou::MAX_LEN)
+                            });
+                            match r {
+                                Ok(s) => set_text(h, ID_NOTE, &sogou_summary(&s)),
+                                Err(e) => set_text(h, ID_NOTE, &format!("导入失败：{e}")),
+                            }
+                        }
+                    } else {
+                        set_text(h, ID_NOTE, "未导入（没找到搜狗词库）");
+                    }
+                }
+            }
+        }
         ID_COMPILE => {
             // 手改过 user_dict.txt、或想确认 user.bin 状态时用。
             // 编译是幂等的：内容没变也会重写一遍，成本只有几十毫秒。
@@ -548,6 +575,82 @@ unsafe fn open_about() {
         PCWSTR::null(),
         SW_SHOWNORMAL,
     );
+}
+
+/// 一句人话把导入结果说完。用户只关心「多了多少词」，其余是排查用的。
+fn sogou_summary(s: &crate::sogou::Imported) -> String {
+    if s.added == 0 {
+        return format!(
+            "搜狗词库已解析 {} 个文件（{} 条可注音），但没有新词——都已经在个人词库里了。",
+            s.files, s.encoded
+        );
+    }
+    format!(
+        "已从搜狗导入 {} 个新词（{} 个文件 / {} 条可注音，跳过 {} 条注不出音）。\
+         其它程序切换一次输入法后生效。",
+        s.added, s.files, s.encoded, s.skipped
+    )
+}
+
+/// 执行期间把光标换成沙漏。
+///
+/// 不用 `SetCursor` 的返回值恢复：沙漏只是「等一会儿」的提示，漏恢复一次
+/// （比如中途 return）就一直转圈，比不换还糟。所以统一在这里成对处理。
+fn with_wait_cursor<T>(f: impl FnOnce() -> T) -> T {
+    unsafe {
+        let wait = LoadCursorW(None, IDC_WAIT).unwrap_or_default();
+        let _ = SetCursor(Some(wait));
+    }
+    let out = f();
+    unsafe {
+        let arrow = LoadCursorW(None, IDC_ARROW).unwrap_or_default();
+        let _ = SetCursor(Some(arrow));
+    }
+    out
+}
+
+unsafe fn ask_yes_no(h: HWND, title: &str, text: &str) -> bool {
+    MessageBoxW(
+        Some(h),
+        PCWSTR(to_wide(text).as_ptr()),
+        PCWSTR(to_wide(title).as_ptr()),
+        MB_YESNO | MB_ICONQUESTION,
+    ) == IDYES
+}
+
+/// 选一个文件夹（`SHBrowseForFolderW`）。
+///
+/// 为什么不用 `IFileOpenDialog` + `FOS_PICKFOLDERS`：那要走 COM 初始化，
+/// 而我们可能在前台宿主的 STA 里，`CoInitializeEx` 返回 RPC_E_CHANGED_MODE
+/// 的边界要处理一堆。老 API 丑但没这些坑。
+fn pick_folder(h: HWND) -> Option<std::path::PathBuf> {
+    use windows::Win32::UI::Shell::{
+        SHBrowseForFolderW, SHGetPathFromIDListW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS,
+        BROWSEINFOW,
+    };
+
+    let title = to_wide("选择搜狗的用户数据文件夹（里面应有 sgim_gd_usrbg.bin）");
+    let bi = BROWSEINFOW {
+        hwndOwner: h,
+        lpszTitle: PCWSTR(title.as_ptr()),
+        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+        ..Default::default()
+    };
+    unsafe {
+        let pidl = SHBrowseForFolderW(&bi);
+        if pidl.is_null() {
+            return None;
+        }
+        // 这个函数只接受 MAX_PATH（260）的定长缓冲，不是随便一个切片
+        let mut buf = [0u16; 260];
+        let ok = SHGetPathFromIDListW(pidl, &mut buf).as_bool();
+        windows::Win32::System::Com::CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+        if !ok {
+            return None;
+        }
+        let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        Some(std::path::PathBuf::from(String::from_utf16_lossy(&buf[..n])))
+    }
 }
 
 unsafe fn build(h: HWND) {
@@ -694,12 +797,15 @@ unsafe fn build(h: HWND) {
     label(h, "", 16, y, 428, ID_DATA_DIR);
 
     y += 34;
-    push(h, "导入词库…", 16, y, 104, 28, ID_IMPORT);
-    push(h, "导出词库…", 128, y, 104, 28, ID_EXPORT);
-    push(h, "编译个人词库", 240, y, 128, 28, ID_COMPILE);
+    // 四个按钮挤一行：428px 里 96+116+90+98 加上 8px 间隔正好铺满。
+    // 「从搜狗导入」排在「导入词库」右边——它本质上也是导入，只是词从哪来不同。
+    push(h, "导入词库…", 16, y, 96, 28, ID_IMPORT);
+    push(h, "从搜狗导入…", 120, y, 116, 28, ID_SOGOU);
+    push(h, "导出词库…", 244, y, 90, 28, ID_EXPORT);
+    push(h, "编译个人词库", 342, y, 98, 28, ID_COMPILE);
 
     y += 38;
-    label(h, "导入格式：每行「词<TAB>全拼」，例如：你好<TAB>ni hao", 16, y, 428, ID_NOTE);
+    label(h, "格式：词<TAB>全拼（你好<TAB>ni hao）· 从搜狗导入自动注音", 16, y, 428, ID_NOTE);
 
     // 快捷输入说明。码表从 quick 模块取，避免文档和实现对不上。
     // 八个命令一行放不下（428px 会截断），按四个一行折开。

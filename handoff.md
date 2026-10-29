@@ -2701,3 +2701,63 @@ WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`，跟着 `theme::curren
 
 223 项单测（新增 `every_button_has_a_tip_with_its_shortcut`（提示里必须带快捷键）
 和 `button_rects_are_contiguous`（按钮无缝，气泡不会飘到隔壁））。版本 0.3.9。
+
+## 2026-10-29 把 `tools/import_sogou.py` 搬进设置窗（`src/sogou.rs`）
+
+用户要：「把 tools 里 import_sogou.py 的逻辑做到设置窗里，加一个从搜狗导入的功能。」
+
+原来这条路只有作者能走：跑脚本 → 重建 `src/user_dict.txt` → 重新编译 DLL → 替换。
+用户装的是发布包（`-NoUserDict`），等于「从搜狗迁移」完全没有入口。
+
+### 结构
+
+`src/sogou.rs`，和脚本一一对应：
+
+| 脚本 | Rust | 说明 |
+|---|---|---|
+| `read_install_path` / `candidate_roots` | `roots()` + `reg_install_dir()` | 注册表 `SogouInput` 默认值 → Program Files → APPDATA 三路 |
+| `find_user_data_dirs` / `find_scel_dirs` | `discover()` | 三层相对路径都试；`root` 自己就是用户目录的版本也认 |
+| `extract_bin_strict/loose/scel/txt` | 同名函数 | **输入是 `&[u8]` 而不是路径**，纯函数，可单测 |
+| `load_base_codes` / `load_char_pinyin` | `Encoder::new()` | 数据源换成**编进 DLL 的 `base.bin`**（运行期没有 `dict.txt`） |
+| `collect` | `tally_words()` | `词 → (优先级, 次数)` |
+| 写 `src/user_dict.txt` | `dict::merge_text()` | 复用「导入词库…」的合并 + 编译，不写第二份 |
+
+### 三个值得记的点
+
+1. **运行期没有 `src/dict.txt`**。脚本靠它做「词 → 全拼」，DLL 里只有编好的
+   `base.bin`，但 `dictbin::Bin` 有 `word(i)` / `pinyin(i)`——按原顺序遍历就是
+   「词 → 全拼」，而同一个字的多条读音是按词频排的，`or_insert` 取第一条就是
+   最常用读音。等价于脚本那份 8105 字典，还不用额外带数据。实测
+   `重庆→chong qing`、`银行→yin hang`、`鸸鹋→er miao`。
+2. **优先级的数字方向原来拧着**。脚本里 `usrbg=1 / usr=2 / scel=3`，排序用
+   `-prio` 升序 → **细胞词库排在打字历史前面**，一直没人发现（词都在，只是顺序
+   反了）。Rust 里改成「数字大 = 更优先」，`tally` 的 `max` 和排序的 `Reverse`
+   就同向了。
+3. **合并只能有一份实现**。`dict::import_from` 里那段「读已有 → 按词去重 → 追加
+   → 编译」抽成了 `dict::merge_text(text)`，文件导入和搜狗导入共用。各写一份的话
+   迟早变成「文件导入去重、搜狗导入不去重」。
+
+### UI
+
+按钮行从三个变四个（96+116+90+98 + 8px 间隔 = 428，正好铺满），没有加新行，
+所以 `CLIENT_H` 不用动（`debug_assert` 那条「关于不压关闭」仍然成立）。
+点下去换沙漏光标（`with_wait_cursor`），成功后结果写进原来的灰字；自动发现失败走
+`MessageBoxW` 问一句，再 `SHBrowseForFolderW` 手选目录。
+
+不用 `IFileOpenDialog + FOS_PICKFOLDERS`：要走 COM 初始化，而我们可能在前台宿主的
+STA 里，`RPC_E_CHANGED_MODE` 的边界得处理一堆；老 API 丑但没有这些坑。
+`SHGetPathFromIDListW` 只吃 `[u16; 260]` 定长缓冲（`MAX_PATH`），传 1024 编译不过。
+
+新开两个 windows feature：`Win32_System_Registry`（读安装目录）、
+`Win32_UI_Shell_Common`（`BROWSEINFOW` / `ITEMIDLIST` 的类型定义）。
+
+### 体积
+
+DLL 3816/3860 → **3882/3922 KB**（+66/+62 KB），安装包 1.68 → **1.73 MB**。
+主要是 sogou 模块的路径拼接、注册表调用和一串错误文案。文档里的体积数字
+四处一起改了（README 表格、index.html 表格与正文、使用帮助头部）——之前
+README 还写着 1.39 MB，已经和实物差 0.3 MB 了。
+
+230 项单测（新增 7 条：严格解析认校验和 / 校验位不对必须丢 / scel 认魔数 /
+txt 只留 CJK / UTF-16 与 UTF-8 都解得出 / 词表合并优先级 / 排序三级键）。
+版本仍 0.3.9。
