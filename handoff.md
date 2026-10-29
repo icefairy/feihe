@@ -2661,3 +2661,43 @@ dict 层。
 原逻辑（同段内左右移动不该跳回第一项）——只有「确认后进入下一段」才归零。
 
 221 项单测全绿；0.3.9；DLL 重编、安装包 1.68 MB、自检通过。
+
+## 2026-10-29 全角/半角快捷键 + 浮窗悬停提示
+
+用户问：「全角和半角切换有啥快捷键吗？最近误操作切到全角好几次。如果有，可能只能
+切一次，请修复。快捷键应该显示到浮窗对应小按钮的鼠标指向提示里。」
+
+### 原来根本没有快捷键
+
+全角/半角**只有**点浮窗上那个「全 / 半」按钮这一条路。浮窗是可拖动的，按下后移动
+不到 3px 就松手会被判成点击（`WM_LBUTTONUP` 里 `moved == false`）——想挪一下浮窗，
+手一抖就把模式切了。这大概是「误操作」的来源。
+
+### 加 `Ctrl+Shift+F`
+
+- 判定 `is_width_hotkey(vk) = vk == 'F' && ctrl_only() && shift_down()`：只按 Ctrl+Shift，
+  `Ctrl+Alt+F` / `Ctrl+F` 不认（IDE 的全局搜索不能被吞）。
+- **必须在 `OnTestKeyDown` 的 `modifiers_down()` 早退之前认**：经典宿主（记事本、Word）
+  里 Test 返回 FALSE 就不派发 `OnKeyDown`，热键等于不存在。`Ctrl+Shift+U` 当初就漏了
+  这一层（它只在 OnKeyDown 里拦）。
+- **「按住只切一次」= `width_key_down` 锁**：键盘自动重复会连发 `OnKeyDown`，没有锁
+  按住半秒就在全角/半角之间来回跳。`OnKeyUp` 松锁，`clear_state` 兜底复位。
+- 切换后 `statusbar::repaint()`，浮窗上的字当场变。
+
+### 悬停提示：自己画一个小气泡，不用 `tooltips_class32`
+
+系统 tooltip 要 `TOOLINFOW` + `TTM_ADDTOOL` 一整套，字体配色还对不上候选窗（会冒出
+一个 Win98 黄条）。自己在 `statusbar.rs` 里建了 `FeiheStatusTip` 窗口：`WS_POPUP |
+WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`，跟着 `theme::current()` 换肤。
+
+- 文案在 `tip_for(btn)` 里，**快捷键就写在这**——浮窗 30px 高，没有第二处能放说明。
+- 定位：与按钮左边缘对齐、贴在浮窗下方；屏幕底部放不下就翻到上方；横向夹在屏幕内。
+- 显隐靠**轮询**（复用浮窗那个 300ms 定时器，`tip_follow_mouse`），因为
+  `TrackMouseEvent` 在 windows-rs 0.62 里没导出（和 `SS_NOTIFY` 一个待遇）。
+  顺带修掉「鼠标甩出去、按钮高亮还残留」——hover 也在定时器里对齐。
+- 幂等：`TIP_IDX` 记当前显示的是哪个按钮，同一按钮重复调用直接返回，不然 300ms 一次
+  `SetWindowPos` 会让气泡原地抖。
+- 拖动中不出气泡；浮窗隐藏（`no_popup` / 非前台）时强制收起。
+
+223 项单测（新增 `every_button_has_a_tip_with_its_shortcut`（提示里必须带快捷键）
+和 `button_rects_are_contiguous`（按钮无缝，气泡不会飘到隔壁））。版本 0.3.9。

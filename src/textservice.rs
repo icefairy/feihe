@@ -145,6 +145,10 @@ pub struct FeiheTextService {
     /// Shift 按住期间有没有按过别的键。用来区分「单击 Shift」和「Shift+字母」：
     /// 单击切中英，组合键照旧交给应用（大写字母、Shift 选择都靠它）。
     shift_used: Cell<bool>,
+    /// `Ctrl+Shift+F` 热键当前是不是「按着没松」。键盘自动重复会连发一串
+    /// `OnKeyDown`，没有这个锁的话按住一秒就来回切好几次全角——用户看到的是
+    /// 「按一下，模式乱跳」。抬起时清掉。
+    width_key_down: Cell<bool>,
     /// 分词模式的段列表。空 Vec 表示不在分词模式。
     segments: RefCell<Vec<Segment>>,
     /// 分词模式下光标落在第几段
@@ -188,6 +192,7 @@ impl FeiheTextService {
             caret_y: Cell::new(0),
             pending_op: RefCell::new(None),
             shift_used: Cell::new(false),
+            width_key_down: Cell::new(false),
             segments: RefCell::new(Vec::new()),
             seg_idx: Cell::new(0),
             ui_less: Cell::new(false),
@@ -213,6 +218,7 @@ impl FeiheTextService {
         self.selected.set(0);
         self.page.set(0);
         self.expanded.set(false);
+        self.width_key_down.set(false);
         self.pending_op.borrow_mut().take();
         self.hide_candidates();
     }
@@ -267,6 +273,15 @@ impl FeiheTextService {
             let down = |vk: u16| (GetKeyState(vk as i32) as u16) & 0x8000 != 0;
             down(VK_CONTROL.0) && !down(VK_MENU.0) && !down(VK_LWIN.0) && !down(VK_RWIN.0)
         }
+    }
+
+    /// `Ctrl+Shift+F`：全角 / 半角切换。
+    ///
+    /// 为什么用 F：`Ctrl+Shift+U` 已经被「弹不弹窗」占了，而 F 是 Fullwidth，
+    /// 记不住键位的时候也猜得到。要求**只按了 Ctrl 和 Shift**——`Ctrl+Alt+F`
+    /// 之类（IDE 的全局搜索）仍然原样交给应用。
+    fn is_width_hotkey(vk: u8) -> bool {
+        vk == 0x46 && FeiheTextService::ctrl_only() && FeiheTextService::shift_down()
     }
 
     /// 手动分隔符。内部统一存成 `'`，组合串里也原样显示。
@@ -2403,6 +2418,12 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 记住「Shift 是按着不动的组合键」——经典宿主里 Shift 自己的 OnKeyDown
         // 收不到（OnTestKeyDown 拒了就不派发），所以只能在这里做标记。
         self.note_shift_combo(vk);
+        // `Ctrl+Shift+F` 是我们的热键，必须在这里认下来：经典宿主（记事本、Word）
+        // 里 `OnTestKeyDown` 返回 FALSE 就不会派发 `OnKeyDown`，热键等于不存在。
+        // 位置在下面「修饰键一律交还应用」之前，理由同上。
+        if FeiheTextService::is_width_hotkey(vk) {
+            return Ok(BOOL::from(true));
+        }
         if FeiheTextService::modifiers_down() {
             return Ok(BOOL::from(false));
         }
@@ -2504,6 +2525,22 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 必须放在 `is_shift` 判断之后：Shift 按下时那条已经先返回了，
         // 而 `note_shift_combo` 也记下了「Shift 是配合别的键用的」，
         // 抬起时不会误切中英。
+        // ── Ctrl+Shift+F：全角 / 半角 ─────────────────────
+        //
+        // 以前只有浮窗上那个「全 / 半」小按钮能切。浮窗可拖动，手一抖（移动不到
+        // 3px 就松手）就被当成点击，模式悄悄变了——用户只会觉得「我自己切过去了」。
+        // 给个键盘出口，顺带让这个开关可发现（浮窗按钮的悬停提示里写着它）。
+        //
+        // `width_key_down` 是「按住只切一次」的锁：键盘自动重复会连发 OnKeyDown，
+        // 按住半秒就在全角/半角之间来回跳好几次。抬起时（`OnKeyUp`）清锁。
+        if FeiheTextService::is_width_hotkey(vk) {
+            if !self.width_key_down.replace(true) {
+                config::update(|c| c.fullwidth = !c.fullwidth);
+                statusbar::repaint();
+            }
+            return Ok(BOOL::from(true));
+        }
+
         if FeiheTextService::ctrl_only() && FeiheTextService::shift_down() && vk == 0x55 {
             config::toggle_popup_override();
             // 不管切到哪一档，都用「当前的实际结论」决定窗口该显示还是收起
@@ -2783,6 +2820,11 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         _lparam: LPARAM,
     ) -> Result<BOOL> {
         let vk = (wparam.0 & 0xff) as u8;
+
+        // `Ctrl+Shift+F` 抬起：解锁，下一次按下才会再切一次
+        if vk == 0x46 && self.width_key_down.replace(false) {
+            return Ok(BOOL::from(true));
+        }
 
         // 单击 Shift（期间没按别的键）→ 切中英。
         // 必须在抬起时判定：按下时还无法区分「单击」和「Shift+A」。

@@ -78,6 +78,40 @@ fn button_rects() -> [(Btn, RECT); 4] {
 }
 
 static WND: AtomicIsize = AtomicIsize::new(0);
+
+// ─────────────────────────────────────────────────────────────
+// 悬停提示
+// ─────────────────────────────────────────────────────────────
+//
+// 浮窗只有 30px 高、按钮上也就一个字（「中」「全」「符号」），新用户根本不知道
+// 那个「全」是干什么的、更不知道键盘上怎么切。这里自己画一个小气泡，鼠标停在
+// 按钮上就出来，写明「这个按钮是什么」+「快捷键是什么」。
+//
+// 不用系统 `tooltips_class32`：它要 `TOOLINFOW` + `TTM_ADDTOOL` 一整套，而字体、
+// 圆角、配色全都跟候选窗对不上——一个输入法的浮窗边上冒出一个 Windows 98 风格的
+// 黄条，很出戏。自己画就二十行，还能跟着换肤走。
+const TIP_CLASS: PCWSTR = w!("FeiheStatusTip");
+/// 提示窗与浮窗之间的空隙
+const TIP_GAP: i32 = 4;
+/// 提示窗内边距
+const TIP_PAD: i32 = 8;
+
+static TIP_WND: AtomicIsize = AtomicIsize::new(0);
+static TIP_CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
+/// 当前显示的是第几个按钮的提示。-2 = 没显示（-1 是 `HOVER` 的「不在任何按钮上」，
+/// 两者分开，才能区分「鼠标在空隙上」和「提示本来就没开」）
+static TIP_IDX: AtomicI32 = AtomicI32::new(-2);
+static TIP_TEXT: Mutex<String> = Mutex::new(String::new());
+
+/// 每个按钮的悬停说明。**快捷键要写在这里**——浮窗上没有第二处能放说明文字。
+fn tip_for(btn: Btn) -> &'static str {
+    match btn {
+        Btn::Mode => "中 / 英切换（单击 Shift）",
+        Btn::Width => "全角 / 半角（Ctrl+Shift+F）",
+        Btn::Symbols => "符号软键盘",
+        Btn::Settings => "设置",
+    }
+}
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
 static VISIBLE: AtomicBool = AtomicBool::new(false);
 static HOVER: AtomicI32 = AtomicI32::new(-1);
@@ -247,6 +281,12 @@ pub fn destroy() {
         let h = HWND(raw as *mut core::ffi::c_void);
         let _ = KillTimer(Some(h), TIMER_ID);
         let _ = DestroyWindow(h);
+        // 提示窗是独立窗口，得单独销毁，否则进程退出时留一个孤儿 topmost
+        TIP_IDX.store(-2, Ordering::Release);
+        let tip = HWND(TIP_WND.swap(0, Ordering::AcqRel) as *mut core::ffi::c_void);
+        if !tip.is_invalid() {
+            let _ = DestroyWindow(tip);
+        }
     }
 }
 
@@ -352,6 +392,206 @@ unsafe fn paint(h: HWND) {
     }
 
     let _ = EndPaint(h, &ps);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 悬停提示窗
+// ─────────────────────────────────────────────────────────────
+
+unsafe fn ensure_tip_class() -> bool {
+    if TIP_CLASS_REGISTERED.load(Ordering::Acquire) {
+        return true;
+    }
+    let hinst = GetModuleHandleW(None).unwrap_or_default();
+    let wc = WNDCLASSW {
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(tip_wndproc),
+        hInstance: HINSTANCE(hinst.0),
+        lpszClassName: TIP_CLASS,
+        ..Default::default()
+    };
+    if RegisterClassW(&wc) == 0 {
+        return false;
+    }
+    TIP_CLASS_REGISTERED.store(true, Ordering::Release);
+    true
+}
+
+unsafe fn tip_paint(h: HWND) {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(h, &mut ps);
+    if hdc.is_invalid() {
+        return;
+    }
+    let mut rc = RECT::default();
+    let _ = GetClientRect(h, &mut rc);
+
+    let p = theme::current();
+    font::fill(hdc, &rc, p.bg);
+    font::frame(hdc, &rc, p.border);
+
+    let text = TIP_TEXT.lock().map(|t| t.clone()).unwrap_or_default();
+    if !text.is_empty() {
+        SelectObject(hdc, font::ui());
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, p.text);
+        let mut w: Vec<u16> = text.encode_utf16().collect();
+        DrawTextW(hdc, &mut w, &mut rc, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    }
+    let _ = EndPaint(h, &ps);
+}
+
+unsafe extern "system" fn tip_wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            tip_paint(h);
+            LRESULT(0)
+        }
+        WM_ERASEBKGND => LRESULT(1),
+        // 提示窗绝不抢焦点，也不吃鼠标（`WS_EX_TRANSPARENT` 已经让点击穿过去）
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        _ => DefWindowProcW(h, msg, w, l),
+    }
+}
+
+/// 显示第 `idx` 个按钮的提示。`owner` 是状态浮窗（用来定位）。
+///
+/// 幂等：同一个按钮重复调用直接返回，**不重排窗口**。定时器每 300ms 轮询一次，
+/// 每次都 SetWindowPos 的话提示会一直在原地抖。
+unsafe fn tip_show(owner: HWND, idx: usize) {
+    if TIP_IDX.load(Ordering::Acquire) == idx as i32 {
+        return;
+    }
+    let rects = button_rects();
+    let Some((btn, rect)) = rects.get(idx).copied() else {
+        return;
+    };
+    if !ensure_tip_class() {
+        return;
+    }
+
+    let mut tip = HWND(TIP_WND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+    if tip.is_invalid() {
+        let hinst = GetModuleHandleW(None).unwrap_or_default();
+        tip = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+            TIP_CLASS,
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            10,
+            10,
+            None,
+            None,
+            Some(HINSTANCE(hinst.0)),
+            None,
+        )
+        .unwrap_or_default();
+        if tip.is_invalid() {
+            return;
+        }
+        TIP_WND.store(tip.0 as isize, Ordering::Release);
+    }
+
+    let text = tip_for(btn);
+    if let Ok(mut t) = TIP_TEXT.lock() {
+        t.clear();
+        t.push_str(text);
+    }
+
+    // 量一下文字要多大。用提示窗自己的 DC，字体和候选窗一致。
+    let hdc = GetDC(Some(tip));
+    let mut calc = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if !hdc.is_invalid() {
+        let old = SelectObject(hdc, font::ui());
+        let mut w: Vec<u16> = text.encode_utf16().collect();
+        DrawTextW(hdc, &mut w, &mut calc, DT_CALCRECT | DT_SINGLELINE);
+        SelectObject(hdc, old);
+        let _ = ReleaseDC(Some(tip), hdc);
+    }
+    let tw = calc.right + TIP_PAD * 2;
+    let th = calc.bottom + TIP_PAD * 2;
+
+    let mut o = RECT::default();
+    let _ = GetWindowRect(owner, &mut o);
+    let sw = GetSystemMetrics(SM_CXSCREEN);
+    let sh = GetSystemMetrics(SM_CYSCREEN);
+    // 默认贴在浮窗下面，与按钮左边缘对齐；底部放不下就翻到上面
+    let mut x = o.left + rect.left;
+    let mut y = o.bottom + TIP_GAP;
+    if y + th > sh {
+        y = (o.top - th - TIP_GAP).max(0);
+    }
+    x = x.clamp(0, (sw - tw).max(0));
+
+    let _ = SetWindowPos(
+        tip,
+        Some(HWND_TOPMOST),
+        x,
+        y,
+        tw,
+        th,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
+    let _ = InvalidateRect(Some(tip), None, true);
+    TIP_IDX.store(idx as i32, Ordering::Release);
+}
+
+unsafe fn tip_hide() {
+    // `-2` 已经是「没显示」，别每次都往里塞一次 ShowWindow
+    if TIP_IDX.swap(-2, Ordering::AcqRel) == -2 {
+        return;
+    }
+    let tip = HWND(TIP_WND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+    if !tip.is_invalid() {
+        let _ = ShowWindow(tip, SW_HIDE);
+    }
+}
+
+/// 轮询鼠标：停在哪个按钮上就出哪个提示，离开就收。
+///
+/// 为什么不用 `WM_MOUSELEAVE`：`TrackMouseEvent` 在 windows-rs 0.62 里没有导出
+/// （和 `SS_NOTIFY` 一个待遇），而浮窗本来就有 300ms 定时器——顺手在这里判一次
+/// 更省事，也顺便把「鼠标甩出去、按钮还亮着」的高亮残留一起修掉。
+unsafe fn tip_follow_mouse(h: HWND) {
+    if !VISIBLE.load(Ordering::Acquire) {
+        TIP_IDX.store(-2, Ordering::Release);
+        let tip = HWND(TIP_WND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+        if !tip.is_invalid() {
+            let _ = ShowWindow(tip, SW_HIDE);
+        }
+        return;
+    }
+    let mut pt = POINT::default();
+    if GetCursorPos(&mut pt).is_err() {
+        return;
+    }
+    let mut cr = pt;
+    let _ = ScreenToClient(h, &mut cr);
+    // 拖动中不出提示：那会儿用户是在挪窗口，弹个气泡反而挡手
+    let dragging = DRAG
+        .lock()
+        .ok()
+        .and_then(|g| g.map(|s| s.1))
+        .unwrap_or(false);
+    let idx = if dragging { None } else { hit(cr.x, cr.y) };
+
+    // 高亮也跟着对齐（鼠标快速移出窗口时 mousemove 不会再来）
+    let want = idx.map(|i| i as i32).unwrap_or(-1);
+    if HOVER.swap(want, Ordering::AcqRel) != want {
+        let _ = InvalidateRect(Some(h), None, true);
+    }
+
+    match idx {
+        Some(i) => tip_show(h, i),
+        None => tip_hide(),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -494,8 +734,44 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 let _ = ShowWindow(h, SW_HIDE);
                 VISIBLE.store(false, Ordering::Release);
             }
+            tip_follow_mouse(h);
             LRESULT(0)
         }
         _ => DefWindowProcW(h, msg, w, l),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 每个按钮都得有悬停说明，而且**说明里必须带快捷键**——浮窗上没有第二处
+    /// 能写「这个键怎么按」，删了就等于用户永远查不到。
+    #[test]
+    fn every_button_has_a_tip_with_its_shortcut() {
+        for (i, (b, _)) in LAYOUT.iter().enumerate() {
+            assert!(!tip_for(*b).is_empty(), "第 {i} 个按钮没有悬停说明");
+        }
+        assert!(
+            tip_for(Btn::Width).contains("Ctrl+Shift+F"),
+            "全/半的提示里必须写快捷键"
+        );
+        assert!(
+            tip_for(Btn::Mode).contains("Shift"),
+            "中/英的提示里必须写 Shift"
+        );
+    }
+
+    /// 按钮不重叠、按顺序铺满浮窗宽度——提示是按 `button_rects()` 定位的，
+    /// 这里错位的话提示气泡会飘到隔壁按钮下面。
+    #[test]
+    fn button_rects_are_contiguous() {
+        let rects = button_rects();
+        assert_eq!(rects.len(), LAYOUT.len());
+        assert_eq!(rects[0].1.left, PAD);
+        for w in rects.windows(2) {
+            assert_eq!(w[0].1.right, w[1].1.left, "按钮之间有缝或有重叠");
+        }
+        assert_eq!(rects[rects.len() - 1].1.right, WIDTH - PAD);
     }
 }
