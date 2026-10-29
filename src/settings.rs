@@ -610,10 +610,15 @@ fn with_wait_cursor<T>(f: impl FnOnce() -> T) -> T {
 }
 
 unsafe fn ask_yes_no(h: HWND, title: &str, text: &str) -> bool {
+    // 两串必须绑到局部变量：`PCWSTR(to_wide(x).as_ptr())` 写在同一行也能跑
+    // （临时值活到语句结束），但那是在赌生命周期规则，后面谁「整理一下」就成了
+    // 悬垂指针。绑出来一眼看得懂。
+    let text = to_wide(text);
+    let title = to_wide(title);
     MessageBoxW(
         Some(h),
-        PCWSTR(to_wide(text).as_ptr()),
-        PCWSTR(to_wide(title).as_ptr()),
+        PCWSTR(text.as_ptr()),
+        PCWSTR(title.as_ptr()),
         MB_YESNO | MB_ICONQUESTION,
     ) == IDYES
 }
