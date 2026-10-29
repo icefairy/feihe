@@ -1068,6 +1068,10 @@ impl FeiheTextService {
             self.candidates.borrow_mut().clone_from(&list);
             self.selected.set(sel % candidate::PAGE_SIZE);
             self.page.set(sel / candidate::PAGE_SIZE);
+            // 摊开状态也归零：上一轮按 `=` 摊成 5 行，换段 / 换编码之后候选已经
+            // 全变了，还留着摊开的话窗口一开就是 5 行、活动页压在最底下，用户看到
+            // 的是「候选窗停在第 5 行」，要按好几次 `-` 才收得回第一行。
+            self.expanded.set(false);
             return;
         }
 
@@ -1503,6 +1507,11 @@ impl FeiheTextService_Impl {
         if idx + 1 < n {
             self.seg_idx.set(idx + 1);
             self.refresh();
+            // 换到下一段 = 重新挑这个字，候选窗该从第一行开始。`refresh` 会把
+            // 页对齐到这一段「已选的词」上，那个词可能是自动分段时给的靠后候选，
+            // 于是窗口一开就在后面几页——用户得按好几次 `-` 才回到第一行。
+            self.page.set(0);
+            self.selected.set(0);
             self.update_composition();
         } else {
             self.commit_segments("");
@@ -1756,6 +1765,9 @@ impl FeiheTextService_Impl {
                     self.seg_idx.set(n.saturating_sub(1));
                     self.expanded.set(false);
                     self.refresh();
+                    // 新字母 = 新一轮找字：页和选中项都归零
+                    self.page.set(0);
+                    self.selected.set(0);
                 }
                 self.update_composition();
                 Ok(BOOL::from(true))
