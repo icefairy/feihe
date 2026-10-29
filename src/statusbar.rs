@@ -104,10 +104,13 @@ static TIP_IDX: AtomicI32 = AtomicI32::new(-2);
 static TIP_TEXT: Mutex<String> = Mutex::new(String::new());
 
 /// 每个按钮的悬停说明。**快捷键要写在这里**——浮窗上没有第二处能放说明文字。
+///
+/// 只有「中 / 英」有键盘出口（单击 Shift）。全角 / 半角不加快捷键：`Ctrl+Shift+F`
+/// 试过一版，但它只是个不常用的开关，占一个全局组合键不值，还容易和 IDE 抢键。
 fn tip_for(btn: Btn) -> &'static str {
     match btn {
         Btn::Mode => "中 / 英切换（单击 Shift）",
-        Btn::Width => "全角 / 半角（Ctrl+Shift+F）",
+        Btn::Width => "全角 / 半角（点一下切换）",
         Btn::Symbols => "符号软键盘",
         Btn::Settings => "设置",
     }
@@ -745,20 +748,27 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
 mod tests {
     use super::*;
 
-    /// 每个按钮都得有悬停说明，而且**说明里必须带快捷键**——浮窗上没有第二处
-    /// 能写「这个键怎么按」，删了就等于用户永远查不到。
+    /// 每个按钮都得有悬停说明——浮窗上没有第二处能写「这个按钮是干什么的」。
     #[test]
-    fn every_button_has_a_tip_with_its_shortcut() {
+    fn every_button_has_a_tip() {
         for (i, (b, _)) in LAYOUT.iter().enumerate() {
             assert!(!tip_for(*b).is_empty(), "第 {i} 个按钮没有悬停说明");
         }
         assert!(
-            tip_for(Btn::Width).contains("Ctrl+Shift+F"),
-            "全/半的提示里必须写快捷键"
-        );
-        assert!(
             tip_for(Btn::Mode).contains("Shift"),
             "中/英的提示里必须写 Shift"
+        );
+    }
+
+    /// 全角 / 半角**不能**再挂快捷键。`Ctrl+Shift+F` 曾经存在过一版，撤掉是因为
+    /// 这开关不常用，占一个全局组合键不值（还会和 IDE 的全局搜索抢）。
+    /// 提示里出现 `Ctrl+` 就说明它被加回来了。
+    #[test]
+    fn width_button_has_no_shortcut() {
+        assert!(
+            !tip_for(Btn::Width).contains("Ctrl"),
+            "全/半不该再挂快捷键：{}",
+            tip_for(Btn::Width)
         );
     }
 
