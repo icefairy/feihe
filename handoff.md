@@ -3075,3 +3075,18 @@ Unihan 只给部首序号、给不出变体，改起来是「用一批猜的码�
 
 239 项单测全绿（+2：`ong_is_not_a_standalone_syllable`、
 `ziranma_column_is_the_radical_initial_variant`）；零新增 clippy 警告。
+
+### 追加：默认辅助码改成小鹤音形（自然码保持简版）
+
+用户拍板「保持简版，默认辅助码设置为小鹤音形」。所以：
+
+- `Config::DEFAULT.assist_mode`：`Ziranma` → `Xiaohe`。
+  **不动迁移** —— `config.ini` 里已经写着 `assist_mode=ziranma` 的老用户保持原样，
+  只有全新装（没有 config.ini，或缺这个键）才落到小鹤音形。理由是没法区分
+  「默认就是它」和「用户主动选的它」，硬迁移会把后者的选择抹掉。
+- 加测试 `default_assist_is_xiaohe`：默认值、缺键回落、显式 `ziranma` 不被覆盖，三条都钉住。
+- 文档同步：README、`docs/使用帮助.md`（三处：方案表、选择建议表、设置项清单）、
+  `index.html`。设置窗不用改——单选状态由 `sync()` 从配置读，`CheckRadioButton` 自然会落在小鹤那一项。
+
+顺带确认：辅助码的形码表与双拼方案解耦，微软双拼 + 小鹤音形照样能用，所以默认值
+不需要跟着 `scheme` 走。

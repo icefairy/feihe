@@ -118,7 +118,12 @@ impl Skin {
 pub struct Config {
     /// 双拼方案
     pub scheme: Scheme,
-    /// 辅助码（助记码）方案：关闭 / 自然码 / 小鹤音形
+    /// 辅助码（助记码）方案：关闭 / 自然码（简版）/ 小鹤音形
+    ///
+    /// 默认**小鹤音形**：双拼方案默认就是小鹤，配套的形码是官方码（`assist.txt`
+    /// 第三列与 `xhup_cache.txt` 逐条一致），两键也比自然码的一键精确得多。
+    /// 自然码那一列是「部首拼音首字母」的**简版**、和官方 26 键部件表对不上
+    /// （见 `assist` 模块注释），所以不当默认——想用的人自己去设置里选。
     pub assist_mode: AssistMode,
     /// 全角符号开关（浮窗「全/半」、设置窗勾选）。
     ///
@@ -176,7 +181,7 @@ pub struct Config {
 impl Config {
     pub const DEFAULT: Config = Config {
         scheme: Scheme::Xiaohe,
-        assist_mode: AssistMode::Ziranma,
+        assist_mode: AssistMode::Xiaohe,
         // 中文输入法默认应该是中文标点。早期版本这里是 false，导致用户
         // 「打不出、和，」——`、` 恰好落在 `\` 上，见 textservice 的 fullwidth_punct。
         fullwidth: true,
@@ -849,6 +854,22 @@ mod tests {
         let (cfg, _) = parse(&format!("config_ver={CONFIG_VER}\ntraditional=1\n"));
         assert!(cfg.learn);
         assert!(cfg.traditional);
+    }
+
+    /// 全新配置的默认辅助码是**小鹤音形**（双拼方案默认就是小鹤，配官方形码）。
+    ///
+    /// 老用户的 `config.ini` 里已经写着 `assist_mode=ziranma`，**不会被这条改动碰**
+    /// ——这里只改 `Config::DEFAULT`，不动迁移，选了自然码的人继续用自然码。
+    #[test]
+    fn default_assist_is_xiaohe() {
+        use crate::assist::AssistMode;
+        assert_eq!(Config::DEFAULT.assist_mode, AssistMode::Xiaohe);
+        assert_eq!(parse("").0.assist_mode, AssistMode::Xiaohe, "缺键 = 小鹤音形");
+        assert_eq!(
+            parse("assist_mode=ziranma\n").0.assist_mode,
+            AssistMode::Ziranma,
+            "显式选了自然码的不能被默认值盖掉"
+        );
     }
 
     /// 候选行数：缺省 5；手改配置写到离谱的值（0 / 99 / 乱写）要夹回 1..=9。
