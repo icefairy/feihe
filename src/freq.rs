@@ -155,12 +155,19 @@ fn parse(text: &str) -> HashMap<String, Ent> {
     // 老格式（不带码、对**所有**码生效）退休，但次数不能白丢：并进这个词已有的
     // 按码记录（取较大值）。否则「哦」攒的 8 次会在升级后归零，而它又是把 `ee`
     // 第一位的元凶——旧记录不退，按码记就等于白记。
+    //
+    // **每一条按码记录都要并**，不能只并第一条：多音字同一个词会挂在多条读音
+    // 下（`oo` 和 `ee` 都有「哦」），老次数只进其中一条、进哪条全由行序决定，
+    // 另一条白白丢份额。所以先遍历全部，再把有按码记录的词从 legacy 里剔掉。
+    let specific_words: std::collections::HashSet<&str> =
+        specific.iter().map(|(_, w)| w.as_str()).collect();
     for (key, word) in &specific {
-        if let Some(n) = legacy.remove(word) {
+        if let Some(&n) = legacy.get(word.as_str()) {
             let cur = out.get(key).map(|e| e.n).unwrap_or(0);
             out.insert(key.clone(), ent(cur.max(n)));
         }
     }
+    legacy.retain(|w, _| !specific_words.contains(w.as_str()));
     // 没有按码记录的词，老记录照旧对全部码生效——升级不能让历史学习全废
     for (word, n) in legacy {
         out.insert(word, ent(n));
@@ -217,8 +224,10 @@ fn evict(t: &mut HashMap<String, Ent>) {
 /// 次数封顶时全表减半，而不是把单条钉死在 `MAX_COUNT`。
 ///
 /// `(n + 1) / 2` 而不是 `n / 2`：1 次的词减半后还是 1，不能减成 0（那等于把它
-/// 从表里抹掉，40 次的学习量瞬间归零）。相对顺序在减半后完全保留，
-/// 所以「谁在前面」这件事不会因为一次减半而改变。
+/// 从表里抹掉，40 次的学习量瞬间归零）。
+///
+/// **相邻计数减半后可能打平**（`2,1` → `1,1`），平局时回落到语料顺序——这是整数
+/// 减半的固有性质，任何实现都一样，别指望「相对顺序完全保留」。
 fn halve(t: &mut HashMap<String, Ent>) {
     for e in t.values_mut() {
         e.n = (e.n + 1) / 2;
@@ -322,10 +331,23 @@ pub fn flush() {
     flush_inner(true)
 }
 
+/// 「清空之后还没写成功」时要继续**不合并磁盘**。
+///
+/// 场景：用户点「重置」→ `clear()` 写空表失败（`freq.txt` 被编辑器占着，
+/// rename 直接 `ERROR_ACCESS_DENIED`）→ 内存已空、磁盘还是旧内容。没有这个标志
+/// 的话，下一次 `bump` 的 `flush` 会按 `merge_disk=true` 把旧内容原样灌回空表
+/// ——「点了重置什么都没发生」，正是这个模块声称防住的症状。
+static PENDING_CLEAR: AtomicBool = AtomicBool::new(false);
+
 /// `merge_disk = false` 时**不把磁盘上的旧内容并回来**。
 ///
 /// 只有 `clear()` 需要这样：合并是「同词取大、新词插入」的语义，刚清空的表会被
 /// 磁盘上那份原样灌回来，用户点「重置」就等于没点。
+///
+/// 写盘失败时**脏标记留着**：`freq.txt` 是用户会拿编辑器开着的文件，而多数编辑器
+/// 不以 `FILE_SHARE_DELETE` 打开，rename 直接 `ERROR_ACCESS_DENIED`——失败是常态
+/// 路径。以前是先清脏标记再写，失败就把自上次成功写盘以来的学习量静默丢掉
+/// （不止文档承诺的 3 秒）。
 fn flush_inner(merge_disk: bool) {
     if !DIRTY.swap(false, Ordering::AcqRel) {
         return;
@@ -334,6 +356,8 @@ fn flush_inner(merge_disk: bool) {
     if cfg!(test) {
         return;
     }
+    // 上一次「清空」还没写成功：重试时继续不合并，否则旧内容会被灌回空表
+    let merge_disk = merge_disk && !PENDING_CLEAR.load(Ordering::Acquire);
     // **写之前先把磁盘上的并进来。** 每个宿主进程各有一份内存表，
     // 直接覆盖会让「在记事本里学的词」被「在 Word 里学的词」冲掉——
     // 表现是「我明明用了很多次的词，怎么又沉下去了」，而且完全无法复现。
@@ -362,16 +386,15 @@ fn flush_inner(merge_disk: bool) {
         }
         s
     });
-    let _ = std::fs::create_dir_all(crate::config::dir());
-    let path = file();
-    let tmp = path.with_extension("txt.tmp");
-    if std::fs::write(&tmp, text).is_ok() {
-        if std::fs::rename(&tmp, &path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
+    if crate::config::write_atomic(&file(), &text).is_err() {
+        // 写失败：标记留着，下一次 maybe_flush 自然重试。学习表是锦上添花，
+        // 不能因为它影响打字，但也不能把几年的习惯因为一次 rename 失败就丢掉。
+        DIRTY.store(true, Ordering::Release);
+        return;
     }
+    PENDING_CLEAR.store(false, Ordering::Release);
     // 记下自己刚写的 mtime，免得紧接着的 refresh() 白读一遍
-    if let Some(m) = std::fs::metadata(&path).ok().and_then(|x| x.modified().ok()) {
+    if let Some(m) = std::fs::metadata(file()).ok().and_then(|x| x.modified().ok()) {
         if let Ok(mut g) = LAST_MTIME.lock() {
             *g = Some(m);
         }
@@ -386,13 +409,32 @@ fn flush_inner(merge_disk: bool) {
 /// 只在文件 mtime 变了的时候才真读盘——`Activate` 是高频动作，
 /// 不能每次都解析一遍几千行的文本。
 pub fn refresh() {
+    let path = file();
+    // **文件不存在 = 用户要重置**（文件头和模块文档都承诺「删掉本文件即重置」）。
+    //
+    // 这个判断必须**在 `flush()` 之前**：反过来的话 flush 会把内存表写回磁盘，
+    // 文件在几秒内复活，重置被完全撤销——以前正是这么写的，删除分支永远进不去。
+    // `pin` / `phrase` 一直有这个分支，`freq` 是三者里唯一漏的。
+    //
+    // 不主动写一个空文件：删掉就是删掉，用户下次选词时自然会重建。
+    let Some(m) = std::fs::metadata(&path).ok().and_then(|x| x.modified().ok()) else {
+        let cleared = with_table(|t| {
+            let n = t.len();
+            t.clear();
+            n
+        });
+        if cleared > 0 {
+            crate::diag::log(format_args!("freq: 文件被删，重置 {cleared} 条学习记录"));
+        }
+        if let Ok(mut g) = LAST_MTIME.lock() {
+            *g = None;
+        }
+        return;
+    };
+
     // 先把自己的改动写下去（flush 内部会合并磁盘），否则下面的读盘会看不到它们
     flush();
 
-    let path = file();
-    let Some(m) = std::fs::metadata(&path).ok().and_then(|x| x.modified().ok()) else {
-        return;
-    };
     {
         let mut g = match LAST_MTIME.lock() {
             Ok(g) => g,
@@ -499,7 +541,8 @@ fn apply_order(words: &mut [std::borrow::Cow<'static, str>], order: &mut [usize]
 ///
 /// **必须绕开磁盘合并**：`flush` 默认会把磁盘内容并回内存表（那是为了多进程
 /// 不互相覆盖），但清空恰恰要反过来——不绕的话，刚清空的表立刻被旧内容灌满，
-/// 用户点「重置」什么也不会发生。
+/// 用户点「重置」什么也不会发生。写失败也不退出这个状态（`PENDING_CLEAR`），
+/// 否则下一次 `bump` 的合并会把旧内容原样搬回来。
 pub fn clear() -> usize {
     let n = with_table(|t| {
         let n = t.len();
@@ -507,6 +550,7 @@ pub fn clear() -> usize {
         n
     });
     DIRTY.store(true, Ordering::Release);
+    PENDING_CLEAR.store(true, Ordering::Release);
     flush_inner(false);
     n
 }
@@ -615,6 +659,19 @@ mod tests {
         table.insert("哦".into(), ent(8));
         let v = [Cow::Borrowed("饿"), Cow::Borrowed("哦")];
         assert_eq!(order_by(&v, &[2, 2], &table, "ee"), vec![1, 0]);
+    }
+
+    /// 老格式的次数要并进这个词的**每一条**按码记录。
+    ///
+    /// 多音字同一个词会挂在多条读音下（`oo` 和 `ee` 都有「哦」）。以前只并
+    /// 第一条——`legacy.remove` 在第二条就返回 `None`，另一条白白丢份额，
+    /// 而且拿到与否纯由文件行序决定。
+    #[test]
+    fn legacy_count_merges_into_every_code_record() {
+        let t = parse("哦\t8\noo\t哦\t3\nee\t哦\t5\n");
+        assert_eq!(t.get("oo\t哦").map(|e| e.n), Some(8), "oo 那条也要并");
+        assert_eq!(t.get("ee\t哦").map(|e| e.n), Some(8), "ee 那条也要并");
+        assert!(t.get("哦").is_none(), "有按码记录了，老记录该退休");
     }
 
     /// **码长优先于学习次数**：`ig` 的「成」(2 键) 不能被学过的「程序」(4 键) 顶掉。

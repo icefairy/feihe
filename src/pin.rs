@@ -95,13 +95,28 @@ fn with_table<R>(f: impl FnOnce(&mut Table) -> R) -> R {
 }
 
 /// 这个编码被置顶的词。没有就是 `None`。
+///
+/// **入口处统一小写化**：`parse` / `set` / `remove` 全都按小写存，查询侧不跟上的
+/// 话，哪天有个新入口把大写码传进来（比如直接拿用户输入的原始字母查），就会
+/// 静默查不中——置顶「失效」但没有任何报错。以前这个不变量靠调用链远端的
+/// `textservice` 维持，太脆。
+///
+/// 常见输入本来就是小写，所以先扫一眼，有大写才分配。
 pub fn word_for(code: &str) -> Option<Arc<str>> {
     if code.is_empty() {
         return None;
     }
     ensure_loaded();
+    // 条件生命周期的常规写法：有大写时才分配，没大写就直接用入参
+    let owned;
+    let key = if code.bytes().any(|b| b.is_ascii_uppercase()) {
+        owned = code.to_ascii_lowercase();
+        &owned
+    } else {
+        code
+    };
     let g = TABLE.read().ok()?;
-    g.as_ref()?.get(code).cloned()
+    g.as_ref()?.get(key).cloned()
 }
 
 /// 置顶：`code` 这个编码以后第一个候选固定是 `word`。已有则覆盖。
@@ -215,12 +230,10 @@ fn write_now() {
         s
     });
 
-    let _ = std::fs::create_dir_all(crate::config::dir());
+    // 走统一的原子写（临时名带进程 id，见 `config::write_atomic`）。
+    // 写失败不重试：置顶是低频事件，下一次变更会整份重写。
     let path = file();
-    let tmp = path.with_extension("txt.tmp");
-    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
+    let _ = crate::config::write_atomic(&path, &text);
     // 记下自己刚写的 mtime，免得紧接着的 refresh() 白读一遍
     if let Some(m) = std::fs::metadata(&path).ok().and_then(|x| x.modified().ok()) {
         if let Ok(mut g) = LAST_MTIME.lock() {

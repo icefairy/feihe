@@ -247,14 +247,15 @@ static POPUP_OVERRIDE: AtomicI8 = AtomicI8::new(-1);
 ///
 /// **`Auto` 只在「投影 / 演示」时收起**，不再把全屏游戏算进来。全屏游戏里收起
 /// 候选窗等于让输入法没法用：游戏是自绘 UI，不画 IME 组合串，候选写进组合串也
-/// 没人看得见。这里的取舍见 `fullscreen::Scene` 的注释。
+/// 没人看得见。这里的取舍见 `fullscreen::Scene` 的注释；「什么时候算该收」
+/// 由 `fullscreen::covers_popup` 独家判定，这里不另写一份。
 pub fn no_popup() -> bool {
     match POPUP_OVERRIDE.load(Ordering::Acquire) {
         v if v >= 0 => v == 1,
         _ => match PopupMode::from_bits(POPUP_MODE.load(Ordering::Acquire)) {
             PopupMode::Always => false,
             PopupMode::Never => true,
-            PopupMode::Auto => crate::fullscreen::scene() == crate::fullscreen::Scene::Presentation,
+            PopupMode::Auto => crate::fullscreen::covers_popup(crate::fullscreen::scene()),
         },
     }
 }
@@ -666,14 +667,67 @@ pub fn save(cfg: &Config) {
     if cfg!(test) {
         return;
     }
-    let _ = std::fs::create_dir_all(dir());
-    let text = render(cfg);
-    // 先写临时文件再改名：每个宿主进程在 Activate 时都会 load()，而 v1→v2 迁移
-    // 会在 load() 里落盘。多个进程同时写同一个文件时，直接 write 会让别的进程
-    // 读到「已截断但还没写完」的半截配置（丢设置）。改名是原子的。
-    let tmp = dir().join("config.ini.tmp");
-    if std::fs::write(&tmp, text).is_ok() {
-        let _ = std::fs::rename(&tmp, path());
+    // 写失败只能算了：设置项已经在内存里生效，磁盘那份等下一次变更再补
+    let _ = write_atomic(&path(), &render(cfg));
+}
+
+/// 数据文件的临时文件名：`原名.<进程 id>.tmp`。
+///
+/// **进程 id 不能省。** 早先是固定的 `freq.txt.tmp` 这种名字，两个宿主进程
+/// （比如 Word 和浏览器都加载了本输入法）同时写盘时，两边交叉落在同一个临时
+/// 文件上——后 rename 上去的是两份内容的混合体。用户看到的是「学习记录莫名
+/// 其妙少几条、还冒出乱码行」，而且和操作对不上，完全无法复现。
+///
+/// 代价：崩溃会留下一个 `.tmp` 垃圾（最多几百 KB，下次写别的文件不会覆盖它）。
+/// 相对写坏用户数据，这个代价可以忽略。
+pub(crate) fn tmp_path(path: &std::path::Path) -> std::path::PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "feihe".to_string());
+    path.with_file_name(format!("{name}.{}.tmp", std::process::id()))
+}
+
+/// 原子写一个文本文件：先写同目录临时文件、再 rename 覆盖。
+///
+/// 改名是原子的，所以任何进程任何时候读到的都是完整内容——直接 `write` 会让
+/// 别的进程读到「已截断但还没写完」的半截数据（`user_dict.txt` 半截 = 用户
+/// 几年的词库没了）。
+///
+/// `freq.txt` 这类文件是用户会拿编辑器开着的，而多数编辑器不以
+/// `FILE_SHARE_DELETE` 打开，rename 会直接 `ERROR_ACCESS_DENIED`——**失败是
+/// 常态路径，不是异常**，调用方必须处理（学习表的做法是留着脏标记下一轮重试）。
+pub(crate) fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = tmp_path(path);
+    std::fs::write(&tmp, text)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tmp_tests {
+    use super::*;
+
+    /// 临时文件名必须带进程 id：两个宿主进程同时写盘时，固定的 `.tmp` 名会被
+    /// 两边交叉写坏，rename 上去的是两份内容的混合体——用户看到的是「学习记录
+    /// 莫名其妙少几条、还冒出乱码行」，而且完全无法复现。
+    #[test]
+    fn tmp_path_is_per_process() {
+        let p = std::path::Path::new("C:\\Users\\x\\AppData\\Roaming\\Feihe\\freq.txt");
+        let t = tmp_path(p);
+        let name = t.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("freq.txt."), "{name}");
+        assert!(name.ends_with(".tmp"), "{name}");
+        assert!(name.contains(&std::process::id().to_string()), "{name}");
+        assert_ne!(t, p, "临时文件不能正好是目标文件");
+        // 不同进程不同名，同进程稳定
+        assert_eq!(tmp_path(p), t);
     }
 }
 

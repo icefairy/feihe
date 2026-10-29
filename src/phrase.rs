@@ -147,8 +147,15 @@ pub fn file() -> std::path::PathBuf {
 }
 
 /// 解析 `词<TAB>全拼[<TAB>次数]` 文本。抽成纯函数才能单测（真文件读写会碰 APPDATA）。
+///
+/// **同词只留一条，次数取大。** 手改文件时很容易给同一个词添一行（从别的机器
+/// 拷贝粘贴最常见），不去重的话：`learn` 的「按词找条目」映射只登记最后一个
+/// 下标、只删得掉最后一条，另一条永远留着——`len()` 虚高、每次写盘都带着它，
+/// `words_with_code` 也会返回重复词（靠 `dict.rs` 的去重兜底才没进候选）。
 fn parse(text: &str) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
+    // 词 → 在 out 里的下标。键借自 text，不额外分配。
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -173,11 +180,17 @@ fn parse(text: &str) -> Vec<Entry> {
         if shuangpin::encode_pinyin(Scheme::Xiaohe, py).is_none() {
             continue;
         }
-        out.push(Entry {
-            word: w.into(),
-            pinyin: py.into(),
-            n,
-        });
+        match seen.get(w).copied() {
+            Some(i) => out[i].n = out[i].n.max(n),
+            None => {
+                seen.insert(w, out.len());
+                out.push(Entry {
+                    word: w.into(),
+                    pinyin: py.into(),
+                    n,
+                });
+            }
+        }
     }
     out.truncate(MAX_ENTRIES);
     out
@@ -328,12 +341,10 @@ fn write_now() {
         s
     });
 
-    let _ = std::fs::create_dir_all(crate::config::dir());
+    // 走统一的原子写（临时名带进程 id，见 `config::write_atomic`）。
+    // 写失败不重试：自造词是低频事件，下一次 learn 会整份重写。
     let path = file();
-    let tmp = path.with_extension("txt.tmp");
-    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
+    let _ = crate::config::write_atomic(&path, &text);
     // 记下自己刚写的 mtime，免得紧接着的 refresh() 白读一遍
     if let Some(m) = std::fs::metadata(&path).ok().and_then(|x| x.modified().ok()) {
         if let Ok(mut g) = LAST_MTIME.lock() {
@@ -404,6 +415,17 @@ mod tests {
         assert_eq!(v[0].n, 7);
         assert_eq!(v[1].n, 1, "省略第三列 = 1 次");
         assert_eq!(v[2].n, 1, "第三列乱写也要保住这个词");
+    }
+
+    /// 同一个词在文件里出现两行（手改 / 从别的机器拷贝）必须合成一条，
+    /// 次数取大。不去重的话 `learn` 只删得掉最后一条，另一条永远赖在表里：
+    /// `len()` 虚高、`words_with_code` 返回重复词。
+    #[test]
+    fn duplicate_word_collapses_to_one_entry() {
+        let v = parse("重复\tchong fu\t3\n别的\tbie de\n重复\tchong fu\t9\n");
+        assert_eq!(v.len(), 2, "同词只留一条");
+        let r = v.iter().find(|e| e.word.as_ref() == "重复").unwrap();
+        assert_eq!(r.n, 9, "次数取大");
     }
 
     /// 同一个词再学一次要累加次数，不是纯重排——否则「用了很多次」这个信息丢了。

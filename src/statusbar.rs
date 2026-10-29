@@ -123,8 +123,25 @@ static HOVER: AtomicI32 = AtomicI32::new(-1);
 static OWNER_PID: AtomicI32 = AtomicI32::new(0);
 /// 最近一次已知的光标位置（跟随模式下用）
 static CARET: Mutex<(i32, i32)> = Mutex::new((0, 0));
-/// 拖动状态：(按下点屏幕坐标, 是否已在拖动, 窗口原位)
-static DRAG: Mutex<Option<((i32, i32), bool, (i32, i32))>> = Mutex::new(None);
+/// 拖动状态。`btn` 是**按下时**命中的按钮，抬起时要求同一个才算点击。
+///
+/// 为什么不能按抬起位置分发：四个按钮的矩形是连续的、中间没有间隙
+/// （`button_rects_are_contiguous` 钉住了这一点），而拖动阈值是 3px。在
+/// 「中/英」右缘按下、往右漂 2px 抬起，按下点还算是「中/英」，抬起点已经
+/// 落到「全/半」上——中英没切、全半角被翻了。候选窗早就要求「按下/抬起
+/// 同一项」（`candidate.rs` 的 pressed 判定），浮窗这条也一样。
+#[derive(Clone, Copy)]
+struct Drag {
+    /// 按下点的屏幕坐标
+    down: (i32, i32),
+    /// 位移是否已超过阈值（进入拖动）
+    moved: bool,
+    /// 窗口原位
+    origin: (i32, i32),
+    /// 按下时命中的按钮下标（按在按钮之间的空隙里 = None）
+    btn: Option<usize>,
+}
+static DRAG: Mutex<Option<Drag>> = Mutex::new(None);
 
 fn hwnd() -> HWND {
     let raw = WND.load(Ordering::Acquire);
@@ -167,9 +184,49 @@ unsafe fn default_pos() -> (i32, i32) {
     (rc.right - WIDTH - 24, rc.bottom - HEIGHT - 24)
 }
 
+/// 矩形落在哪块显示器上，返回那块的工作区。拿不到返回 `None`。
+unsafe fn monitor_work(rc: &RECT) -> Option<RECT> {
+    let hmon = MonitorFromRect(rc, MONITOR_DEFAULTTONEAREST);
+    if hmon.0.is_null() {
+        return None;
+    }
+    let mut mi = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    GetMonitorInfoW(hmon, &mut mi).as_bool().then_some(mi.rcWork)
+}
+
+/// 把 `(x, y)` 处一个 `w × h` 的窗口夹进**它所在的那块显示器**的工作区。
+///
+/// 为什么不能用 `SM_CXSCREEN/SM_CYSCREEN`：那是**主屏**尺寸。副屏上的窗口
+/// （主屏右侧的副屏坐标 > 主屏宽；主屏左侧的副屏坐标是负的）会被生生钳回
+/// 主屏——把浮窗拖到副屏，之后任何一次设置变更（`settings` 末尾无条件调
+/// `statusbar::refresh()`）都让它跳回主屏；跟随模式下在副屏打字，浮窗离光标
+/// 半个屏；主屏左侧的副屏更糟，坐标被钳到 0，直接消失。
+///
+/// 拿不到显示器信息才退回主屏尺寸——那条老路只在极端失败下走到。
+unsafe fn clamp_to_monitor(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+    let rc = RECT {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+    };
+    let work = monitor_work(&rc).unwrap_or(RECT {
+        left: 0,
+        top: 0,
+        right: GetSystemMetrics(SM_CXSCREEN),
+        bottom: GetSystemMetrics(SM_CYSCREEN),
+    });
+    let x = x.clamp(work.left, (work.right - w).max(work.left));
+    let y = y.clamp(work.top, (work.bottom - h).max(work.top));
+    (x, y)
+}
+
 /// 把窗口摆到应该待的位置
 unsafe fn place(hwnd: HWND, follow_caret: bool) {
-    let (mut x, mut y) = if follow_caret {
+    let (x, y) = if follow_caret {
         let (cx, cy) = *CARET.lock().unwrap();
         if cx == 0 && cy == 0 {
             default_pos()
@@ -184,11 +241,8 @@ unsafe fn place(hwnd: HWND, follow_caret: bool) {
             (cfg.bar_x, cfg.bar_y)
         }
     };
-    // 夹在屏幕内，避免改分辨率后跑到看不见的地方
-    let sw = GetSystemMetrics(SM_CXSCREEN);
-    let sh = GetSystemMetrics(SM_CYSCREEN);
-    x = x.clamp(0, (sw - WIDTH).max(0));
-    y = y.clamp(0, (sh - HEIGHT).max(0));
+    // 夹在屏幕内，避免改分辨率后跑到看不见的地方（按所在显示器夹，见函数注释）
+    let (x, y) = clamp_to_monitor(x, y, WIDTH, HEIGHT);
     let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, WIDTH, HEIGHT, SWP_NOACTIVATE);
 }
 
@@ -537,15 +591,21 @@ unsafe fn tip_show(owner: HWND, idx: usize) {
 
     let mut o = RECT::default();
     let _ = GetWindowRect(owner, &mut o);
-    let sw = GetSystemMetrics(SM_CXSCREEN);
-    let sh = GetSystemMetrics(SM_CYSCREEN);
-    // 默认贴在浮窗下面，与按钮左边缘对齐；底部放不下就翻到上面
+    // 默认贴在浮窗下面，与按钮左边缘对齐；底部放不下就翻到上面。
+    // 上下沿都按**浮窗所在显示器**的工作区算（拿不到才退主屏）：副屏在主屏
+    // 下方时，用主屏底部沿判断会认为「还放得下」，气泡直接跑到屏幕外。
+    let work = monitor_work(&o).unwrap_or(RECT {
+        left: 0,
+        top: 0,
+        right: GetSystemMetrics(SM_CXSCREEN),
+        bottom: GetSystemMetrics(SM_CYSCREEN),
+    });
     let mut x = o.left + rect.left;
     let mut y = o.bottom + TIP_GAP;
-    if y + th > sh {
-        y = (o.top - th - TIP_GAP).max(0);
+    if y + th > work.bottom {
+        y = (o.top - th - TIP_GAP).max(work.top);
     }
-    x = x.clamp(0, (sw - tw).max(0));
+    x = x.clamp(work.left, (work.right - tw).max(work.left));
 
     let _ = SetWindowPos(
         tip,
@@ -595,7 +655,7 @@ unsafe fn tip_follow_mouse(h: HWND) {
     let dragging = DRAG
         .lock()
         .ok()
-        .and_then(|g| g.map(|s| s.1))
+        .and_then(|g| g.map(|s| s.moved))
         .unwrap_or(false);
     let idx = if dragging { None } else { hit(cr.x, cr.y) };
 
@@ -621,7 +681,18 @@ fn hit(x: i32, y: i32) -> Option<usize> {
         .position(|(_, r)| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
 }
 
+/// 抬起时算不算「点了某个按钮」：**按下和抬起必须命中同一个**。
+///
+/// 抽成纯函数是为了单测——真正的判定在窗口过程里，那边构造不出鼠标事件。
+fn click_idx(down: Option<usize>, up: Option<usize>) -> Option<usize> {
+    down.filter(|&b| Some(b) == up)
+}
+
 unsafe fn on_click(idx: usize) {
+    // 气泡先收。**不能等鼠标移开**：点「设置」会弹出模态设置窗并抢前台，
+    // 而光标通常还停在按钮上，`tip_show` 的幂等早退会让气泡一直浮在设置窗
+    // 上面；点「符号」弹出的软键盘正好开在气泡所在的位置，会压在键盘上沿。
+    tip_hide();
     match LAYOUT[idx].0 {
         Btn::Mode => {
             let next = !insert::chinese();
@@ -660,8 +731,16 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             let _ = GetCursorPos(&mut pt);
             let mut wr = RECT::default();
             let _ = GetWindowRect(h, &mut wr);
+            // 按下时命中的按钮记下来，抬起时必须是同一个才算点击（见 `Drag`）
+            let mut cr = POINT { x: pt.x, y: pt.y };
+            let _ = ScreenToClient(h, &mut cr);
             if let Ok(mut g) = DRAG.lock() {
-                *g = Some(((pt.x, pt.y), false, (wr.left, wr.top)));
+                *g = Some(Drag {
+                    down: (pt.x, pt.y),
+                    moved: false,
+                    origin: (wr.left, wr.top),
+                    btn: hit(cr.x, cr.y),
+                });
             }
             SetCapture(h);
             LRESULT(0)
@@ -671,21 +750,21 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             let _ = GetCursorPos(&mut pt);
             let mut dragging = false;
             if let Ok(mut g) = DRAG.lock() {
-                if let Some((down, moved, origin)) = *g {
-                    let dx = pt.x - down.0;
-                    let dy = pt.y - down.1;
-                    if !moved && (dx.abs() > 3 || dy.abs() > 3) {
+                if let Some(d) = *g {
+                    let dx = pt.x - d.down.0;
+                    let dy = pt.y - d.down.1;
+                    if !d.moved && (dx.abs() > 3 || dy.abs() > 3) {
                         if let Some(slot) = g.as_mut() {
-                            slot.1 = true;
+                            slot.moved = true;
                         }
                     }
-                    dragging = g.map(|s| s.1).unwrap_or(false);
+                    dragging = g.map(|s| s.moved).unwrap_or(false);
                     if dragging {
                         let _ = SetWindowPos(
                             h,
                             Some(HWND_TOPMOST),
-                            origin.0 + dx,
-                            origin.1 + dy,
+                            d.origin.0 + dx,
+                            d.origin.1 + dy,
                             0,
                             0,
                             SWP_NOSIZE | SWP_NOACTIVATE,
@@ -707,10 +786,15 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_LBUTTONUP => {
             let mut pt = POINT::default();
             let _ = GetCursorPos(&mut pt);
-            let _ = ReleaseCapture();
+            // **先取状态，再 ReleaseCapture。** 顺序不能反：`ReleaseCapture()`
+            // 会**同步**给本窗口发一条 `WM_CAPTURECHANGED`，而那个分支要把
+            // `DRAG` 清掉（那是给「捕获被别的窗口抢走」用的）。先释放就会把
+            // 这次点击自己抹掉——表现为「点按钮完全没反应」，且不报任何错。
+            // 候选窗早在 WM_LBUTTONUP 的注释里记着这个坑。
             let state = DRAG.lock().ok().and_then(|mut g| g.take());
+            let _ = ReleaseCapture();
             match state {
-                Some((_, true, _)) => {
+                Some(d) if d.moved => {
                     // 拖动结束：记住位置（跟随模式下不记，位置由光标决定）
                     if !config::get().bar_follow {
                         let mut wr = RECT::default();
@@ -721,10 +805,13 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         });
                     }
                 }
-                Some((_, false, _)) => {
+                Some(d) => {
+                    // 点击：**按下和抬起必须是同一个按钮**（见 `Drag` 的注释）。
+                    // 按钮矩形零间隙 + 3px 拖动阈值，按抬起位置分发会让 2px 的
+                    // 手抖变成「点了隔壁按钮」。
                     let mut cr = POINT { x: pt.x, y: pt.y };
                     let _ = ScreenToClient(h, &mut cr);
-                    if let Some(idx) = hit(cr.x, cr.y) {
+                    if let Some(idx) = click_idx(d.btn, hit(cr.x, cr.y)) {
                         on_click(idx);
                     }
                 }
@@ -744,14 +831,28 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             };
             let shown = VISIBLE.load(Ordering::Acquire);
             if mine && !shown {
-                let _ = ShowWindow(h, SW_SHOWNA);
-                let _ = InvalidateRect(Some(h), None, true);
-                VISIBLE.store(true, Ordering::Release);
+                // **必须走 `show()`，不能直接 `ShowWindow`。** 直接弹会绕过
+                // `no_popup` 和全屏两道闸：全屏游戏里 `show()` 刚按场景把自己
+                // 收起，300ms 后定时器又把它放出来，于是一直挂在游戏画面上；
+                // 用户在设置里选了「一律不弹」也会被定时器悄悄撤销。
+                // `show()` 幂等且含全部闸门（该收起时它自己会 `hide()`），
+                // 顺带让定时器成为场景变化的重新评估点。
+                show();
             } else if !mine && shown {
                 let _ = ShowWindow(h, SW_HIDE);
                 VISIBLE.store(false, Ordering::Release);
             }
             tip_follow_mouse(h);
+            LRESULT(0)
+        }
+        // 拖动中丢了鼠标捕获（本线程弹模态框、别的窗口 `SetCapture`），
+        // `WM_LBUTTONUP` 就不会再来。不清的话 `DRAG` 停在「已在拖动」，
+        // 之后鼠标划过窗口就拖着它走——用户没按任何键，浮窗跟着跑。
+        // 候选窗对同样的场景有对应处理（清 `pressed`）。
+        WM_CAPTURECHANGED | WM_CANCELMODE => {
+            if let Ok(mut g) = DRAG.lock() {
+                *g = None;
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(h, msg, w, l),
@@ -772,6 +873,27 @@ mod tests {
             tip_for(Btn::Mode).contains("Shift"),
             "中/英的提示里必须写 Shift"
         );
+    }
+
+    /// **按下和抬起必须命中同一个按钮**，否则不算点击。
+    ///
+    /// 现场：按钮矩形零间隙（有用例钉住），拖动阈值 3px。在「中/英」右缘
+    /// 按下、向右抖 2px 抬起，按抬起位置分发会命中「全/半」——中英没切、
+    /// 全半角被翻了。抬起点和按下点不一致时正确的行为是「什么都没发生」。
+    #[test]
+    fn click_needs_the_same_button_on_press_and_release() {
+        assert_eq!(click_idx(Some(0), Some(0)), Some(0));
+        assert_eq!(click_idx(Some(1), Some(1)), Some(1));
+        assert_eq!(
+            click_idx(Some(0), Some(1)),
+            None,
+            "按下「中/英」、抬起「全/半」不许触发"
+        );
+        assert_eq!(click_idx(Some(1), Some(0)), None);
+        // 按在按钮之间的空隙里（None）不该激活任何按钮
+        assert_eq!(click_idx(None, Some(0)), None);
+        assert_eq!(click_idx(Some(0), None), None);
+        assert_eq!(click_idx(None, None), None);
     }
 
     /// 全角 / 半角**不能**再挂快捷键。`Ctrl+Shift+F` 曾经存在过一版，撤掉是因为

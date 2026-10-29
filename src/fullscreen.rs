@@ -99,7 +99,11 @@ fn scene_of(state: i32) -> Scene {
 /// 这个场景要不要把**候选窗**收起来（只有演示模式才收）。
 ///
 /// 见 `Scene` 的注释：全屏游戏里收起候选窗等于让输入法没法用。
-fn covers_popup(scene: Scene) -> bool {
+///
+/// `config::no_popup()` 的 Auto 档走的是这个函数——「什么时候该收候选窗」
+/// 只能有一个出处，否则两边迟早漂移（症状是设置里写「演示时收起」、
+/// 实际游戏里也收）。
+pub(crate) fn covers_popup(scene: Scene) -> bool {
     scene == Scene::Presentation
 }
 

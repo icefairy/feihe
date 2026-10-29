@@ -281,8 +281,10 @@ pub fn compile_user_bin() -> Result<CompileOutcome, String> {
 
     std::fs::create_dir_all(config::dir()).map_err(|e| format!("建目录失败：{e}"))?;
     let path = user_bin_file();
-    let tmp = path.with_extension("bin.tmp");
-    std::fs::write(&tmp, &built.bytes).map_err(|e| format!("写 user.bin.tmp 失败：{e}"))?;
+    // 临时名带进程 id：两个宿主进程同时编译时，固定的 `user.bin.tmp` 会被
+    // 两边交叉写坏，rename 上去的是混合体（见 `config::tmp_path`）。
+    let tmp = config::tmp_path(&path);
+    std::fs::write(&tmp, &built.bytes).map_err(|e| format!("写 user.bin 临时文件失败：{e}"))?;
     std::fs::rename(&tmp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("替换 user.bin 失败（可能被别的进程占用）：{e}")
@@ -1135,8 +1137,8 @@ pub fn merge_text(text: &str) -> Result<(usize, Option<(usize, usize)>), String>
             all.push('\n');
         }
         all.push_str(&appended);
-        let _ = std::fs::create_dir_all(config::dir());
-        std::fs::write(user_file(), all).map_err(|e| format!("写入失败：{e}"))?;
+        // 原子写：直接 `write` 会在崩溃/断电时留下半截文件，而这是用户几年的词库
+        config::write_atomic(&user_file(), &all).map_err(|e| format!("写入失败：{e}"))?;
 
         // 导入完立刻编译成 user.bin，让用户词库走 mmap 而不是每进程解析一遍。
         // 编译失败不算导入失败——txt 已经写好了，退回覆盖层照样能用，只是慢一点。

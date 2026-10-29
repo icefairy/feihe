@@ -10,6 +10,8 @@
 //! 占浮窗宽度不值得。浮窗只留随时要按的开关。
 
 use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
@@ -44,6 +46,11 @@ const CLIENT_H: i32 = 900;
 /// 写在代码里而不是读某个配置：地址是产品身份的一部分，改了要发版，不该被用户
 /// 或者一次失败的写盘悄悄改掉。
 const ABOUT_URL: &str = "https://github.com/icefairy/feihe";
+
+/// 上一次「从搜狗导入」的时间，配合 `IMPORT_DEBOUNCE` 给按钮双击去抖。
+static LAST_IMPORT: Mutex<Option<Instant>> = Mutex::new(None);
+/// 去抖窗口。导入一次几百毫秒，正常人不会在这个间隔内再点一次。
+const IMPORT_DEBOUNCE: Duration = Duration::from_secs(5);
 
 // 控件 ID
 const ID_MODE_DS: i32 = 161;
@@ -457,15 +464,20 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_LEARN_RESET => {
             let n = crate::freq::clear();
             let m = crate::phrase::clear();
+            // 必须 return：函数尾部有个 `sync(h)`，会把这两行重写成统计文案
+            // （「已记 0 个词频」），确认消息在同一次 WM_COMMAND 里被覆盖掉，
+            // 用户永远看不到「已清空」。
             set_text(
                 h,
                 ID_LEARN_HINT,
                 &format!("已清空 {n} 条词频、{m} 个自造词"),
             );
+            return;
         }
         ID_PIN_RESET => {
             let n = crate::pin::clear();
             set_text(h, ID_PIN_HINT, &format!("已取消 {n} 个编码的置顶"));
+            return;
         }
         ID_IMPORT => {
             if let Some(path) = pick_file(h, false) {
@@ -488,6 +500,20 @@ unsafe fn on_command(h: HWND, id: i32) {
             }
         }
         ID_SOGOU => {
+            // 双击去抖。按钮双击会连来两条 `WM_COMMAND`（双击 = 两次
+            // BN_CLICKED），而导入是在窗口过程里**同步**跑的，两条都会完整执行
+            // 一遍：界面冻结两次，第二条必然报「没有新词——都已经在个人词库里
+            // 了」，用户以为功能坏了。导入期间禁用按钮挡不住已经排队的消息
+            // （那会儿窗口过程还压在导入里，根本来不及禁用），只能按时间去抖。
+            {
+                let mut g = LAST_IMPORT.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(t) = *g {
+                    if t.elapsed() < IMPORT_DEBOUNCE {
+                        return;
+                    }
+                }
+                *g = Some(Instant::now());
+            }
             // 解析几个 MB 的 bin + 编译 user.bin 大概几百毫秒，同步做就行。
             // 但必须换沙漏光标：不然用户会以为按钮没反应，连点好几下。
             let r = with_wait_cursor(|| crate::sogou::import_auto(crate::sogou::MAX_LEN));
@@ -578,17 +604,21 @@ unsafe fn open_about() {
 }
 
 /// 一句人话把导入结果说完。用户只关心「多了多少词」，其余是排查用的。
+///
+/// **文案必须短**：`ID_NOTE` 那条静态标签只有 428px，13px 字体下一行约 32 个
+/// 全角字，超长的部分直接被裁掉——用户看到的是半句话。数字和汉字之间不加空格
+/// 也是为这个；更细的数字（扫了多少条、多少走基础词库、多少逐字注音）都在
+/// `feihe.log` 里。
 fn sogou_summary(s: &crate::sogou::Imported) -> String {
     if s.added == 0 {
         return format!(
-            "搜狗词库已解析 {} 个文件（{} 条可注音），但没有新词——都已经在个人词库里了。",
+            "已解析{}个文件（{}条），没有新词——都已在词库里。",
             s.files, s.encoded
         );
     }
     format!(
-        "已从搜狗导入 {} 个新词（{} 个文件 / {} 条可注音，跳过 {} 条注不出音）。\
-         其它程序切换一次输入法后生效。",
-        s.added, s.files, s.encoded, s.skipped
+        "已导入{}个新词（{}个文件，跳过{}条）。切换输入法后生效。",
+        s.added, s.files, s.skipped
     )
 }
 
@@ -880,8 +910,14 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_COMMAND => {
             let id = (w.0 & 0xFFFF) as i32;
             let code = ((w.0 >> 16) & 0xFFFF) as u32;
-            // 只处理点击（普通控件）和下拉框的「换了一项」；忽略其它通知噪音
-            if code == 0 || code == CBN_SELCHANGE {
+            // 只处理点击（普通控件）和**下拉框**的「换了一项」；忽略其它通知噪音。
+            //
+            // `CBN_SELCHANGE` 必须按 id 收窄到下拉框：它的值是 1，而
+            // `STN_DBLCLK` 也是 1。下面那条「GitHub」链接是带 `SS_NOTIFY` 的
+            // 静态控件，双击时会依次发来两条 `STN_CLICKED`(0) 和一条
+            // `STN_DBLCLK`(1)——不按 id 区分的话三条全都会进 `on_command`，
+            // 双击一下打开三个浏览器标签页。
+            if code == 0 || (id == ID_ROWS && code == CBN_SELCHANGE) {
                 on_command(h, id);
             }
             LRESULT(0)
@@ -1014,7 +1050,10 @@ pub fn open() {
     let existing = hwnd();
     if !existing.is_invalid() {
         unsafe {
-            let _ = ShowWindow(existing, SW_SHOW);
+            // `SW_RESTORE` 而不是 `SW_SHOW`：后者对已最小化的窗口无效
+            // （按「当前大小和位置」显示，最小化的还是最小化），用户看到的是
+            // 「点了设置按钮，只有任务栏闪一下」。
+            let _ = ShowWindow(existing, SW_RESTORE);
             let _ = SetForegroundWindow(existing);
             sync(existing);
         }
