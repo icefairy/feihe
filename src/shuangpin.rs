@@ -188,7 +188,12 @@ fn encode_chars(scheme: Scheme, syl: &str) -> Option<(char, char)> {
             // `annq`，所有零声母词都错位——这是用户按官方反查工具报上来的。
             Scheme::Xiaohe => {
                 let first = b[0] as char;
-                if !matches!(first, 'a' | 'e' | 'o') {
+                // 零声母只存在这 12 个韵母（啊 哦 额 爱 诶 熬 欧 安 恩 昂 鞥 儿）。
+                // 光看「首字母是 a/e/o」不够：`ong` 也满足，但它不是独立音节
+                // （总是跟声母走：d-ong、zh-ong），放进来会让全拼分词多出假边界。
+                const ZERO_INITIAL: [&str; 12] =
+                    ["a", "o", "e", "ai", "ei", "ao", "ou", "an", "en", "ang", "eng", "er"];
+                if !ZERO_INITIAL.contains(&fin) {
                     return None;
                 }
                 if fin.len() == 2 {
@@ -379,6 +384,18 @@ mod tests {
         assert!(encode_syllable(Scheme::Xiaohe, "ng").is_none());
         assert!(encode_syllable(Scheme::Xiaohe, "hm").is_none());
         assert!(encode_syllable(Scheme::Xiaohe, "").is_none());
+    }
+
+    /// 零声母只有 12 个韵母。`ong` 看着像「o 开头」，其实不是独立音节
+    /// （只有 dong/zhong/cong…），当成音节会让全拼分词切出假边界。
+    #[test]
+    fn ong_is_not_a_standalone_syllable() {
+        assert!(is_syllable("o"));
+        assert!(is_syllable("ou"));
+        assert!(is_syllable("er"));
+        assert!(!is_syllable("ong"), "ong 不是独立音节");
+        assert!(!is_syllable("ia"));
+        assert!(!is_syllable("uang"));
     }
 
     #[test]

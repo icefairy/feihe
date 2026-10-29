@@ -486,17 +486,31 @@ fn search(
     // `oo` 里选过的「哦」跑到 `ee` 的第一位，顶掉饿 / 呃 / 额。
     crate::freq::rank(&mut out, &lens, prefix);
 
-    // 完整辅助码：形码打满（自然码 1 键 / 小鹤 2 键）时，首字形码与输入**完全相等**
-    // 的单字就是用户要的那个字（`jm` + `vo` → 简），提到最前。
+    // 查询只覆盖一个音节？
+    //
+    // 双拼每个音节恰好两键，所以「两个字符」就是「一个音节」；全拼长度不定，
+    // 复用 `is_syllable`（和智能分隔用的是同一个判定，不会出现两套标准）。
+    let one_syllable = if pinyin {
+        crate::shuangpin::is_syllable(prefix)
+    } else {
+        prefix.chars().count() == 2
+    };
+
+    // 完整辅助码：形码打满（自然码 1 键 / 小鹤 2 键）且**查询只覆盖一个音节**时，
+    // 首字形码与输入**完全相等**的单字就是用户要的那个字（`jm` + `vo` → 简），
+    // 提到最前。
     //
     // 为什么必须做：筛选只按「首字形码是输入的前缀」算，单字和词组一视同仁，
     // 排序只看词频——「简单」比「简」常用，形码打满后第一候选还是「简单」，
     // 用户要的精确单字沉在后面，3 键直出 + 完整形码等于白打。形码打满意味着
     // 用户已经把首字「指定到字」了，此时精确命中的单字理应赢过仅前缀命中的词组。
     //
-    // 只在打满时做：形码没打满时还是前缀筛选语义（`v` 该出所有 v 部首的字），
-    // 不能提前抢排序。置顶仍然在最后执行，用户显式钉的词照赢。
-    promote_exact_shape(&mut out, assist_prefix, mode);
+    // 为什么还要「一个音节」这个前提：自然码的辅助码只有 1 键，`max_keys()` 就是 1，
+    // 于是**敲第一个辅助码字母就算打满**。而两字词也支持按首字筛辅助码
+    // （`nihc` + `r` 找「你好」），不设这道闸的话，你（部首 亻）会被提到
+    // 「你好」前面——用户明明打了两个音节，出来的却是单字。
+    // 单音节查询才是「我在指定这个字」，多音节查询是「我在筛这个词」。
+    promote_exact_shape(&mut out, assist_prefix, mode, one_syllable);
 
     // 二简词：两键出一个常用两字词（`nd` 难道、`sy` 所以）。小鹤官方「二简」，
     // 见 `brief2`。
@@ -558,8 +572,15 @@ fn search(
 /// 其余候选原顺序跟在后面。只重排、不插入：形码相等的字不在候选里就说明它
 /// 被读音前缀筛掉了，硬塞进来反而是错字。
 /// 抽成独立函数是为了单测（`search` 依赖 mmap 的词库，测试进程构造不自由）。
-fn promote_exact_shape(out: &mut Vec<Cow<'static, str>>, assist_prefix: &str, mode: AssistMode) {
-    if mode == AssistMode::Off || assist_prefix.is_empty() {
+///
+/// `one_syllable` 见调用点的注释：多音节查询是「筛词」，不该把首字提到词前面。
+fn promote_exact_shape(
+    out: &mut Vec<Cow<'static, str>>,
+    assist_prefix: &str,
+    mode: AssistMode,
+    one_syllable: bool,
+) {
+    if mode == AssistMode::Off || assist_prefix.is_empty() || !one_syllable {
         return;
     }
     // 没打满 = 还是前缀筛选语义，不动排序
@@ -1921,7 +1942,7 @@ pub(crate) mod tests {
             Cow::Borrowed("简"),
             Cow::Borrowed("单"),
         ];
-        promote_exact_shape(&mut out, "vo", AssistMode::Xiaohe);
+        promote_exact_shape(&mut out, "vo", AssistMode::Xiaohe, true);
         assert_eq!(
             out.iter().map(|w| w.as_ref()).collect::<Vec<_>>(),
             vec!["简", "简单", "单"],
@@ -1930,17 +1951,23 @@ pub(crate) mod tests {
 
         // 形码没打满 = 前缀筛选语义，不动排序
         let mut out = vec![Cow::Borrowed("简单"), Cow::Borrowed("简")];
-        promote_exact_shape(&mut out, "v", AssistMode::Xiaohe);
+        promote_exact_shape(&mut out, "v", AssistMode::Xiaohe, true);
         assert_eq!(out[0], "简单");
 
         // 多字词的首字即使精确命中也不提（用户打满形码要的是字不是词）
         let mut out = vec![Cow::Borrowed("简报"), Cow::Borrowed("件")];
-        promote_exact_shape(&mut out, "vo", AssistMode::Xiaohe);
+        promote_exact_shape(&mut out, "vo", AssistMode::Xiaohe, true);
         assert_eq!(out.iter().any(|w| w.as_ref() == "简"), false);
 
         // 自然码 1 键打满同理：部首码相等的单字置顶（的→白→b）
         let mut out = vec![Cow::Borrowed("地方"), Cow::Borrowed("的")];
-        promote_exact_shape(&mut out, "b", AssistMode::Ziranma);
+        promote_exact_shape(&mut out, "b", AssistMode::Ziranma, true);
         assert_eq!(out[0], "的");
+
+        // 但**两个音节**的查询是「筛词」：自然码只有 1 键，敲第一个字母就算打满，
+        // 不设闸的话 `nihc` + `r` 会把单字「你」顶到「你好」前面。
+        let mut out = vec![Cow::Borrowed("你好"), Cow::Borrowed("你们"), Cow::Borrowed("你")];
+        promote_exact_shape(&mut out, "b", AssistMode::Ziranma, false);
+        assert_eq!(out[0], "你好", "多音节查询不该把首字提到词前面");
     }
 }

@@ -3,6 +3,13 @@
 //! 数据由 `tools/gen_assist.py` 生成，来源 Unihan（部首）+ 小鹤官方字码：
 //!
 //! - **自然码辅助码**：取部首的拼音首字母，1 键。例如 的→白→`b`、想→心→`x`
+//!
+//!   注意这是自然码辅助码的**简版**，不是官方那套 26 键部件表（`tools/gen_assist.py`
+//!   直接拿 Unihan 康熙部首的拼音首字母，没有部件表、也没有独体字的 a/d/p 笔画码）。
+//!   两边差得不小：官方 `日/月/曰/目`→`o`、`扌`→`f`、`车/虫/臣/辰`→`i`（ch 的双拼
+//!   键）、`竹/隹/舟`→`v`（zh 键）、`山/石/十/食`→`u`（sh 键）。简版胜在不用背表，
+//!   代价是照官方自然码练出来的肌肉记忆对不上（`打` 这里 `s`、官方 `f`）。
+//!   README 和 `docs/使用帮助.md` 都把这条写明了，改之前先想清楚要哪一边。
 //! - **小鹤音形**：取首部件 + 末部件，各按声母定键，2 键。例如 带→`fj`（带上、巾）、
 //!   打→`fd`（扌、丁）。**这一列必须是官方码**，见下。
 //!
@@ -141,6 +148,18 @@ mod tests {
         assert_eq!(code_of('的', AssistMode::Ziranma), Some("b"));
         assert_eq!(code_of('想', AssistMode::Ziranma), Some("x"));
         assert_eq!(code_of('你', AssistMode::Ziranma), Some("r"));
+    }
+
+    /// 自然码这一列是「部首拼音首字母」的**简版**，不是官方 26 键部件表。
+    ///
+    /// 这条钉住的是「已知差异」，不是「正确值」：官方把 `日` 归 `o`（圆圆的 o）、
+    /// `扌` 归 `f`（扶手）。哪天要换成官方表，得连这条测试和 README / 使用帮助
+    /// 一起改，别悄悄换掉让老用户的肌肉记忆失效。
+    #[test]
+    fn ziranma_column_is_the_radical_initial_variant() {
+        assert_eq!(code_of('日', AssistMode::Ziranma), Some("r"), "官方是 o");
+        assert_eq!(code_of('打', AssistMode::Ziranma), Some("s"), "官方是 f");
+        assert_eq!(code_of('车', AssistMode::Ziranma), Some("c"), "官方是 i");
     }
 
     #[test]
