@@ -3622,6 +3622,47 @@ mod tests {
         );
     }
 
+    /// 真表回归：`vhmu`（账目）这条链路上 3 键直出必须**先拆、第 4 键再并回**。
+    ///
+    /// 用户报「输入 `vhmu` 打不出账目，中间自动多个空格，进不了组词」：第 3 键
+    /// `vhm` 被拆成 `vh` + `m`（`vh`+`m` 筛出的第一名正好是单字「张」，判定拆得
+    /// 对），第 4 键 `u` 之后 `vh`+`mu` **仍然**筛得出「张」——「筛空才并回」永远
+    /// 不触发，用户就被锁在辅助码态：候选只剩「张/樟/樟脑」，分词也进不去。
+    /// 第 4 键把一个两音节词补完整了，用户要的显然是词，不是继续筛选。
+    #[test]
+    fn vhmu_folds_back_and_finds_the_word() {
+        let _g = dict::tests::SCHEME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        dict::set_scheme(Scheme::Xiaohe);
+        let mode = AssistMode::Xiaohe;
+
+        let split = FeiheTextService::auto_assist_split("vhm", mode.max_keys(), |p, a| {
+            FeiheTextService::assist_hit_single(p, a, mode)
+        });
+        assert_eq!(
+            split,
+            Some(("vh".into(), "m".into())),
+            "`vh`+`m` 筛得出单字「张」，第 3 键会被自动拆开"
+        );
+
+        let (head, mut assist) = split.unwrap();
+        assist.push('u');
+        let hit = dict::any_filtered(&head, &assist, mode);
+        let merged = dict::lookup("vhmu", 5);
+        assert!(!merged.is_empty(), "整串 `vhmu` 必须有词，否则并回去也没用");
+        assert!(
+            FeiheTextService::assist_should_fold_back(
+                true,
+                &head,
+                &assist,
+                hit,
+                !merged.is_empty()
+            ),
+            "第 4 键补完整两音节后必须并回（hit={hit}）"
+        );
+    }
+
     /// 并回的各道门槛（纯逻辑）。
     #[test]
     fn fold_back_needs_auto_and_an_empty_filter() {

@@ -2593,3 +2593,41 @@ dict 层。
 220 项单测（两种词库配置都绿）；新增 `learned_candidate_beats_auto_phrase`
 （词面从词库自己取，不写死）和 `auto_phrase_still_listed_after_ranking`。
 版本仍 0.3.8；DLL 3816/3860 KB；安装包 1.68 MB。
+
+## 2026-10-29「vhmu 打不出账目，中间多个空格」：装的是旧 DLL，3 键直出老 bug 复发
+
+用户报：`vhmu` 打「帐目」打不出来，输入过程中 `vh` 和 `mu` 之间冒出空格，像被切割，
+也进不了组词。
+
+### 现场
+
+安装目录 `C:/soft/Feihe/feihe.dll` 时间戳 **10-28 19:11**，而当前源码构建是 10-29 10:29；
+用户 `config.ini` 还是 `config_ver=9`（现在是 10）。**跑的是旧 DLL。**
+
+旧 DLL 的 `undo_auto_assist` 只有「筛空才并回」这一条：
+
+1. 第 3 键 `vhm` → `auto_assist_split` 剥出 `vh`+`m`。`assist_hit_single("vh","m")`
+   的第一名是单字「张」→ 判定拆得对，组合串变成 `vh m`（**那个空格**）；
+2. 第 4 键 `u` → `vh`+`mu` 的第一名**还是**「张」（实测 `lookup_filtered("vh","mu")`
+   = `[张, 樟, 樟脑]`）→ 筛选没空，「筛空才并回」永远不触发；
+3. 于是用户被锁在辅助码态：候选只有「张/樟/樟脑」，`assist_active` 为真时
+   `try_segment` 直接返回 false —— **分词也进不去**，正好对上「无法进入组词」。
+
+当前代码里 `assist_should_fold_back` 是 `!hit || merged_hit`，`merged_hit`（整串
+`vhmu` 在词库里查得到）是充分条件之一，第 4 键会并回。实测 `lookup("vhmu")` =
+`["账目", "丈母娘"]`。
+
+### 本轮只加回归测试
+
+`vhmu_folds_back_and_finds_the_word`（真表）：断言第 3 键确实拆成 `vh`+`m`、
+第 4 键 `mu` 之后 `assist_should_fold_back` 必须为真。纯逻辑测试
+`two_syllable_word_folds_back_even_when_filter_still_hits` 已经覆盖规则本身，
+这条额外把「词库里真有 `vhmu` 这个词」也钉住——否则规则对但索引查不到，一样白搭。
+
+验证清单加 M3.41（266–268），**第 268 条是反证**：敲完 4 键还停在 `vh mu` 就是旧 DLL。
+221 项单测；版本 0.3.9。
+
+### 顺带一个词库事实
+
+词库里只有 **「账目」**（`dict.txt:20472`），没有「帐目」。「帐」单字在 `vh` 候选第 3 位。
+想要「帐目」这个写法只能分词造词：`vhmu` → `←` → 首字换成「帐」→ 空格逐段确认。
