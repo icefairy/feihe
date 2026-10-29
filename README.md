@@ -2,7 +2,7 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.3.8** ｜ 安装包 1.67 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
+**当前版本 0.3.9** ｜ 安装包 1.67 MB ｜ 装完约 6.5 MB ｜ 单字 8006 ｜ 词条 46493 ｜
 不联网、不弹窗、无账号、密码框不接管 ｜ 220 项单元测试 ｜ 安装需要管理员（注册写 HKLM）
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
@@ -776,7 +776,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.8.exe
+# 产物：dist\Feihe-Setup-0.3.9.exe
 ```
 
 **为什么必须提权**：输入法的 COM / TSF 注册要写
@@ -839,7 +839,7 @@ HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Fe
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.8.exe
+# 产物：dist\Feihe-Setup-0.3.9.exe
 ```
 
 `build_setup.ps1` 做四件事：
