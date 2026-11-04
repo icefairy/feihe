@@ -67,7 +67,9 @@ impl Rules {
         in_ing: false,
     };
 
-    /// 全开：测试和「一键全开」用。
+    /// 全开：只有测试用（设置窗是一个一个勾，没有「一键全开」这个按钮）。
+    /// 标 `cfg(test)` 是因为发布构建里它一条都进不去——留着会报 dead_code。
+    #[cfg(test)]
     pub const ALL: Self = Self {
         z_zh: true,
         c_ch: true,

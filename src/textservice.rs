@@ -1012,15 +1012,63 @@ impl FeiheTextService {
 
     /// 组合串里允许出现哪些字符（全拼模式放宽到纯字母，两种模式都允许手动分隔符）
     fn code_allowed(s: &str) -> bool {
-        // 快捷输入：引导符（`/`，见 quick::PREFIX）+ 纯小写字母
+        // 快捷输入：引导符（`/`，见 quick::PREFIX）后面的规则在 `quick` 里，
+        // 因为 `/c1+2` 和 `/u4e00` 要放行数字和运算符，和普通编码不是一套规则
         if let Some(rest) = s.strip_prefix(quick::PREFIX) {
-            return rest.chars().all(|c| c.is_ascii_lowercase());
+            return quick::code_ok(rest);
         }
         if config::pinyin_mode() {
             s.chars().all(|c| c.is_ascii_lowercase() || c == Self::SEP)
         } else {
             s.chars()
                 .all(|c| dict::scheme().is_code_char(c) || c == Self::SEP)
+        }
+    }
+
+    /// 当前编码是不是在计算模式（`/c` 开头）。
+    fn in_calc(code: &str) -> bool {
+        code.strip_prefix(quick::PREFIX)
+            .is_some_and(|rest| rest.starts_with(quick::EXPR_KEY))
+    }
+
+    /// 计算模式下这一键对应的字符。
+    ///
+    /// **数字键在这里归算式，不归选词。** 输入法里数字键本来是选候选的，但进了 `/c`
+    /// 就是在写算式（见 `quick` 的模块文档）——两种含义抢同一个键，只能选一个。
+    /// 选候选改用空格（第一项）、方向键或鼠标，规则简单且可预测。
+    ///
+    /// **Shift 组合也认**：`*`（Shift+8）、`(`（Shift+9）、`)`（Shift+0）、
+    /// `^`（Shift+6）都得能打出来，而 `is_code_key` 是按「Shift 组合不进编码」
+    /// 设计来排除它们的，所以这条路必须自己判，不能借用。
+    fn calc_char(vk: u8, shift: bool) -> Option<char> {
+        match vk {
+            // 主键盘 0–9。Shift 在 6/8/9/0 上是运算符，其余键上 Shift 没有别的含义
+            0x30..=0x39 => {
+                let digit = (b'0' + (vk - 0x30)) as char;
+                Some(match (vk, shift) {
+                    (0x36, true) => '^',
+                    (0x38, true) => '*',
+                    (0x39, true) => '(',
+                    (0x30, true) => ')',
+                    _ => digit,
+                })
+            }
+            // 小键盘：一路上都是算式字符，不用 Shift
+            0x60..=0x69 => Some((b'0' + (vk - 0x60)) as char),
+            0x6A => Some('*'), // VK_MULTIPLY
+            0x6B => Some('+'), // VK_ADD
+            0x6D => Some('-'), // VK_SUBTRACT
+            0x6E => Some('.'), // VK_DECIMAL
+            0x6F => Some('/'), // VK_DIVIDE
+            // VK_OEM_PLUS / VK_OEM_MINUS / VK_OEM_2 / VK_OEM_PERIOD。
+            // `VK_OEM_2` 平时是引导符，在算式里是除号。
+            0xBB => Some('+'),
+            0xBD => Some('-'),
+            0xBF => Some('/'),
+            0xBE => Some('.'),
+            // `x` 当乘号：`*` 要 Shift+8，笔记本键盘上不一定好按
+            0x58 => Some('x'),
+            _ => None,
         }
     }
 
@@ -1305,7 +1353,11 @@ impl FeiheTextService_Impl {
         // 必须用 `query_code`（去掉手动分隔符）：排序那边是按去分隔符的码查的，
         // 这里留个 `ni'hao` 就永远对不上，那条学习记录等于白记。
         let code = FeiheTextService::query_code(&self.code.borrow()).into_owned();
-        crate::freq::bump(&code, &word);
+        // 快捷输入 / 计算的候选是现场生成的串（「2026年10月28日」「3」），学它没有
+        // 意义——码是 `/rq`、`/c1+2`，下次也命不中，只会在 `freq.txt` 里堆垃圾。
+        if !code.starts_with(quick::PREFIX) {
+            crate::freq::bump(&code, &word);
+        }
         let mut text = word;
         text.push_str(suffix);
         self.pending_op.borrow_mut().replace(EditOp::Commit(text));
@@ -2223,6 +2275,9 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 自造词同理：在别的宿主里刚拼出来的词，切过来也要能打。同样按 mtime 判断。
         crate::phrase::refresh();
 
+        // 自定义短语是用户拿编辑器手改的文件，改完切回窗口就该生效。
+        crate::custom::refresh();
+
         // 自动检测「是不是全屏」的结果也丢掉重问：用户刚从全屏游戏 Alt+Tab 回来，
         // 不该还要等缓存过期才看得见候选窗。
         crate::fullscreen::invalidate();
@@ -2614,6 +2669,22 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 return Ok(BOOL::from(true));
             }
             return Ok(BOOL::from(false));
+        }
+
+        // 计算模式（`/c…`）：数字和运算符归算式，不归选词、也不归翻页。
+        // 必须放在 `handle_page_key` 之前——`-` 和 `=` 在这里是减号，不是翻页键。
+        if FeiheTextService::in_calc(&self.code.borrow()) {
+            if let Some(ch) = FeiheTextService::calc_char(vk, FeiheTextService::shift_down()) {
+                self.code.borrow_mut().push(ch);
+                self.refresh();
+                self.update_composition();
+                return Ok(BOOL::from(true));
+            }
+            // 算式里没有别的字母（`x` 上面已经当乘号收下了）。吞掉而不是让它进编码，
+            // 否则 `/c1+2a` 这种会变成一个算不出来的码，候选整片消失。
+            if vk.is_ascii_uppercase() {
+                return Ok(BOOL::from(true));
+            }
         }
 
         // - / = 和 ↑ / ↓：翻页。放在 match 之前，因为 match 里没法写
@@ -3265,6 +3336,19 @@ mod tests {
         assert_ne!(rq.first().map(|s| s.as_ref()), Some("/"));
     }
 
+    /// 计算模式的候选要原样透到候选列表：`/c1+2` 第一位是 `3`。
+    #[test]
+    fn calc_result_reaches_the_candidate_list() {
+        let v = FeiheTextService::quick_list("c1+2", false);
+        assert_eq!(v.first().map(|s| s.as_ref()), Some("3"), "{v:?}");
+        assert_eq!(v.get(1).map(|s| s.as_ref()), Some("1+2=3"));
+
+        let v = FeiheTextService::quick_list("c123", false);
+        assert_eq!(v.first().map(|s| s.as_ref()), Some("一百二十三"), "{v:?}");
+        // 全角模式不带斜杠前缀（这里本来就没有 `/`），结果不受影响
+        assert_eq!(v, FeiheTextService::quick_list("c123", true));
+    }
+
     #[test]
     fn shift_letter_is_the_uppercase_letter_itself() {
         // Shift+字母：上屏的是大写字母本身，不是编码
@@ -3276,6 +3360,47 @@ mod tests {
         // 我们自己按 VK 映射会在非 QWERTY 布局上算错
         for vk in [0x31u8, 0x30, VK_OEM_2.0 as u8, VK_OEM_5.0 as u8, 0x20, 0x0D] {
             assert_eq!(FeiheTextService::shifted_letter(vk), None, "vk=0x{vk:02x}");
+        }
+    }
+
+    /// 计算模式只认 `/c` 开头，别的 `/x` 一律不算——否则 `/rq` 里的数字会被当算式。
+    #[test]
+    fn calc_mode_is_only_the_slash_c_prefix() {
+        use FeiheTextService as S;
+        assert!(S::in_calc("/c"));
+        assert!(S::in_calc("/c1+2"));
+        assert!(!S::in_calc("/rq"));
+        assert!(!S::in_calc("/"));
+        assert!(!S::in_calc(""));
+        assert!(!S::in_calc("c1+2"), "没有引导符就不是快捷输入");
+    }
+
+    /// 算式里的键位映射。数字、运算符、小键盘都要认。
+    #[test]
+    fn calc_keys_map_to_expression_chars() {
+        use FeiheTextService as S;
+        // 主键盘数字
+        assert_eq!(S::calc_char(0x31, false), Some('1'));
+        assert_eq!(S::calc_char(0x30, false), Some('0'));
+        // Shift + 6/8/9/0 是 ^ * ( )
+        assert_eq!(S::calc_char(0x36, true), Some('^'));
+        assert_eq!(S::calc_char(0x38, true), Some('*'));
+        assert_eq!(S::calc_char(0x39, true), Some('('));
+        assert_eq!(S::calc_char(0x30, true), Some(')'));
+        // 四个符号键：`=` 和 `+` 是同一个键，算式里只可能想要 `+`
+        assert_eq!(S::calc_char(VK_OEM_PLUS.0 as u8, false), Some('+'));
+        assert_eq!(S::calc_char(VK_OEM_MINUS.0 as u8, false), Some('-'));
+        assert_eq!(S::calc_char(VK_OEM_2.0 as u8, false), Some('/'), "算式里斜杠是除号");
+        assert_eq!(S::calc_char(VK_OEM_PERIOD.0 as u8, false), Some('.'));
+        // `x` 当乘号
+        assert_eq!(S::calc_char(0x58, false), Some('x'));
+        // 小键盘
+        assert_eq!(S::calc_char(0x65, false), Some('5'));
+        assert_eq!(S::calc_char(0x6A, false), Some('*'));
+        assert_eq!(S::calc_char(0x6B, false), Some('+'));
+        // 别的字母、空格、退格都不归算式
+        for vk in [0x41u8, 0x5A, 0x20, 0x08, 0x0D] {
+            assert_eq!(S::calc_char(vk, false), None, "vk=0x{vk:02x}");
         }
     }
 

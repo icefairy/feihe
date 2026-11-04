@@ -79,6 +79,8 @@ const ID_SKIN_DARK: i32 = 122;
 const ID_SKIN_EYE: i32 = 123;
 const ID_HANZI_SIMP: i32 = 171;
 const ID_HANZI_TRAD: i32 = 172;
+/// 打开 `custom.txt`（自定义短语）。
+const ID_CUSTOM: i32 = 190;
 
 /// 模糊音九条规则的复选框，ID 连续：`ID_FUZZY_FIRST + 序号`，序号就是
 /// `fuzzy::NAMES` 的下标。加减规则时只改那张表，不用再回到这里加常量。
@@ -605,6 +607,8 @@ unsafe fn on_command(h: HWND, id: i32) {
         }
         // 项目主页：交给默认浏览器，自己不联网
         ID_ABOUT | ID_ABOUT_LINK => open_about(),
+        // 自定义短语：交给系统默认的编辑器（.txt → 记事本），我们不内建编辑器
+        ID_CUSTOM => open_custom(),
         // 模糊音九条：ID 连续，按 `NAMES` 的下标一次派发完
         id if (ID_FUZZY_FIRST..ID_FUZZY_FIRST + crate::fuzzy::NAMES.len() as i32).contains(&id) => {
             let name = crate::fuzzy::NAMES[(id - ID_FUZZY_FIRST) as usize];
@@ -634,6 +638,24 @@ unsafe fn open_about() {
         None,
         PCWSTR(op.as_ptr()),
         PCWSTR(url.as_ptr()),
+        PCWSTR::null(),
+        PCWSTR::null(),
+        SW_SHOWNORMAL,
+    );
+}
+
+/// 打开 `custom.txt` 给用户编辑。
+///
+/// 文件不存在时先写一份带注释的模板：空文件看不出格式，用户还得回来翻文档。
+/// 模板只在**点这个按钮**时写——启动时就写的话，用户删掉文件想清空，一重启又长回来了。
+unsafe fn open_custom() {
+    crate::custom::ensure_template();
+    let op = to_wide("open");
+    let path = to_wide(&crate::custom::file().to_string_lossy());
+    let _ = ShellExecuteW(
+        None,
+        PCWSTR(op.as_ptr()),
+        PCWSTR(path.as_ptr()),
         PCWSTR::null(),
         PCWSTR::null(),
         SW_SHOWNORMAL,
@@ -995,8 +1017,22 @@ unsafe fn build(h: HWND) {
     y += 38;
     label(h, "格式：词<TAB>全拼（你好<TAB>ni hao）· 从搜狗导入自动注音", 16, y, 428, ID_NOTE);
 
+    // 自定义短语：和「导入词库」一样属于「我能喂给它什么」，紧跟在这一块后面。
+    // 入口做成按钮而不是写个路径：用户不会为了一个没见过的文件去翻设置目录。
+    push(h, "编辑自定义短语…", 16, y + 24, 130, 26, ID_CUSTOM);
+    label(
+        h,
+        "码<TAB>文本，可用 {year} {month} {day} 这类变量",
+        152,
+        y + 28,
+        292,
+        0,
+    );
+    // 这一行占的高度，后面几块的基准都要往下让
+    y += 34;
+
     // 快捷输入说明。码表从 quick 模块取，避免文档和实现对不上。
-    // 八个命令一行放不下（428px 会截断），按四个一行折开。
+    // 十一个命令一行放不下（428px 会截断），按四个一行折开。
     let quick: Vec<String> = crate::quick::commands()
         .iter()
         .map(|(k, name)| format!("{}{k} {name}", crate::quick::PREFIX))

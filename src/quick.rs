@@ -29,6 +29,28 @@
 //! 只打一个引导符时列出全部命令的预览——按空格得到最常用的日期，按数字选别的。
 //! 这样不用记码也能用。
 //!
+//! ## 两个「要带参数」的命令
+//!
+//! 上面九个命令的后面不能再打东西（`/rqx` 就是空）。`/c` 和 `/u` 相反，
+//! 参数本身就是内容：
+//!
+//! ```text
+//! /c1+2      → 3 / 1+2=3
+//! /c123      → 一百二十三 / 壹佰贰拾叁 / 一百二十三元整 / 壹佰贰拾叁元整
+//! /c1998-3-8 → 一九九八年三月八日 / 1998年3月8日 / 1998-03-08
+//! /u4e00     → 一
+//! /uuid      → 随机 UUID
+//! ```
+//!
+//! 算式和码点都要**数字键**。而输入法里数字键是选候选的——所以进了这两种模式，
+//! 数字键一律属于参数，选候选改用空格（第一项）/ 左右 / 上下 / 鼠标。这条规则
+//! 简单且可预测：「进了 `/c`，你就是在写算式」。
+//!
+//! 算式用 `c`（calculate）而不是搜狗的 `v`：**双拼里 `v` 是 `zh` 键**，`vi`/`vs`/`vu`
+//! 全是真实编码，拿它当引导符会把一大片常用字堵掉。
+//!
+//! 码点用 `u`（unicode），`/uuid` 归它——`uuid` 不是合法十六进制，不会和码点撞。
+//!
 //! ## 农历 / 干支 / 节气来自 Tyme
 //!
 //! 这三样都要「历法级」正确：农历要处理闰月、干支要按节气换月、四柱要按子时换日。
@@ -43,11 +65,18 @@ use std::sync::Mutex;
 
 use tyme4rs::tyme::solar::{SolarDay, SolarTime};
 use tyme4rs::tyme::{Culture, Tyme};
+use windows::Win32::System::Com::CoCreateGuid;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
 /// 引导符。见模块文档：双拼两字母会和音节撞车，必须有引导符；
 /// 顿号留给 `\` 一个键，`/` 位置好按，拿来当功能入口。
 pub const PREFIX: char = '/';
+
+/// 计算模式的子前缀：`/c` 后面是算式 / 数字 / 日期。
+pub const EXPR_KEY: char = 'c';
+
+/// 码点模式的子前缀：`/u4e00` 出「一」，`/uuid` 出随机 UUID。
+pub const UNI_KEY: char = 'u';
 
 /// 一次取到的时间快照。同一批候选必须用同一个时刻，否则「17:36」和「17:36:50」
 /// 可能跨秒对不上。
@@ -338,6 +367,21 @@ const CMDS: &[Cmd] = &[
         preview: Some("反查（复制文字后敲 /fc）"),
         build: |_| crate::fancha::from_clipboard(),
     },
+    // 下面两条**要带参数**，`candidates` 在走进这张表之前就把它们接走了；
+    // 放在这里只为两件事：`commands()` 能列出来（设置窗、文档），
+    // 以及只打 `/` 时的预览里有一行提示。`build` 永远不会被调到。
+    Cmd {
+        key: "c",
+        label: "算式",
+        preview: Some("算式 / 数字（/c1+2 → 3）"),
+        build: |_| Vec::new(),
+    },
+    Cmd {
+        key: "u",
+        label: "字符",
+        preview: Some("码点 / UUID（/u4e00 → 一）"),
+        build: |_| Vec::new(),
+    },
 ];
 
 /// 可用命令清单（设置窗/文档里展示用）
@@ -345,15 +389,90 @@ pub fn commands() -> Vec<(&'static str, &'static str)> {
     CMDS.iter().map(|c| (c.key, c.label)).collect()
 }
 
+/// 算式里允许出现的字符。
+///
+/// `x` 也算：`*` 要按 Shift+8，笔记本上不一定好按，而算式语境里 `x` 没有别的意思。
+/// 汉字和别的字母一律不收——宁可字符进不去，也不要让一个手误变成「看起来对的错答案」。
+pub fn is_expr_char(c: char) -> bool {
+    c.is_ascii_digit() || matches!(c, '+' | '-' | '*' | '/' | '(' | ')' | '.' | '^' | 'x')
+}
+
+/// 引导符后面的内容是不是合法编码。
+///
+/// 三种形态：带参数的 `/c…`（算式字符）、`/u…`（十六进制或 `uuid` 的前缀）、
+/// 其余纯小写字母（日期之类的固定命令）。
+///
+/// **中间状态必须合法**：用户打 `/uuid` 会依次经过 `/u`、`/uu`、`/uui`…… 中间
+/// 任何一步被拒，组合串就断了，用户看到的是「打一半汉字消失」。所以 `uuid`
+/// 按前缀放行。
+pub fn code_ok(rest: &str) -> bool {
+    if rest.is_empty() {
+        return true;
+    }
+    if let Some(body) = rest.strip_prefix(EXPR_KEY) {
+        return body.chars().all(is_expr_char);
+    }
+    if let Some(body) = rest.strip_prefix(UNI_KEY) {
+        let hex = body.len() <= 6
+            && body
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        // `body` 是去掉首个 `u` 之后的部分，而 `uuid` 也是 `u` 开头——所以比的是
+        // `uid`（`uuid` 去掉第一个字母）的前缀，不是 `uuid` 的前缀。
+        return hex || "uid".starts_with(body);
+    }
+    rest.chars().all(|c| c.is_ascii_lowercase())
+}
+
+/// `4e00` → `一`。不是码点（超范围、代理区、控制字符）返回 `None`。
+fn unicode_form(hex: &str) -> Option<String> {
+    if hex.is_empty() || hex.len() > 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let c = char::from_u32(u32::from_str_radix(hex, 16).ok()?)?;
+    // 控制字符上屏等于什么都看不见，还会把宿主的光标搞乱
+    (!c.is_control()).then(|| c.to_string())
+}
+
+/// 一条随机 UUID（v4）。`CoCreateGuid` 生成的就是 v4，按 GUID 的字段序格式化即可。
+fn uuid_forms() -> Vec<String> {
+    let Ok(g) = (unsafe { CoCreateGuid() }) else {
+        return Vec::new();
+    };
+    let d4 = &g.data4;
+    let text = format!(
+        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        g.data1, g.data2, g.data3, d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]
+    );
+    vec![text.clone(), text.to_uppercase()]
+}
+
 /// 给引导符（`PREFIX`，即 `/`）后面的码生成候选。
 ///
 /// - 空串：列出全部命令的当前值预览（按空格拿日期，按数字选别的）
 /// - 是某个命令的前缀：展开该命令的所有格式
+/// - `/c…`：算式 / 数字 / 日期，见 [`crate::calc`]
+/// - `/u…`：码点，`uuid` 出随机 UUID
 /// - 匹配不到：空
 pub fn candidates(key: &str) -> Vec<String> {
+    if !code_ok(key) {
+        return Vec::new();
+    }
+    // 带参数的两条先接走，不能进下面那张表（表是按前缀匹配的，`/c` 会命中 `c` 条目）
+    if let Some(body) = key.strip_prefix(EXPR_KEY) {
+        return crate::calc::forms(body);
+    }
+    if let Some(rest) = key.strip_prefix(UNI_KEY) {
+        // 整串就是 `uuid` 才生成；`/uid` 是「十六进制里没有 i」→ 交给下面返回空
+        if key == "uuid" {
+            return uuid_forms();
+        }
+        return unicode_form(rest).into_iter().collect();
+    }
     if !key.chars().all(|c| c.is_ascii_lowercase()) {
         return Vec::new();
     }
+
     let hits: Vec<&Cmd> = CMDS.iter().filter(|c| c.key.starts_with(key)).collect();
     if hits.is_empty() {
         return Vec::new();
@@ -527,6 +646,67 @@ mod tests {
         assert!(candidates("zz").is_empty());
         assert!(candidates("rqz").is_empty());
         assert!(candidates("1").is_empty());
+    }
+
+    #[test]
+    fn calc_prefix_takes_numbers_and_operators() {
+        assert_eq!(candidates("c1+2"), ["3", "1+2=3"]);
+        assert_eq!(candidates("c123")[0], "一百二十三");
+        assert_eq!(candidates("c1998-3-8")[0], "一九九八年三月八日");
+        // 只打 `/c` 什么都还没有
+        assert!(candidates("c").is_empty());
+        // 算不出来就是空，不能把半截算式当候选
+        assert!(candidates("c1+").is_empty());
+        assert!(candidates("cab").is_empty());
+    }
+
+    #[test]
+    fn code_ok_covers_every_intermediate_state() {
+        // 打 `/uuid` 会依次经过 u、uu、uui…… 中间任何一步被拒，组合串就断了
+        for s in ["u", "uu", "uui", "uuid"] {
+            assert!(code_ok(s), "`{s}` 必须是合法中间状态");
+        }
+        assert!(code_ok("u4e00"));
+        assert!(code_ok("u1f600"));
+        assert!(!code_ok("u4e0g"), "g 不是十六进制");
+        assert!(code_ok("c1+2*(3)"));
+        assert!(code_ok("c1.5x2"));
+        assert!(!code_ok("c1=a"), "`=` 不在算式字符表里");
+        assert!(code_ok("rq") && code_ok(""));
+        assert!(!code_ok("r1"), "普通命令后面不能跟数字");
+    }
+
+    #[test]
+    fn unicode_codepoint_forms() {
+        assert_eq!(candidates("u4e00"), ["一"]);
+        assert_eq!(candidates("u1f600"), ["😀"]);
+        // 控制字符不上屏（看不见，还会把宿主光标搞乱）
+        assert!(candidates("u07").is_empty());
+        // 超范围
+        assert!(candidates("u110000").is_empty());
+        // `u` 后面没有内容
+        assert!(candidates("u").is_empty());
+    }
+
+    #[test]
+    fn uuid_has_five_groups_and_version_4() {
+        let v = candidates("uuid");
+        assert_eq!(v.len(), 2, "小写 + 大写");
+        let chars: Vec<char> = v[0].chars().collect();
+        assert_eq!(chars.len(), 36);
+        for &i in &[8, 13, 18, 23] {
+            assert_eq!(chars[i], '-', "第 {i} 位应该是连字符：{}", v[0]);
+        }
+        assert_eq!(chars[14], '4', "CoCreateGuid 生成的是 v4：{}", v[0]);
+        assert!(v[1].chars().all(|c| !c.is_ascii_lowercase()), "第二条要全大写");
+    }
+
+    #[test]
+    fn prefix_lists_paren_commands_too() {
+        // 只打 `/` 时，`/c` 和 `/u` 也要在预览里露一面，否则没人知道它们存在
+        let all = candidates("");
+        assert!(all.iter().any(|s| s.contains("/c")), "预览里没有 /c：{all:?}");
+        assert!(all.iter().any(|s| s.contains("/u")), "预览里没有 /u：{all:?}");
     }
 
     #[test]

@@ -596,7 +596,6 @@ rustup target add i686-pc-windows-gnullvm
     </div>
     <div class="todo">
       <div>组合串下划线（ITfDisplayAttributeProvider 未实现）</div>
-      <div>快捷输入的自定义短语（农历 / 干支 / 节气已支持）</div>
       <div>语音输入（原计划 M5，已搁置）</div>
       <div>删词（需要 SQLite，阶段二；置顶已经做了）</div>
       <div>云同步 / 云词库</div>
@@ -608,7 +607,8 @@ rustup target add i686-pc-windows-gnullvm
       候选窗鼠标点选、一级简码（<code>d</code> 出「的」，次选 <code>d;</code> 出「打」）、二级简码（<code>nd</code> 出「难道」，370 条两键词）、手动置顶（<code>Ctrl</code>+数字，或右键点候选——多页签程序里 <code>Ctrl+1..9</code> 被抢走时用这个）、
       全屏游戏 UILess（候选交给游戏自绘）、全屏时只收浮窗、候选窗照弹（只有投影 / 演示才收）、
       易错词读音标注 + 错音容错（<code>zhongqing</code> 也能打出「重庆 chóng qìng」）、
-      快捷输入（日期 / 时间 / 农历 / 干支四柱 / 下一个节气 / 剪贴板反查）、
+      快捷输入（日期 / 时间 / 农历 / 干支四柱 / 下一个节气 / 剪贴板反查 / 算式与金额大写 / 码点与 UUID）、
+      自定义短语（<code>custom.txt</code> 里写「码 → 文本」，支持 <code>{year}</code> 这类时间变量）、
       全角标点、简繁切换、动态词频、自造词（拼过的词自动记住）、状态浮窗、设置窗、符号软键盘、
       搜狗个人词库一键导入（设置窗里点一下，自动解析搜狗的打字历史并注音，不用命令行）、
       用户词库编译成二进制走 mmap。
