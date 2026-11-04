@@ -41,7 +41,7 @@
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
 实测数据：安装包 1.83 MB、装完约 7.9 MB、64 位 DLL 4009 KB / 32 位 4048 KB、
-`base.bin` 46493 条 / 2895 KB（发布构建，`-NoUserDict`）、297 项单测。
+`base.bin` 46493 条 / 2895 KB（发布构建，`-NoUserDict`）、298 项单测。
 
 
 ## 自绘窗口架构（v2 新增）
@@ -3400,3 +3400,40 @@ DLL 各涨 123 KB / 122 KB，安装包 1.73 → 1.83 MB。文档顶部的体积�
 「1.83 MB / 装完约 7.9 MB」（装完 = 两份 DLL 之和 8057 KB）。
 
 **没有装到 `C:/soft/Feihe`**（用户规矩：不代跑安装包）。
+
+### 追加：中文态 Shift 标点补全（…… —— 《》）
+
+用户接着报「Shift+6 应该是省略号、Shift+- 是破折号、`<>` 应该出书名号」。上一节那套
+单点实现（`chinese_shift_punct` 里 `if vk != VK_4`）自然改成**表驱动**：
+
+```rust
+const SHIFT_PUNCT: [(u8, char, &'static str); 5] = [
+    (VK_4.0 as u8, '$', "￥"),
+    (VK_6.0 as u8, '^', "……"),
+    (VK_OEM_MINUS.0 as u8, '_', "——"),
+    (VK_OEM_COMMA.0 as u8, '<', "《"),
+    (VK_OEM_PERIOD.0 as u8, '>', "》"),
+];
+```
+
+第二列是**布局校验的锚点**，第三列是中文里该出的东西。查表命中后才问
+`layout_shift_char_is(vk, ascii)`（`VkKeyScanExW` 反查「这个布局上这个 ASCII 是不是
+这个键 + 恰好 Shift」），所以 AZERTY / 德语布局自动失效。
+
+三点值得记：
+
+1. **返回值从 `Option<char>` 变成 `Option<&'static str>`**。省略号是「……」、破折号是
+   「——」，都是**两个**码位，`char` 装不下。调用方原来那句 `encode_utf8(&mut buf)`
+   直接去掉，把 `&str` 交给 `commit_*`——那两个函数本来就收 `&str`。
+2. **`Shift+-` 在组合态原本是「上一页」**（`handle_page_key` 不看 Shift）。新分支放在
+   `handle_page_key` 之前，所以现在组合态按 `Shift+-` 是「上屏候选 + 破折号」。这是
+   刻意的：`-` / `=` 翻页是**不按 Shift** 的手势，按住 Shift 的人要的是破折号。
+3. **`Shift+6` 原本会去选第 6 个候选**（`0x31..=0x39`），同理被新分支挡在前面。
+
+新增 `zz_probe_shift_table`（`#[ignore]`）：在真机上打印五个锚点的布局命中情况。
+排障「按了没反应」时先跑它——某一行 `布局命中=false` 就说明那个布局上这个字符本来就
+不在 Shift 上，我们按设计不换。本机（US）五个全 true。
+
+298 项单测（+1 净：拆成三条并补一条表锚点校验）；文档四处同步（README 标点表、
+使用帮助标点表 + 两段说明、index.html 卡片、验证清单 M3.53 共 7 条）。
+**这一版没有进 0.3.11 安装包**（那个包是这轮改动之前打的）。
