@@ -40,8 +40,8 @@
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
 | 组合串下划线 | —— | ❌ 未做（`ITfDisplayAttributeProvider`） |
 
-实测数据：安装包 1.73 MB、装完约 7.6 MB、64 位 DLL 3886 KB / 32 位 3926 KB、
-`base.bin` 46493 条 / 2895 KB（发布构建，`-NoUserDict`）、240 项单测。
+实测数据：安装包 1.83 MB、装完约 7.9 MB、64 位 DLL 4009 KB / 32 位 4048 KB、
+`base.bin` 46493 条 / 2895 KB（发布构建，`-NoUserDict`）、297 项单测。
 
 
 ## 自绘窗口架构（v2 新增）
@@ -3380,3 +3380,23 @@ GPL）。这轮全部是自己重写，只借了「做什么」和「为什么�
 
 297 项单测（+7：Shift+4 三条、demote 四条），两种词库配置都绿，零新增 clippy 警告。
 DLL 3980 → **4009 KB**（+29 KB，主要是新模块的代码与字符串）。**未打包，版本仍 0.3.10。**
+
+### 0.3.10 → 0.3.11 打包
+
+版本号五处同步（Cargo.toml 唯一源头 / `installer/feihe.nsi` 的 `APP_VER` / README /
+使用帮助 / index.html），历史章节里的旧版本号不动。
+
+`build_setup.ps1 -SelfTest` 一把过：
+- 64 位 `feihe.dll` **4009 KB**（Machine=0x8664）、32 位 **4048 KB**（Machine=0x014C），
+  发布构建 `-NoUserDict`，`base.bin` 46493 条 / 2895 KB
+- `dist\Feihe-Setup-0.3.11.exe` **1.83 MB**（1,917,769 字节），FileVersion / ProductVersion
+  都是 0.3.11
+- 自检：静默装到 `%TEMP%` 后核对两份 DLL + 用户手册的 SHA256，与构建产物一致
+  （`02596522…` / `622B803B…` / `B9669F51…`），64/32 位 `DllGetClassObject` → `CreateInstance`
+  两条路都 PASS
+
+0.3.10 之后累积了四批改动（模糊音、`/c` 计算与自定义短语、拼写纠错、降权 + `Shift+4`），
+DLL 各涨 123 KB / 122 KB，安装包 1.73 → 1.83 MB。文档顶部的体积数字同步成
+「1.83 MB / 装完约 7.9 MB」（装完 = 两份 DLL 之和 8057 KB）。
+
+**没有装到 `C:/soft/Feihe`**（用户规矩：不代跑安装包）。

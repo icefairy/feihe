@@ -2,7 +2,7 @@
 
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
-**当前版本 0.3.10** ｜ 安装包 1.73 MB ｜ 装完约 7.6 MB ｜ 单字 8006 ｜ 词条 46493 ｜
+**当前版本 0.3.11** ｜ 安装包 1.83 MB ｜ 装完约 7.9 MB ｜ 单字 8006 ｜ 词条 46493 ｜
 不联网、不弹窗、无账号、密码框不接管 ｜ 297 项单元测试 ｜ 安装需要管理员（注册写 HKLM）
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
@@ -43,8 +43,8 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 
 | 维度 | 飞鹤 | 搜狗拼音 | 微软拼音 |
 |---|---|---|---|
-| 安装包 | **1.73 MB** | 百 MB 量级 | 随系统预装 |
-| 装完占用 | **约 7.6 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
+| 安装包 | **1.83 MB** | 百 MB 量级 | 随系统预装 |
+| 装完占用 | **约 7.9 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
 | 广告 / 热点推送 | **没有这功能** | 有（可在设置里关） | 无 |
 | 账号 / 联网 | **完全不需要** | 登录后云同步 | 微软账户可选 |
 | 开源 | **是**（Rust，全文可改） | 否 | 否 |
@@ -897,7 +897,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.10.exe
+# 产物：dist\Feihe-Setup-0.3.11.exe
 ```
 
 **为什么必须提权**：输入法的 COM / TSF 注册要写
@@ -960,7 +960,7 @@ HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Fe
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.10.exe
+# 产物：dist\Feihe-Setup-0.3.11.exe
 ```
 
 `build_setup.ps1` 做四件事：
