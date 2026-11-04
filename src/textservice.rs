@@ -26,9 +26,9 @@ use crate::uielement;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardLayout, VkKeyScanExW, VK_4, VK_6, VK_CONTROL, VK_LWIN, VK_MENU,
-    VK_OEM_1, VK_OEM_2, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS,
-    VK_OEM_PERIOD, VK_OEM_PLUS, VK_RWIN, VK_SHIFT,
+    GetKeyState, GetKeyboardLayout, VkKeyScanExW, VK_0, VK_1, VK_4, VK_6, VK_9, VK_CONTROL,
+    VK_LWIN, VK_MENU, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::TextServices::*;
 use windows_core::{implement, IUnknownImpl};
@@ -92,6 +92,20 @@ struct Segment {
     picked: bool,
 }
 
+/// 中文态一个标点键该上屏什么。
+///
+/// 大部分键是一个固定字符；只有双引号是**一个键出两个字符**（`“` / `”`），
+/// 靠交替解决。做成枚举而不是「查表得 char + 到处 if 判是不是引号」，
+/// 是为了让「这个键需要状态」这件事在类型上就看得见——调用点必须走
+/// `resolve_punct`，绕不过交替逻辑。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Punct {
+    /// 固定文本（破折号/省略号是两个码位，所以不是 `char`）
+    One(&'static str),
+    /// 成对交替：`(左, 右)`
+    Pair(&'static str, &'static str),
+}
+
 #[implement(
     ITfTextInputProcessorEx,
     ITfKeyEventSink,
@@ -152,6 +166,18 @@ pub struct FeiheTextService {
     /// Shift 按住期间有没有按过别的键。用来区分「单击 Shift」和「Shift+字母」：
     /// 单击切中英，组合键照旧交给应用（大写字母、Shift 选择都靠它）。
     shift_used: Cell<bool>,
+    /// 下一个双引号该出左半还是右半（true = `“`）。
+    ///
+    /// 中文里引号必须成对，但键盘只有一个键。搜狗的做法是**交替**：第一次 `“`、
+    /// 第二次 `”`、第三次又回到 `“`。这里就存这一位。
+    ///
+    /// 为什么不按上下文猜（看光标前是不是汉字、前一个是不是中文标点）：那要开
+    /// 只读编辑会话读前文，每次按引号键都付一次代价；而且猜错了更糟——用户会
+    /// 拿到两个左引号。交替是**纯本地、零代价、永远成对**的做法，业界默认。
+    ///
+    /// 状态跟着 TextService 实例走（每个线程一份），跨应用、跨组合串都连续；
+    /// 不随输入结束重置——引号本来就跨句使用（`他说：“……”` 再 `“……”`）。
+    quote_open: Cell<bool>,
     /// 分词模式的段列表。空 Vec 表示不在分词模式。
     segments: RefCell<Vec<Segment>>,
     /// 分词模式下光标落在第几段
@@ -195,6 +221,7 @@ impl FeiheTextService {
             caret_y: Cell::new(0),
             pending_op: RefCell::new(None),
             shift_used: Cell::new(false),
+            quote_open: Cell::new(true),
             segments: RefCell::new(Vec::new()),
             seg_idx: Cell::new(0),
             ui_less: Cell::new(false),
@@ -887,29 +914,34 @@ impl FeiheTextService {
         vk == VK_SHIFT.0 as u8 || vk == 0xA0 || vk == 0xA1
     }
 
-    /// 全角标点映射（只处理不带 Shift 的那一排键）。
-    /// Shift 组合（`?` `:` `|` 等）交给应用，避免和我们自己算的字符对不上。
+    /// 中文标点映射（只处理不带 Shift 的那一排键）。
+    /// Shift 组合见 `SHIFT_PUNCT`（那边还要过布局闸）。
     ///
     /// `\` → `、` 是照搜狗的习惯。`/` **不再**出顿号——它是快捷输入的引导符
     /// （见 `quick::PREFIX`），顿号留 `\` 一个键就够，两拨用户的习惯里 `\` 是
     /// 更主流的那个。
-    fn fullwidth_punct(vk: u8) -> Option<char> {
-        let ch = match vk {
-            v if v == VK_OEM_COMMA.0 as u8 => '，',
-            v if v == VK_OEM_PERIOD.0 as u8 => '。',
-            v if v == VK_OEM_1.0 as u8 => '；',
-            v if v == VK_OEM_5.0 as u8 => '、',
-            v if v == VK_OEM_4.0 as u8 => '【',
-            v if v == VK_OEM_6.0 as u8 => '】',
-            v if v == VK_OEM_7.0 as u8 => '’',
-            v if v == VK_OEM_MINUS.0 as u8 => '－',
-            v if v == VK_OEM_PLUS.0 as u8 => '＝',
+    ///
+    /// 单引号 `'` 恒出 `’`（**不交替**）：搜狗也是这么做的——`‘` 只在整段引用
+    /// 的开头出现，实际写作里几乎用不到；而 `’` 在 `’` 之后接 `s`（英文所有格）、
+    /// 表示分钟/英尺时都要紧跟着打，交替会让这些场景每次都要多按一下。
+    /// 双引号不一样：它成对出现，且 `“”` 两个方向肉眼可见，交替才有意义。
+    fn fullwidth_punct(vk: u8) -> Option<Punct> {
+        let p = match vk {
+            v if v == VK_OEM_COMMA.0 as u8 => Punct::One("，"),
+            v if v == VK_OEM_PERIOD.0 as u8 => Punct::One("。"),
+            v if v == VK_OEM_1.0 as u8 => Punct::One("；"),
+            v if v == VK_OEM_5.0 as u8 => Punct::One("、"),
+            v if v == VK_OEM_4.0 as u8 => Punct::One("【"),
+            v if v == VK_OEM_6.0 as u8 => Punct::One("】"),
+            v if v == VK_OEM_7.0 as u8 => Punct::One("’"),
+            v if v == VK_OEM_MINUS.0 as u8 => Punct::One("－"),
+            v if v == VK_OEM_PLUS.0 as u8 => Punct::One("＝"),
             // `/` 只在「编码为空」时是快捷输入的引导符（见 `is_code_key` 的调用顺序）。
             // 已经有编码时它是普通标点，全角模式下也该给全角。
-            v if v == VK_OEM_2.0 as u8 => '／',
+            v if v == VK_OEM_2.0 as u8 => Punct::One("／"),
             _ => return None,
         };
-        Some(ch)
+        Some(p)
     }
 
     /// 中文态下「Shift + 一个键」该出的中文标点。
@@ -919,22 +951,45 @@ impl FeiheTextService {
     /// 才换成中文标点（见 `layout_shift_char_is`）。这样法语 AZERTY（数字键要按 Shift
     /// 才出数字）、德语（`$` `_` 要 AltGr）等布局自动不换，用户拿到的仍是布局该给的字符。
     ///
-    /// 为什么是这几个键：搜狗、微软拼音、QQ 在中文态都这么出，而且这几个符号在中文里
-    /// **没有半角对位**——省略号是「……」（两个 U+2026）、破折号是「——」（两个
-    /// U+2014）、书名号是「《》《》」（U+300A / U+300B），拿 ASCII 凑不出来。
+    /// ## 依据是搜狗的中文标点表
     ///
-    /// 其余 Shift 组合（`?` `:` `|` `!` `@`）继续交给应用：中文里没有约定俗成的对位，
-    /// 各输入法的做法也不统一（`Shift+6` 有的给 `……` 有的给 `^`），猜错比不支持更糟。
+    /// 分两类：
+    ///
+    /// 1. **中文里没有半角对位**（必须换，否则打不出来）：`￥` `……` `——` `《》`。
+    ///    省略号是两个 U+2026、破折号是两个 U+2014，拿 ASCII 拼不出来。
+    /// 2. **中文标点体系里的对位**（搜狗/微软拼音中文态都这么出）：`！` `？` `：`
+    ///    `（` `）` `＋` `～`，以及 `"` → `“”`（见下面 `Punct::Pair`）。
+    ///
+    /// 换掉的代价是「中文态打不出半角符号」——但那本来就是「切英文态」的意思，
+    /// 和中文态打不出半角逗号是同一件事。
+    ///
+    /// ## 故意**不**换的
+    ///
+    /// - `@` `#` `%` `&` `*`：中文里没有对位，搜狗也原样给半角（`@` 尤其要留给邮箱）。
+    /// - `|` `{` `}`：这三样在中文写作里几乎只出现在**代码**中，换成 `｜` `「` `」`
+    ///   会让中文态里写代码的人吃亏；搜狗默认也没换。
+    /// - `^`：`Shift+6` 在某些布局上不是 `^`，且 `……` 已经占了那个键。
     ///
     /// 顺序就是查找顺序，`vk` 互不相同所以不影响结果；改这张表时**别只改这里**——
     /// `OnTestKeyDown` 的认键判定和 `OnKeyDown` 的插字都走 `chinese_shift_punct`，
     /// 单一出处。
-    const SHIFT_PUNCT: [(u8, char, &'static str); 5] = [
-        (VK_4.0 as u8, '$', "￥"),
-        (VK_6.0 as u8, '^', "……"),
-        (VK_OEM_MINUS.0 as u8, '_', "——"),
-        (VK_OEM_COMMA.0 as u8, '<', "《"),
-        (VK_OEM_PERIOD.0 as u8, '>', "》"),
+    const SHIFT_PUNCT: [(u8, char, Punct); 13] = [
+        // 中文里没有半角对位
+        (VK_4.0 as u8, '$', Punct::One("￥")),
+        (VK_6.0 as u8, '^', Punct::One("……")),
+        (VK_OEM_MINUS.0 as u8, '_', Punct::One("——")),
+        (VK_OEM_COMMA.0 as u8, '<', Punct::One("《")),
+        (VK_OEM_PERIOD.0 as u8, '>', Punct::One("》")),
+        // 中文标点的 ASCII 对位（搜狗规则）
+        (VK_1.0 as u8, '!', Punct::One("！")),
+        (VK_9.0 as u8, '(', Punct::One("（")),
+        (VK_0.0 as u8, ')', Punct::One("）")),
+        (VK_OEM_1.0 as u8, ':', Punct::One("：")),
+        (VK_OEM_2.0 as u8, '?', Punct::One("？")),
+        (VK_OEM_3.0 as u8, '~', Punct::One("～")),
+        (VK_OEM_PLUS.0 as u8, '+', Punct::One("＋")),
+        // 唯一需要状态的：一个键出两个字符，交替成对
+        (VK_OEM_7.0 as u8, '"', Punct::Pair("“", "”")),
     ];
 
     /// 查表 + 布局校验。`layout_ok(vk, ascii)` 回答「这个布局上 `vk` 按 Shift 出不出
@@ -942,12 +997,41 @@ impl FeiheTextService {
     ///
     /// 做成闭包是为了**别为不相关的键付 FFI 代价**：这个函数在每次按键的判定路径上
     /// （`OnTestKeyDown` / `OnKeyDown` 各一次），而真正命中表里的键极少。
+    ///
+    /// 返回 `Punct` 而不是字符串：双引号要交替，解析（翻转 `quote_open`）必须发生在
+    /// **真正要上屏**的那一刻——`OnTestKeyDown` 只是「让我看一眼」，它要是也跟着
+    /// 解析，每次按键都会白翻一次，用户拿到的引号方向就反了。
     fn chinese_shift_punct(
         vk: u8,
         layout_ok: impl FnOnce(u8, char) -> bool,
-    ) -> Option<&'static str> {
-        let (_, ascii, cn) = Self::SHIFT_PUNCT.iter().find(|(k, _, _)| *k == vk)?;
-        layout_ok(vk, *ascii).then_some(*cn)
+    ) -> Option<Punct> {
+        let (_, ascii, p) = Self::SHIFT_PUNCT.iter().find(|(k, _, _)| *k == vk)?;
+        layout_ok(vk, *ascii).then_some(*p)
+    }
+
+    /// 把 `Punct` 解析成实际上屏的文本：`Pair` 在这里翻转交替位。
+    ///
+    /// **上屏路径才有资格调它**（`insert_direct` / `commit_with` / `commit_segments`
+    /// 之前那一步）。所有调用点都在 `OnKeyDown` 里，`OnTestKeyDown` 一次都不能调。
+    fn resolve_punct(&self, p: Punct) -> &'static str {
+        match p {
+            Punct::One(s) => s,
+            Punct::Pair(l, r) => Self::next_quote(&self.quote_open, l, r),
+        }
+    }
+
+    /// 成对交替的纯逻辑：这一下该出左半还是右半。
+    ///
+    /// 抽成不碰 `self` 的纯函数是为了单测能直接构造 `Cell<bool>`——`#[implement]`
+    /// 生成的实现体在测试里不好造。
+    fn next_quote(open: &Cell<bool>, left: &'static str, right: &'static str) -> &'static str {
+        if open.get() {
+            open.set(false);
+            left
+        } else {
+            open.set(true);
+            right
+        }
     }
 
     /// 这个布局上，`vk` 按 Shift 打出来的是不是 `want`。
@@ -977,9 +1061,13 @@ impl FeiheTextService {
     /// 混在一个开关上，用户关掉它多半只是想要半角宽度，得到的却是英文标点。
     /// 现在全角开关只管宽度（见 `fullwidth_ascii_for`），这里不再看它。
     ///
-    /// 唯一的门是 Shift：Shift 组合（`?` `:` `|`）交给应用自己算，免得我们算的
-    /// 和键盘布局对不上。「没在组合态」和「正在组合态」两条路都要用，收在一处。
-    fn chinese_punct_for(vk: u8) -> Option<char> {
+    /// 唯一的门是 Shift：Shift 组合交给 `chinese_shift_punct`（那张表有自己的
+    /// 布局闸），这里只管不带 Shift 的那一排。「没在组合态」和「正在组合态」
+    /// 两条路都要用，收在一处。
+    ///
+    /// 返回 `Punct` 是给上屏路径用的——多字符的符号（破折号/省略号）和需要交替的
+    /// 引号都得靠它，`Option<char>` 表达不了。
+    fn chinese_punct_for(vk: u8) -> Option<Punct> {
         if Self::shift_down() {
             return None;
         }
@@ -1881,8 +1969,8 @@ impl FeiheTextService_Impl {
                 // 候选整列清空，用户还得退格才能继续。
                 if ch == quick::PREFIX {
                     if let Some(p) = FeiheTextService::chinese_punct_for(v) {
-                        let mut buf = [0u8; 4];
-                        self.commit_segments(p.encode_utf8(&mut buf));
+                        let punct = self.resolve_punct(p);
+                        self.commit_segments(punct);
                         return Ok(BOOL::from(true));
                     }
                     self.commit_segments("");
@@ -1924,9 +2012,8 @@ impl FeiheTextService_Impl {
             // 标点上屏是主流输入法的通行做法，也是长句的自然结束方式。
             // 全角标点自己粘上去并吞键，理由同普通组合态。
             _ => {
-                if let Some(ch) = FeiheTextService::chinese_punct_for(vk) {
-                    let mut buf = [0u8; 4];
-                    let punct = ch.encode_utf8(&mut buf);
+                if let Some(p) = FeiheTextService::chinese_punct_for(vk) {
+                    let punct = self.resolve_punct(p);
                     // 有段根本选不出字（音节不像拼音，多半是在打英文）→ 整体上屏
                     // 会拼出「面ap，」这种东西，按字母上屏才对。
                     let has_letters = self.segments.borrow().iter().any(|s| s.word.is_empty());
@@ -2741,11 +2828,11 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             }
         }
 
-        // ── 中文态 Shift+标点：`￥` `……` `——` `《》` ──────────────
+        // ── 中文态 Shift+标点：`￥` `……` `——` `《》` `！` `？` `：` `“”` ──────
         //
         // 位置紧跟在上面那条之后：同一个 Shift 分支里，字母走「大写直出」，
-        // 表里的几个标点键走中文符号（见 `SHIFT_PUNCT`），其余 Shift 组合
-        // （`?` `:` `|` `!` `@`）照旧交还应用。
+        // 表里的标点键走中文符号（见 `SHIFT_PUNCT`），其余 Shift 组合（`@` `#`
+        // `%` `&` `*` `|` `{` `}`）照旧交还应用。
         //
         // 必须自己判中文态——这条路径在下面「英文态整段交还应用」之前，英文态
         // `Shift+4` 仍然是 `$`、`Shift+-` 仍然是 `_`（ASCII 符号由键盘布局决定）。
@@ -2753,14 +2840,17 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // 三种态都要接住（分词 / 组合 / 空闲），否则「打到一半按 Shift+4」会走到
         // 数字键那条分支去选第 4 个候选、`Shift+-` 会去翻上一页——用户按的是符号，
         // 不是选词也不是翻页。
+        //
+        // `resolve_punct` 放在这里而不是查表时：只有真上屏才翻转引号交替位。
         if insert::chinese()
             && !FeiheTextService::modifiers_down()
             && FeiheTextService::shift_down()
         {
-            if let Some(text) = FeiheTextService::chinese_shift_punct(
+            if let Some(p) = FeiheTextService::chinese_shift_punct(
                 vk,
                 FeiheTextService::layout_shift_char_is,
             ) {
+                let text = self.resolve_punct(p);
                 if !self.segments.borrow().is_empty() {
                     self.commit_segments(text);
                 } else if self.is_composing() {
@@ -2829,9 +2919,9 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             }
 
             // 全角标点：自己插字，不建组合串
-            if let Some(ch) = FeiheTextService::chinese_punct_for(vk) {
-                let mut buf = [0u8; 4];
-                self.insert_direct(ch.encode_utf8(&mut buf));
+            if let Some(p) = FeiheTextService::chinese_punct_for(vk) {
+                let punct = self.resolve_punct(p);
+                self.insert_direct(punct);
                 return Ok(BOOL::from(true));
             }
             return Ok(BOOL::from(false));
@@ -2951,8 +3041,8 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                     // （`de` → `de/`），候选当场清空。
                     if ch == quick::PREFIX && !self.code.borrow().is_empty() {
                         if let Some(p) = FeiheTextService::chinese_punct_for(v) {
-                            let mut buf = [0u8; 4];
-                            self.commit_with(p.encode_utf8(&mut buf));
+                            let punct = self.resolve_punct(p);
+                            self.commit_with(punct);
                             return Ok(BOOL::from(true));
                         }
                         self.commit_current();
@@ -2998,9 +3088,9 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
             // 全角标点例外——不能把键还给应用，应用会插半角。自己粘上去，
             // 并且要吞掉这个键（返回 true），否则用户会得到「，,」两个字符。
             _ => {
-                if let Some(ch) = FeiheTextService::chinese_punct_for(vk) {
-                    let mut buf = [0u8; 4];
-                    self.commit_with(ch.encode_utf8(&mut buf));
+                if let Some(p) = FeiheTextService::chinese_punct_for(vk) {
+                    let punct = self.resolve_punct(p);
+                    self.commit_with(punct);
                     return Ok(BOOL::from(true));
                 }
                 self.commit_current();
@@ -3214,6 +3304,17 @@ mod tests {
     }
 
     use super::*;
+
+    /// 测试用：把 `Punct` 摊平成实际文本，`Pair` 取左半。
+    ///
+    /// 双引号的方向由 `next_quote` 单独测（它有状态，断言里每调一次都会翻一位），
+    /// 其余断言只关心「这个键映射到哪个符号」。
+    fn flat(p: Option<Punct>) -> Option<&'static str> {
+        match p? {
+            Punct::One(s) => Some(s),
+            Punct::Pair(l, _) => Some(l),
+        }
+    }
 
     /// 反引号已经彻底退出键位表，只有测试还要断言「它确实什么都不做」。
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_OEM_3;
@@ -3449,32 +3550,65 @@ mod tests {
 
     #[test]
     fn fullwidth_punct_only_for_unshifted_keys() {
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_COMMA.0 as u8), Some('，'));
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_PERIOD.0 as u8), Some('。'));
+        use FeiheTextService as S;
+        assert_eq!(flat(S::fullwidth_punct(VK_OEM_COMMA.0 as u8)), Some("，"));
+        assert_eq!(flat(S::fullwidth_punct(VK_OEM_PERIOD.0 as u8)), Some("。"));
         // 顿号只留 `\` 一个键（搜狗习惯）
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_5.0 as u8), Some('、'));
+        assert_eq!(flat(S::fullwidth_punct(VK_OEM_5.0 as u8)), Some("、"));
         // `/` 只在**已有编码**时当标点（编码为空时它是快捷输入引导符）；
         // 全角模式下给全角，别让用户打出一个半角斜杠夹在汉字中间
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_2.0 as u8), Some('／'));
+        assert_eq!(flat(S::fullwidth_punct(VK_OEM_2.0 as u8)), Some("／"));
         // 反引号既不是引导符也不是间隔号，原样交给应用
-        assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
+        assert_eq!(S::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
-        assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
+        assert_eq!(S::fullwidth_punct(0x41), None);
     }
 
-    /// 中文态下这几个 Shift 组合出中文符号，不是 ASCII。
+    /// 中文态下 Shift 组合出中文标点（搜狗规则），不是 ASCII。
     ///
-    /// 主流中文输入法都是这个行为，而且这几个符号在中文里**没有半角对位**
-    /// （省略号/破折号都是双字符，书名号是 U+300A/300B）。
+    /// 分两类：**没有半角对位**的（省略号/破折号是双字符、书名号 U+300A/300B）
+    /// 和**有对位**的（`！？：（）＋～`）。双引号单独测——它有状态。
     #[test]
     fn shift_combos_give_chinese_punctuation() {
         use FeiheTextService as S;
         let ok = |_vk: u8, _ascii: char| true;
-        assert_eq!(S::chinese_shift_punct(VK_4.0 as u8, ok), Some("￥"));
-        assert_eq!(S::chinese_shift_punct(VK_6.0 as u8, ok), Some("……"));
-        assert_eq!(S::chinese_shift_punct(VK_OEM_MINUS.0 as u8, ok), Some("——"));
-        assert_eq!(S::chinese_shift_punct(VK_OEM_COMMA.0 as u8, ok), Some("《"));
-        assert_eq!(S::chinese_shift_punct(VK_OEM_PERIOD.0 as u8, ok), Some("》"));
+        for (vk, want) in [
+            (VK_4.0 as u8, "￥"),
+            (VK_6.0 as u8, "……"),
+            (VK_OEM_MINUS.0 as u8, "——"),
+            (VK_OEM_COMMA.0 as u8, "《"),
+            (VK_OEM_PERIOD.0 as u8, "》"),
+            (VK_1.0 as u8, "！"),
+            (VK_9.0 as u8, "（"),
+            (VK_0.0 as u8, "）"),
+            (VK_OEM_1.0 as u8, "："),
+            (VK_OEM_2.0 as u8, "？"),
+            (VK_OEM_3.0 as u8, "～"),
+            (VK_OEM_PLUS.0 as u8, "＋"),
+        ] {
+            assert_eq!(flat(S::chinese_shift_punct(vk, ok)), Some(want), "vk=0x{vk:02x}");
+        }
+    }
+
+    /// 双引号是唯一「一个键出两个字符」的标点：交替成对，和搜狗一致。
+    ///
+    /// 交替状态必须**只在真正上屏时**翻转——`OnTestKeyDown` 也走查表逻辑，
+    /// 它要是顺手解析一次，用户每次按键都会被多翻一位，方向就反了。
+    /// 所以 `chinese_shift_punct` 只返回 `Punct::Pair`，翻转留给 `resolve_punct`。
+    #[test]
+    fn quote_pairs_alternate() {
+        use FeiheTextService as S;
+        let ok = |_vk: u8, _ascii: char| true;
+        let p = S::chinese_shift_punct(VK_OEM_7.0 as u8, ok);
+        assert_eq!(p, Some(Punct::Pair("“", "”")), "查表不该翻转状态");
+
+        let open = Cell::new(true);
+        assert_eq!(S::next_quote(&open, "“", "”"), "“");
+        assert_eq!(S::next_quote(&open, "“", "”"), "”");
+        assert_eq!(S::next_quote(&open, "“", "”"), "“", "第三次回到左引号");
+        // 奇数次要能停在右引号上收尾（用户关掉引号后不清状态，下次接左）
+        assert_eq!(S::next_quote(&open, "“", "”"), "”");
+        assert!(open.get(), "翻回左引号待命");
     }
 
     /// 表的中间那一列就是布局校验的锚点：`layout_ok` 收到的是「这个键该给的 ASCII」。
@@ -3500,22 +3634,22 @@ mod tests {
 
     /// 表外的 Shift 组合仍然交给应用。
     ///
-    /// `?` `:` `|` `!` `@` 这些在中文里没有约定俗成的对位，各输入法做法不一，
-    /// 硬猜会打出用户没按的字符。
+    /// `@` `#` `%` `&` `*` 在中文里没有对位（`@` 还要留给邮箱）；`|` `{` `}`
+    /// 在中文写作里基本只出现在代码中，换了会让中文态写代码的人吃亏——搜狗默认
+    /// 也没换。
     #[test]
     fn other_shift_combos_are_left_alone() {
         let ok = |_: u8, _: char| true;
         for vk in [
-            0x31u8,               // 1 !
-            0x33,                 // 3 #
-            0x35,                 // 5 %
-            0x39,                 // 9 (
-            VK_OEM_2.0 as u8,     // / → ?
-            VK_OEM_1.0 as u8,     // ; → :
-            VK_OEM_5.0 as u8,     // \ → |
-            VK_OEM_4.0 as u8,     // [ → {
-            VK_OEM_7.0 as u8,     // ' → "
-            0x41,                 // A（大写走 shifted_letter）
+            0x32u8,           // 2 @
+            0x33,             // 3 #
+            0x35,             // 5 %
+            0x37,             // 7 &
+            0x38,             // 8 *
+            VK_OEM_5.0 as u8, // \ → |
+            VK_OEM_4.0 as u8, // [ → {
+            VK_OEM_6.0 as u8, // ] → }
+            0x41,             // A（大写走 shifted_letter）
         ] {
             assert_eq!(
                 FeiheTextService::chinese_shift_punct(vk, ok),
@@ -3569,11 +3703,12 @@ mod tests {
         use FeiheTextService as S;
         // 句号：英文全角「．」(FF0E) ≠ 中文「。」(3002)
         assert_eq!(S::fullwidth_ascii(VK_OEM_PERIOD.0 as u8), Some('．'));
-        assert_ne!(S::fullwidth_ascii(VK_OEM_PERIOD.0 as u8), S::fullwidth_punct(VK_OEM_PERIOD.0 as u8));
+        assert_eq!(flat(S::fullwidth_punct(VK_OEM_PERIOD.0 as u8)), Some("。"));
         // 逗号共用「，」；分号引号括号斜杠都是全角形式
         assert_eq!(S::fullwidth_ascii(VK_OEM_COMMA.0 as u8), Some('，'));
         assert_eq!(S::fullwidth_ascii(VK_OEM_1.0 as u8), Some('；'));
         assert_eq!(S::fullwidth_ascii(VK_OEM_7.0 as u8), Some('＇'));
+        assert_eq!(S::fullwidth_punct(VK_OEM_7.0 as u8), Some(Punct::One("’")), "中文态是弯引号");
         assert_eq!(S::fullwidth_ascii(VK_OEM_2.0 as u8), Some('／'));
         assert_eq!(S::fullwidth_ascii(VK_OEM_4.0 as u8), Some('［'));
         assert_eq!(S::fullwidth_ascii(VK_OEM_6.0 as u8), Some('］'));
