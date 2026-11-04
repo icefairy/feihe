@@ -145,6 +145,15 @@ pub struct Config {
     pub traditional: bool,
     /// 动态词频（按用户实际选词重排候选）。见 `freq` 模块。
     pub learn: bool,
+    /// 上屏后的**联想**：打完一个词，把「下一个常用词」摆出来。见 `next` 模块。
+    ///
+    /// 默认开，但它只在「刚上屏一个纯汉字词」时出现，按任意键就消失，不占任何
+    /// 键位——代价只是偶尔多看一眼。数据完全来自用户自己打过的词对，没有内置
+    /// 语料，所以装完是空的，打几百个词之后才开始有用。
+    ///
+    /// 关掉的人多半是「候选窗一闪很烦」：那类用户通常也把 `popup` 设成 `never`，
+    /// 两条路都能到同一个结果。
+    pub suggest: bool,
     /// 候选窗 / 状态浮窗何时不弹，见 `PopupMode`。
     pub popup: PopupMode,
     /// 候选窗里给易错词标注带调读音（`重庆 chóng qìng`）。见 `hint` 模块。
@@ -198,6 +207,8 @@ impl Config {
         traditional: false,
         // 默认开：输入法本来就该越用越顺手。不想要的人在设置里关掉即可。
         learn: true,
+        // 默认开：联想只在刚上屏一个词时出现，按任意键就消失。
+        suggest: true,
         // 默认自动：全屏游戏 / 演示时收起候选窗，其余时候正常弹。
         popup: PopupMode::Auto,
         // 默认开：易错词的读音该让人看见，不然「重」到底读 chóng 还是 zhòng
@@ -334,6 +345,20 @@ pub fn set_pinyin_mode(on: bool) {
     update(|c| c.pinyin_mode = on);
 }
 
+/// 测试专用：`pinyin_mode` 是**进程级**全局量，而 `cargo test` 默认多线程并行。
+///
+/// 一条测试把它切成全拼、另一条正在用双拼码查词，两条会一起红——而且是「有时红
+/// 有时绿」，最难查的那种。所有改动它、以及**依赖它**的测试都先拿这把锁，
+/// 把「设置 → 使用 → 恢复」这一段串起来。
+///
+/// （为什么不做成线程局部：生产路径里 `pinyin_mode` 本来就该是整个输入法进程
+/// 一份状态，改语义去迁就测试是把被测对象改坏。）
+#[cfg(test)]
+pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn dir() -> PathBuf {
     DATA_DIR.get_or_init(resolve_dir).clone()
 }
@@ -433,7 +458,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 10;
+const CONFIG_VER: u32 = 11;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -486,6 +511,10 @@ pub fn load() -> Config {
         cfg.chinese = true;
     }
 
+    // v10 → v11：新增 `suggest`（上屏后联想）。缺省 true，不需要迁移动作——
+    // 它只是「上屏后多一个候选窗」，不改变任何既有按键的行为；不想要的人在
+    // 设置窗勾掉即可。`parse` 对缺失的键已经给了默认值，这里只留一条记录。
+
     // 原子镜像必须在锁外同步：`pinyin_mode()` / `no_popup()` 是热路径，读的是原子量
     sync_mirrors(&cfg);
     if let Ok(mut g) = CFG.lock() {
@@ -531,6 +560,7 @@ fn parse(text: &str) -> (Config, u32) {
             "pinyin_mode" => cfg.pinyin_mode = parse_bool(v),
             "traditional" => cfg.traditional = parse_bool(v),
             "learn" => cfg.learn = parse_bool(v),
+            "suggest" => cfg.suggest = parse_bool(v),
             "popup" => cfg.popup = PopupMode::from_key(v),
             "reading" => cfg.reading = parse_bool(v),
             "assist_direct" => cfg.assist_direct = parse_bool(v),
@@ -650,6 +680,7 @@ fn render(cfg: &Config) -> String {
          pinyin_mode={}\n\
          traditional={}\n\
          learn={}\n\
+         suggest={}\n\
          popup={}\n\
          reading={}\n\
          assist_direct={}\n\
@@ -666,6 +697,7 @@ fn render(cfg: &Config) -> String {
         cfg.pinyin_mode as u8,
         cfg.traditional as u8,
         cfg.learn as u8,
+        cfg.suggest as u8,
         cfg.popup.key(),
         cfg.reading as u8,
         cfg.assist_direct as u8,

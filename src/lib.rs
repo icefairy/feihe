@@ -24,6 +24,7 @@ mod fullscreen;
 mod fuzzy;
 mod hint;
 mod insert;
+mod next;
 mod number;
 mod phrase;
 mod pin;

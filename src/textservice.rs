@@ -178,6 +178,18 @@ pub struct FeiheTextService {
     /// 状态跟着 TextService 实例走（每个线程一份），跨应用、跨组合串都连续；
     /// 不随输入结束重置——引号本来就跨句使用（`他说：“……”` 再 `“……”`）。
     quote_open: Cell<bool>,
+    /// 上一次上屏的**汉字词**（联想用的「上一个词」）。
+    ///
+    /// 只在「上屏文本以汉字开头」时更新：标点、字母串、数字都不动它。这样
+    /// 「他说：」里的冒号不会把配对链打断，下一个词仍然和「他说」配对。
+    /// 用户切到别的应用打了字，我们不知道——链会在下一次回到本应用时接上，
+    /// 这是「本地词对表」的固有局限，比读前文划算。
+    last_word: RefCell<Option<String>>,
+    /// 候选窗里现在显示的是**联想词**，不是某个编码的候选。
+    ///
+    /// 有它才能把同一个 `candidates` 列表当成两种东西用：联想态下 `code` 是空的、
+    /// `is_composing()` 为假，数字键和鼠标点击要走另一条路（`pick_suggestion`）。
+    suggesting: Cell<bool>,
     /// 分词模式的段列表。空 Vec 表示不在分词模式。
     segments: RefCell<Vec<Segment>>,
     /// 分词模式下光标落在第几段
@@ -222,6 +234,8 @@ impl FeiheTextService {
             pending_op: RefCell::new(None),
             shift_used: Cell::new(false),
             quote_open: Cell::new(true),
+            last_word: RefCell::new(None),
+            suggesting: Cell::new(false),
             segments: RefCell::new(Vec::new()),
             seg_idx: Cell::new(0),
             ui_less: Cell::new(false),
@@ -248,6 +262,7 @@ impl FeiheTextService {
         self.page.set(0);
         self.expanded.set(false);
         self.pending_op.borrow_mut().take();
+        self.suggesting.set(false);
         self.hide_candidates();
     }
 
@@ -1491,6 +1506,33 @@ impl FeiheTextService_Impl {
             .replace(EditOp::Commit(text.to_string()));
         self.request_edit_session();
         self.clear_state();
+        // 必须在 `clear_state()` **之后**：它会清掉 `candidates` 并收窗，
+        // 联想要在那之后再摆出来，否则刚设置就被清空。
+        self.after_commit(text);
+    }
+
+    /// 选中第 `idx` 个联想词：上屏它，并且**不再往下联想**。
+    ///
+    /// 连续联想（选完再给下一个）在搜狗里是可配的，默认只跳一次。这里跟默认走：
+    /// 一直追着给词会让人怀疑输入法在替自己写句子，而且一跳一跳地打断打字节奏。
+    ///
+    /// 放在 `_Impl` 里是因为要 `request_edit_session()`——那个方法在实现体上，
+    /// `FeiheTextService` 那一侧调不到。
+    fn pick_suggestion(&self, idx: usize) {
+        let Some(word) = self.candidates.borrow().get(idx).map(|s| s.to_string()) else {
+            self.dismiss_suggestion();
+            return;
+        };
+        self.suggesting.set(false);
+        self.candidates.borrow_mut().clear();
+        self.hide_candidates();
+        // 用户选了联想词 = 又产生了一对（上一个词, 这个词），要学
+        if let Some(prev) = self.last_word.borrow().clone() {
+            crate::next::record(&prev, &word);
+        }
+        self.last_word.borrow_mut().replace(word.clone());
+        self.pending_op.borrow_mut().replace(EditOp::Insert(word));
+        self.request_edit_session();
     }
 
     /// 提交当前候选，并在后面粘上一段文本（通常是全角标点）。
@@ -1512,9 +1554,12 @@ impl FeiheTextService_Impl {
         }
         let mut text = word;
         text.push_str(suffix);
-        self.pending_op.borrow_mut().replace(EditOp::Commit(text));
+        self.pending_op
+            .borrow_mut()
+            .replace(EditOp::Commit(text.clone()));
         self.request_edit_session();
         self.clear_state();
+        self.after_commit(&text);
     }
 
     /// 回车：把已经敲进去的编码原样上屏。
@@ -1839,9 +1884,12 @@ impl FeiheTextService_Impl {
             self.cancel();
             return;
         }
-        self.pending_op.borrow_mut().replace(EditOp::Commit(text));
+        self.pending_op
+            .borrow_mut()
+            .replace(EditOp::Commit(text.clone()));
         self.request_edit_session();
         self.clear_state();
+        self.after_commit(&text);
     }
 
     /// 退出分词模式，并退掉编码末尾的一个音节。
@@ -2236,6 +2284,11 @@ impl FeiheTextService_Impl {
     /// 不应该有第二套语义。多行摊开后每一行属于不同的页，所以窗口传过来的必须是
     /// 全表下标（`candidate::hit` 已经按行换算好了），不能再加 `page` 偏移。
     fn on_candidate_click(&self, index: usize) {
+        // 联想窗：点哪条就上屏哪条，和按数字键同一个出口
+        if self.suggesting.get() {
+            self.pick_suggestion(index);
+            return;
+        }
         // 窗口可能还挂在屏幕上，但组合态已经结束（宿主刚提交、或按了 Esc）
         if !self.is_composing() {
             return;
@@ -2388,16 +2441,83 @@ impl FeiheTextService {
         );
     }
 
-    /// 记住光标屏幕位置并刷新候选窗
-    fn remember_caret(&self, context: &ITfContext, ec: u32, range: &ITfRange) {
+    /// 只记光标屏幕位置，不刷候选窗。
+    ///
+    /// 上屏动作（`EditOp::Commit`）之后要用它：那时 `candidates` 已经不该再显示了，
+    /// 但联想窗要贴着新的光标位置弹。走 `remember_caret` 会顺手把**旧候选**
+    /// 再画一遍（它调用时 `clear_state` 还没执行），屏幕会闪一下。
+    fn store_caret(&self, context: &ITfContext, ec: u32, range: &ITfRange) {
         if let Some(rc) = unsafe { caret_screen_rect(context, ec, range) } {
             self.caret_x.set(rc.left);
             self.caret_y.set(rc.bottom);
-            // 状态浮窗的「跟随光标」模式靠这个位置
             statusbar::set_caret(rc.left, rc.bottom);
-        } else {
         }
+    }
+
+    /// 记住光标屏幕位置并刷新候选窗
+    fn remember_caret(&self, context: &ITfContext, ec: u32, range: &ITfRange) {
+        self.store_caret(context, ec, range);
         self.show_candidates();
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // 联想（`next` 模块）
+    // ─────────────────────────────────────────────────────────
+
+    /// 上屏之后：记词对，决定要不要给联想。
+    ///
+    /// **三个前提缺一不可**：上屏文本以汉字开头（否则不是词）、整段只有这个词
+    /// （带标点说明句子结束了，此时联想「下一个词」没意义）、配置里开着联想。
+    fn after_commit(&self, text: &str) {
+        let word = crate::next::leading_word(text);
+        if word.is_empty() {
+            return;
+        }
+        if let Some(prev) = self.last_word.borrow().clone() {
+            crate::next::record(&prev, word);
+        }
+        self.last_word.borrow_mut().replace(word.to_string());
+        // 带标点的那次上屏是「句子」的结束，不是「词」的结束：`你好，` 之后
+        // 联想「你好」的后续词，用户已经在写下一句了，摆出来只会碍事。
+        if word.len() != text.len() {
+            return;
+        }
+        self.show_suggestion(word);
+    }
+
+    /// 把联想候选摆出来。空表、关配置、不弹窗模式都直接返回。
+    ///
+    /// 走的是同一个 `candidates` 列表和同一个候选窗——联想不是第二种窗口，
+    /// 它只是「没有编码时的候选」。这样翻页、鼠标点击、`no_popup` 那套闸门
+    /// 全都不用重写一遍。
+    fn show_suggestion(&self, word: &str) {
+        if !config::get().suggest || config::no_popup() {
+            return;
+        }
+        let list = crate::next::suggest(word, crate::next::SHOW);
+        if list.is_empty() {
+            return;
+        }
+        let items: Vec<Cow<'static, str>> = list.into_iter().map(Cow::Owned).collect();
+        self.candidates.borrow_mut().clone_from(&items);
+        self.selected.set(0);
+        self.page.set(0);
+        self.expanded.set(false);
+        self.suggesting.set(true);
+        self.show_candidates();
+    }
+
+    /// 收掉联想窗（不动输入状态——联想态本来就没有输入状态）。
+    fn dismiss_suggestion(&self) {
+        if !self.suggesting.get() {
+            return;
+        }
+        self.suggesting.set(false);
+        self.candidates.borrow_mut().clear();
+        self.selected.set(0);
+        self.page.set(0);
+        self.expanded.set(false);
+        self.hide_candidates();
     }
 
 }
@@ -2490,6 +2610,10 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
 
         // 降权表同理：手改或删掉 `demoted.txt` 之后要能看到变化。
         crate::demote::refresh();
+
+        // 联想词对也是别的进程在写（Word 里打的对，浏览器也该看得见）。
+        // 另外「删掉 next.txt 即清空」靠的就是这里——重读一遍表就空了。
+        crate::next::refresh();
 
         // 自动检测「是不是全屏」的结果也丢掉重问：用户刚从全屏游戏 Alt+Tab 回来，
         // 不该还要等缓存过期才看得见候选窗。
@@ -2679,6 +2803,17 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         if FeiheTextService::modifiers_down() {
             return Ok(BOOL::from(false));
         }
+        // 联想态（刚上屏幕上一个词）：**所有键都认下来**，包括英文态下的键。
+        //
+        // 联想窗是自动弹出来的，收场必须覆盖每一个出口。这里不认，经典宿主就不派发
+        // `OnKeyDown`，那些「我们本来不处理」的键（`Ctrl`、`Alt`、切中英的 Shift）
+        // 永远到不了收窗那条路——窗口会一直挂着，切窗口也不一定触得掉（候选窗不抢
+        // 焦点，`WM_KILLFOCUS` 未必发）。
+        //
+        // 放在英文态判断**之前**：英文态那段直接返回 FALSE，联想窗就再也收不掉了。
+        if self.suggesting.get() {
+            return Ok(BOOL::from(true));
+        }
         // 英文态：默认一个键都不吃，全部交给应用。
         // 这一步不能省——宿主不会替我们挡住按键（见 insert::CHINESE 的注释）。
         // 全角开关开着时例外：标点键要接过来换成全角形式（占一个汉字宽），
@@ -2762,6 +2897,35 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 }
                 self.hide_candidates();
                 return Ok(BOOL::from(false));
+            }
+        }
+
+        // ── 联想窗：**任何键都先经过这里** ──────────────────────────
+        //
+        // 位置在所有分支之前（包括 Shift / 修饰键 / 英文态），因为联想窗是「自动
+        // 弹出来的」，它的收场必须覆盖每一个出口：
+        //
+        // - 数字键（中文态、无修饰键）→ 选第 n 个联想词
+        // - 其余一切（字母 / 标点 / Shift / Ctrl / 方向键）→ 先收掉联想，再照常往下走
+        //
+        // 空格也走「收掉」这条，故意**不**选第一个联想词：联想是自动弹的，用户下一
+        // 个动作很可能是打空格，劫持它等于每打完一个词都要防着。想选有数字键和鼠标。
+        //
+        // 放在 `!insert::chinese()` 之前是必须的：英文态下那段会直接 return，
+        // 联想窗就再也收不掉了（切到英文后按任何键它都挂着）。
+        if self.suggesting.get() {
+            if insert::chinese()
+                && !FeiheTextService::modifiers_down()
+                && (0x31..=0x39).contains(&vk)
+            {
+                let idx = self.page.get() * candidate::PAGE_SIZE + (vk - 0x30) as usize - 1;
+                self.pick_suggestion(idx);
+                return Ok(BOOL::from(true));
+            }
+            self.dismiss_suggestion();
+            if vk == 0x1B {
+                // Esc 只收联想，不往下走（否则会顺手取消一个已经不存在的组合串）
+                return Ok(BOOL::from(true));
             }
         }
 
@@ -3202,6 +3366,10 @@ impl FeiheTextService_Impl {
                         r.SetText(ec, 0, &to_utf16(&text))?;
                         r.Collapse(ec, TF_ANCHOR_END)?;
                         put_caret(&context, ec, &r);
+                        // 上屏后光标右移了：联想窗要贴新位置，不能贴旧位置
+                        // （贴旧位置会盖住刚打出来的字）。必须在 EndComposition
+                        // 之前取——那之后这个 range 就失效了。
+                        self.store_caret(&context, ec, &r);
                         let _ = comp.EndComposition(ec);
                     } else {
                     }
@@ -3217,6 +3385,9 @@ impl FeiheTextService_Impl {
                     range.SetText(ec, 0, &to_utf16(&text))?;
                     range.Collapse(ec, TF_ANCHOR_END)?;
                     put_caret(&context, ec, &range);
+                    // 标点插进去之后光标也动了：下一次联想（以及状态浮窗跟随）
+                    // 用的是这个新位置。
+                    self.store_caret(&context, ec, &range);
                 }
                 EditOp::Cancel => {
                     let comp = self.composition.borrow_mut().take();
@@ -3498,6 +3669,7 @@ mod tests {
     /// 「璇玑」是整词，不该逼用户去逐个选字。`extra_dict.txt` 里补了它。
     #[test]
     fn xuanji_is_a_whole_word() {
+        let _g = crate::config::test_guard();
         // 码由 `encode_pinyin` 生成，不手写（手写双拼码太容易错）
         let code = shuangpin::encode_pinyin(Scheme::Xiaohe, "xuan ji").expect("xuan ji");
         assert!(
@@ -3534,6 +3706,7 @@ mod tests {
 
     #[test]
     fn code_allowed_rejects_control_chars() {
+        let _g = crate::config::test_guard();
         let _g = lock();
         config::set_pinyin_mode(false);
         // 组合串只允许编码字符：Ctrl / 退格漏进来时必须被拒
@@ -4009,6 +4182,7 @@ mod tests {
 
     #[test]
     fn merge_segments_keeps_empty_segment_visible() {
+        let _g = crate::config::test_guard();
         let _g = lock();
         config::set_pinyin_mode(false);
         dict::set_scheme(Scheme::Xiaohe);
@@ -4399,6 +4573,7 @@ mod tests {
 
     #[test]
     fn can_insert_sep_guards() {
+        let _g = crate::config::test_guard();
         let _g = lock();
         config::set_pinyin_mode(false);
         dict::set_scheme(Scheme::Xiaohe);
@@ -4417,6 +4592,7 @@ mod tests {
 
     #[test]
     fn brief_alt_only_for_single_letter_in_shuangpin() {
+        let _g = crate::config::test_guard();
         let _g = lock();
         dict::set_scheme(Scheme::Xiaohe);
         config::set_pinyin_mode(false);
@@ -4432,6 +4608,7 @@ mod tests {
 
     #[test]
     fn split_segments_real_dict() {
+        let _g = crate::config::test_guard();
         let _g = lock();
         dict::set_scheme(Scheme::Xiaohe);
         config::set_pinyin_mode(false);
@@ -4777,6 +4954,7 @@ mod tests {
     /// 当场不成立。词库内容不是代码契约，不该拿来断言。
     #[test]
     fn unknown_four_char_word_folds_back_then_segments() {
+        let _g = crate::config::test_guard();
         let mode = AssistMode::Xiaohe;
 
         // 第 3 键被自动拆开：`lm` + `h` 在假词库里命中

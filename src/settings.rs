@@ -102,6 +102,9 @@ const ID_PIN_RESET: i32 = 144;
 /// 降权（`Ctrl`+左键点候选）
 const ID_DEMOTE_HINT: i32 = 173;
 const ID_DEMOTE_RESET: i32 = 174;
+const ID_SUGGEST: i32 = 146;
+const ID_SUGGEST_HINT: i32 = 176;
+const ID_SUGGEST_RESET: i32 = 175;
 const ID_DATA_DIR: i32 = 145;
 const ID_IMPORT: i32 = 151;
 const ID_EXPORT: i32 = 152;
@@ -319,6 +322,17 @@ unsafe fn sync(h: HWND) {
         set_checked(h, ID_FUZZY_FIRST + i as i32, cfg.fuzzy.is_on(name));
     }
     set_checked(h, ID_LEARN, cfg.learn);
+    set_checked(h, ID_SUGGEST, cfg.suggest);
+    // 「联想」的数据量级和「置顶/降权」一样小，直接把条数写出来，
+    // 用户能判断它到底学没学到东西（装机第一天必然是 0）。
+    set_text(
+        h,
+        ID_SUGGEST_HINT,
+        &format!(
+            "已记 {} 个词对 · 数据来自你自己的输入",
+            crate::next::count()
+        ),
+    );
     if let Ok(cb) = GetDlgItem(Some(h), ID_ROWS) {
         let idx = config::clamp_rows(cfg.candidate_rows) - config::ROWS_MIN;
         SendMessageW(cb, CB_SETCURSEL, Some(WPARAM(idx)), None);
@@ -519,6 +533,18 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_PIN_RESET => {
             let n = crate::pin::clear();
             set_text(h, ID_PIN_HINT, &format!("已取消 {n} 个编码的置顶"));
+            return;
+        }
+        ID_SUGGEST => {
+            let on = checked(GetDlgItem(Some(h), ID_SUGGEST).unwrap_or_default());
+            config::update(|c| c.suggest = on);
+            // 关掉之后表还在，只是不再显示——重新打开时立刻就有词，不用重新学。
+            // 想真清空是右边那个「清空」按钮的事，两件事分开。
+        }
+        ID_SUGGEST_RESET => {
+            let n = crate::next::count();
+            crate::next::clear();
+            set_text(h, ID_SUGGEST_HINT, &format!("已清空 {n} 个词对"));
             return;
         }
         ID_DEMOTE_RESET => {
@@ -1010,6 +1036,14 @@ unsafe fn build(h: HWND) {
     push(h, "重置", 320, y - 5, 70, 26, ID_LEARN_RESET);
     y += 26;
     label(h, "", 16, y, 428, ID_LEARN_HINT);
+
+    // 联想：同样是「越用越顺手」，紧跟在调频下面。
+    // 文案留白要够：勾选框宽 300，右边的「清空」占 320..390，压上去就点错了。
+    y += 26;
+    check(h, "上屏后联想下一个词", 16, y - 2, 300, ID_SUGGEST);
+    push(h, "清空", 320, y - 5, 70, 26, ID_SUGGEST_RESET);
+    y += 26;
+    label(h, "", 16, y, 428, ID_SUGGEST_HINT);
 
     // 置顶：和一简字一样属于「候选顺序」这件事，紧跟在动态调频下面
     y += 26;
