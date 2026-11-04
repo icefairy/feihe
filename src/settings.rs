@@ -99,6 +99,9 @@ const ID_STATS: i32 = 141;
 const ID_NOTE: i32 = 142;
 const ID_PIN_HINT: i32 = 143;
 const ID_PIN_RESET: i32 = 144;
+/// 降权（`Ctrl`+左键点候选）
+const ID_DEMOTE_HINT: i32 = 173;
+const ID_DEMOTE_RESET: i32 = 174;
 const ID_DATA_DIR: i32 = 145;
 const ID_IMPORT: i32 = 151;
 const ID_EXPORT: i32 = 152;
@@ -340,18 +343,27 @@ unsafe fn sync(h: HWND) {
     // 条目少的时候直接把「码→词」列出来，用户不用去翻文件
     let pinned = crate::pin::list();
     let pin_text = match pinned.len() {
-        0 => "置顶：无 · Ctrl+数字 置顶当前候选".to_string(),
+        0 => "置顶：无 · 右键点候选 或 Ctrl+数字".to_string(),
         n if n <= 2 => format!(
-            "置顶 {} · Ctrl+数字 切换",
+            "置顶 {} · 右键点候选切换",
             pinned
                 .iter()
                 .map(|(c, w)| format!("{c}→{w}"))
                 .collect::<Vec<_>>()
                 .join(" · ")
         ),
-        n => format!("置顶 {n} 个编码 · Ctrl+数字 切换"),
+        n => format!("置顶 {n} 个编码 · 右键点候选切换"),
     };
     set_text(h, ID_PIN_HINT, &pin_text);
+
+    // 降权是「把一个词按下去」，和置顶（拉一个上来）是一对，紧跟在它下面。
+    // 入口写在文案里——这个功能不占快捷键，用户没法自己摸出来。
+    let demoted = crate::demote::count();
+    set_text(
+        h,
+        ID_DEMOTE_HINT,
+        &format!("降权 {demoted} 条 · Ctrl+左键点候选"),
+    );
 
     // 全拼模式下「双拼方案」没有意义，灰掉而不是隐藏——隐藏会让窗口内容跳动
     for id in [ID_SCHEME_XH, ID_SCHEME_MS] {
@@ -507,6 +519,11 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_PIN_RESET => {
             let n = crate::pin::clear();
             set_text(h, ID_PIN_HINT, &format!("已取消 {n} 个编码的置顶"));
+            return;
+        }
+        ID_DEMOTE_RESET => {
+            let n = crate::demote::clear();
+            set_text(h, ID_DEMOTE_HINT, &format!("已恢复 {n} 条被降权的候选"));
             return;
         }
         ID_IMPORT => {
@@ -998,6 +1015,12 @@ unsafe fn build(h: HWND) {
     y += 26;
     label(h, "", 16, y, 300, ID_PIN_HINT);
     push(h, "清空", 320, y - 5, 70, 26, ID_PIN_RESET);
+
+    // 降权：置顶的反面（把一个词按下去），成对出现用户才好理解。
+    // 间距必须 >= 26：两个「清空」按钮在同一列，26px 高，压到 24 就会叠 2px。
+    y += 26;
+    label(h, "", 16, y, 300, ID_DEMOTE_HINT);
+    push(h, "清空", 320, y - 5, 70, 26, ID_DEMOTE_RESET);
 
     y += 40;
     label(h, "", 16, y, 428, ID_STATS);

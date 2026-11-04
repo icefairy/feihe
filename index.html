@@ -284,6 +284,7 @@
           <tr><td>易错词读音标注</td><td class="yes">候选里直接带调（重庆 chóng qìng）</td><td class="no">无</td><td class="no">无</td></tr>
           <tr><td>模糊音</td><td class="yes">9 条规则，默认关</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>拼写纠错</td><td class="yes">零候选时一键猜回来</td><td class="yes">有</td><td class="half">有</td></tr>
+          <tr><td>候选个性化</td><td class="yes">右键置顶 / Ctrl+左键降权</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>语音输入</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>云同步 / 云词库</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>候选窗点击选词</td><td class="yes">有</td><td class="yes">有</td><td class="yes">有</td></tr>
@@ -364,7 +365,8 @@
       <div class="card">
         <h3>全角标点跟手</h3>
         <p><code>\</code> 或 <code>/</code> 出顿号（搜狗 / 微软两种习惯都照顾），
-          <code>Shift+\</code> 出 <code>|</code>。组合态按标点不会出现「，,」两个字符。
+          <code>Shift+\</code> 出 <code>|</code>，<code>Shift+4</code> 在中文态出 <code>￥</code>。
+          组合态按标点不会出现「，,」两个字符。
           全角 / 半角点浮窗上那个小按钮切（不占快捷键），鼠标停上去有提示。</p>
       </div>
       <div class="card">
@@ -605,7 +607,7 @@ rustup target add i686-pc-windows-gnullvm
     </div>
     <p class="sub" style="margin-top:26px">
       已经能用的：小鹤 + 微软双拼、自然码辅助码 + 小鹤音形（形码用官方码表，Tab 进入；可选「3 键直出」让 <code>ddj</code> 免 Tab 出「带」）、智能分词选词（退格可拆词、整串唯一候选时退格直接进逐字）、
-      候选窗鼠标点选、一级简码（<code>d</code> 出「的」，次选 <code>d;</code> 出「打」）、二级简码（<code>nd</code> 出「难道」，370 条两键词）、手动置顶（<code>Ctrl</code>+数字，或右键点候选——多页签程序里 <code>Ctrl+1..9</code> 被抢走时用这个）、
+      候选窗鼠标点选、一级简码（<code>d</code> 出「的」，次选 <code>d;</code> 出「打」）、二级简码（<code>nd</code> 出「难道」，370 条两键词）、手动置顶（<code>Ctrl</code>+数字，或右键点候选——多页签程序里 <code>Ctrl+1..9</code> 被抢走时用这个）、手动降权（<code>Ctrl</code>+左键点候选，把它沉到最后）、
       全屏游戏 UILess（候选交给游戏自绘）、全屏时只收浮窗、候选窗照弹（只有投影 / 演示才收）、
       易错词读音标注 + 错音容错（<code>zhongqing</code> 也能打出「重庆 chóng qìng」）、
       快捷输入（日期 / 时间 / 农历 / 干支四柱 / 下一个节气 / 剪贴板反查 / 算式与金额大写 / 码点与 UUID）、

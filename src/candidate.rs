@@ -21,6 +21,9 @@
 //! （`Ctrl+1..9` 切页签），所以置顶必须有一个只用鼠标的入口。右键不做菜单，
 //! 直接切换置顶状态——再右击一次就取消，和 `Ctrl`+数字 的语义一致。
 //!
+//! **`Ctrl`+左键**走第三条：降权（把这个词压到候选最后，但不删）。左键是选词、
+//! 右键是置顶，都占了，而降权又值得有一个鼠标入口——见 `demote` 的模块注释。
+//!
 //! 命中区**必须和绘制用同一份几何**（`layout()`），否则会出现「看着点到了、
 //! 实际没中」这种最难查的偏差。
 
@@ -38,6 +41,12 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::config;
 
 const CLASS_NAME: PCWSTR = w!("FeiheCandidateWindow");
+
+/// 鼠标消息 `wParam` 里的「Ctrl 正被按住」标志。
+///
+/// windows-rs 0.62 没导出 `MK_CONTROL`（和 `SS_NOTIFY` 一样，只有头文件里有），
+/// 写字面值。这个值从 Win32 定义至今没变过。
+const MK_CONTROL: usize = 0x0008;
 
 const PAD: i32 = 10;
 const GAP: i32 = 16;
@@ -111,6 +120,8 @@ struct Handler {
 static ON_CLICK: Mutex<Option<Handler>> = Mutex::new(None);
 /// 右键：切换该候选的置顶状态（不提交）
 static ON_RIGHT: Mutex<Option<Handler>> = Mutex::new(None);
+/// `Ctrl`+左键：切换该候选的降权状态（不提交）
+static ON_DEMOTE: Mutex<Option<Handler>> = Mutex::new(None);
 
 /// 注册「第 N 个候选被点击」的回调。
 ///
@@ -156,6 +167,30 @@ pub fn clear_right_click_handler() {
     *g = None;
 }
 
+/// 注册「`Ctrl`+左键点了第 N 个候选」的回调。语义同 `set_click_handler`。
+///
+/// 为什么不是右键：右键已经是置顶。为什么不是又开一个全局快捷键：降权是低频动作，
+/// 为它占一个全局组合键会和别的软件抢键（项目里刚因为同样的理由去掉过全角切换的
+/// 快捷键）。`Ctrl`+左键是鼠标手势，不占任何键位。
+pub fn set_demote_click_handler(id: usize, make: impl FnOnce() -> ClickFn) {
+    let mut g = match ON_DEMOTE.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    if g.as_ref().is_some_and(|h| h.id == id) {
+        return;
+    }
+    *g = Some(Handler { id, f: make() });
+}
+
+pub fn clear_demote_click_handler() {
+    let mut g = match ON_DEMOTE.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    *g = None;
+}
+
 /// 调用回调。**不能持锁调用**：回调会走 edit session，而 edit session 里可能
 /// 又调 `show()` → `set_click_handler()`，持锁就成了自己等自己。
 fn invoke_click(index: usize) {
@@ -171,6 +206,17 @@ fn invoke_click(index: usize) {
 /// 同 `invoke_click`，走右键那个槽位
 fn invoke_right(index: usize) {
     let f = match ON_RIGHT.lock() {
+        Ok(g) => g.as_ref().map(|h| h.f.clone()),
+        Err(e) => e.into_inner().as_ref().map(|h| h.f.clone()),
+    };
+    if let Some(f) = f {
+        f(index);
+    }
+}
+
+/// 同 `invoke_click`，走 `Ctrl`+左键那个槽位
+fn invoke_demote(index: usize) {
+    let f = match ON_DEMOTE.lock() {
         Ok(g) => g.as_ref().map(|h| h.f.clone()),
         Err(e) => e.into_inner().as_ref().map(|h| h.f.clone()),
     };
@@ -296,8 +342,7 @@ unsafe fn ensure_window() -> HWND {
     hwnd
 }
 
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-    match msg {
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {    match msg {
         WM_PAINT => {
             paint(hwnd);
             LRESULT(0)
@@ -345,7 +390,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             let _ = ReleaseCapture();
             // 锁已释放，这里才回调
             if let Some(i) = target {
-                invoke_click(i);
+                // `Ctrl`+左键 = 降权，普通左键 = 选词。
+                //
+                // 用消息自带的 `wParam` 键状态，而不是现在去问 `GetKeyState`：
+                // 前者是**事件发生那一刻**的状态。用户点完立刻松开 Ctrl，问
+                // `GetKeyState` 就会把这次点击当成普通左键——把词上了屏，
+                // 而他按的是降权。
+                //
+                // `MK_CONTROL`（0x0008）在 windows-rs 0.62 里没导出（和 `SS_NOTIFY`
+                // 一样），只能写字面值。
+                if w.0 & MK_CONTROL != 0 {
+                    invoke_demote(i);
+                } else {
+                    invoke_click(i);
+                }
             }
             LRESULT(0)
         }
@@ -662,6 +720,7 @@ pub fn hide() {
 pub fn destroy() {
     clear_click_handler();
     clear_right_click_handler();
+    clear_demote_click_handler();
     let raw = WND.swap(0, Ordering::AcqRel);
     if raw == 0 {
         return;
@@ -750,6 +809,7 @@ mod tests {
         hide();
         clear_click_handler();
         clear_right_click_handler();
+        clear_demote_click_handler();
     }
 
     /// 命中区是左闭右开；边界落在右端点时属于下一项，这是「不留 1px 重叠」的约定。

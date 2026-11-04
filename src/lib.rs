@@ -11,6 +11,7 @@ mod clsid;
 mod config;
 mod correct;
 mod custom;
+mod demote;
 mod dict;
 mod dictbin;
 mod dictenc;

@@ -26,8 +26,9 @@ use crate::uielement;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_1, VK_OEM_2, VK_OEM_4, VK_OEM_5,
-    VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RWIN, VK_SHIFT,
+    GetKeyState, GetKeyboardLayout, VkKeyScanExW, VK_4, VK_CONTROL, VK_LWIN, VK_MENU, VK_OEM_1,
+    VK_OEM_2, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD,
+    VK_OEM_PLUS, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::TextServices::*;
 use windows_core::{implement, IUnknownImpl};
@@ -909,6 +910,55 @@ impl FeiheTextService {
             _ => return None,
         };
         Some(ch)
+    }
+
+    /// 中文态下 `Shift+4` 该出的字符：`￥`（U+FFE5，全角人民币符号）。
+    ///
+    /// 搜狗、微软拼音、QQ 输入法在中文态都是这么做的——用户按住 Shift 敲 4 想要
+    /// 的就是人民币符号，从来不是美元。以前这里一律把 Shift 组合交给应用，于是
+    /// 中文模式下打出来的是 `$`，和「中文态恒出中文标点」的约定自相矛盾。
+    ///
+    /// ## 只做 4 这一个键
+    ///
+    /// 其余 Shift 组合（`?` `:` `|` `!` `@`）继续交给应用：那些字符在中文里没有
+    /// 约定俗成的全角对位，各输入法的做法也不统一（有的 `Shift+6` 给 `……`、
+    /// 有的给 `^`）。`￥` 是唯一一个「所有主流中文输入法都这么出、而且用户天天
+    /// 在用」的组合，只补它一个，风险最小。
+    ///
+    /// ## 布局闸
+    ///
+    /// 非 QWERTY 布局上 `Shift+4` 未必是 `$`（法语 AZERTY 的数字键要按 Shift 才出
+    /// 数字，`Shift+4` 给的是 `4`）。判据不看语言、只看布局本身：
+    /// `VkKeyScanExW('$')` 反查「在这个布局上 `$` 要按哪个键、带什么修饰」，
+    /// 答案正好是「VK_4 + 只有 Shift」才换。布局不对就自动不换，用户拿到的仍是
+    /// 那个布局该给的字符。
+    ///
+    /// `dollar_on_shift` 做成闭包是为了**别为不相关的键付 FFI 代价**：这个函数在
+    /// 每次按键的判定路径上（`OnTestKeyDown` / `OnKeyDown` 各一次），而实际命中
+    /// `VK_4` 的次数是零。
+    fn chinese_shift_punct(vk: u8, dollar_on_shift: impl FnOnce() -> bool) -> Option<char> {
+        if vk != VK_4.0 as u8 || !dollar_on_shift() {
+            return None;
+        }
+        Some('￥')
+    }
+
+    /// 当前键盘布局下，`Shift+4` 打出来的是不是 `$`。
+    ///
+    /// `VkKeyScanExW` 返回「VK（低字节）+ 修饰位（高字节）」：1 = Shift、2 = Ctrl、
+    /// 4 = Alt，`AltGr` 是 2|4。要求高字节**恰好等于 1**——德语等布局里 `$` 要
+    /// AltGr 才出来，那种布局按 Shift+4 本来也不是 `$`，不该被我们换掉。
+    fn shift4_is_dollar() -> bool {
+        unsafe {
+            let r = VkKeyScanExW('$' as u16, GetKeyboardLayout(0));
+            // 负值 = 这个布局根本打不出 `$`
+            if r < 0 {
+                return false;
+            }
+            let vk = (r as u16 & 0xFF) as u8;
+            let mods = (r as u16 >> 8) as u8;
+            vk == VK_4.0 as u8 && mods == 1
+        }
     }
 
     /// 这个键在**中文态**下要不要自己输出中文标点。
@@ -1953,24 +2003,17 @@ impl FeiheTextService_Impl {
         }
     }
 
-    /// `Ctrl+数字`：把这个候选**钉**到当前编码上，然后照常上屏。
-    ///
-    /// 返回是否真的做了。做不到（没有这个候选、快捷输入态）就返回 false，
-    /// 让按键落回「修饰键组合 → 提交组合串并交还应用」的老路。
-    ///
-    /// 为什么不另开一个「置顶模式」：置顶是「我看到这个候选不对，换一个」的
-    /// 即时动作，最自然的入口就是选词本身——`Ctrl` 表示「这次选词顺便记住」。
-    /// 取出「第 idx 个候选」以及它该钉在哪个码上。
+    /// 取出「第 idx 个候选」以及它该记在哪个码上（置顶和降权共用）。
     ///
     /// idx 是**全表下标**（`page * PAGE_SIZE + 页内序号`）。快捷输入的候选是
-    /// 「2026年10月23日」这种生成出来的串，钉它没有意义，直接返回 None。
-    fn pin_target(&self, idx: usize) -> Option<(String, String)> {
+    /// 「2026年10月23日」这种生成出来的串，钉它、降它都没有意义，直接返回 None。
+    fn candidate_target(&self, idx: usize) -> Option<(String, String)> {
         if self.code.borrow().starts_with(quick::PREFIX) {
             return None;
         }
         let word = self.candidates.borrow().get(idx)?.to_string();
-        // 分词模式下候选属于**当前这一段**，置顶也要钉到那一段的码上，
-        // 钉整串会让下次打同一个词时对不上。
+        // 分词模式下候选属于**当前这一段**，置顶/降权也要记到那一段的码上，
+        // 记整串会让下次打同一个词时对不上。
         let code = if self.segments.borrow().is_empty() {
             FeiheTextService::query_code(&self.code.borrow()).into_owned()
         } else {
@@ -1984,9 +2027,16 @@ impl FeiheTextService_Impl {
         Some((code, word))
     }
 
+    /// `Ctrl+数字`：把这个候选**钉**到当前编码上，然后照常上屏。
+    ///
+    /// 返回是否真的做了。做不到（没有这个候选、快捷输入态）就返回 false，
+    /// 让按键落回「修饰键组合 → 提交组合串并交还应用」的老路。
+    ///
+    /// 为什么不另开一个「置顶模式」：置顶是「我看到这个候选不对，换一个」的
+    /// 即时动作，最自然的入口就是选词本身——`Ctrl` 表示「这次选词顺便记住」。
     fn pin_candidate(&self, n: usize) -> bool {
         let idx = self.page.get() * candidate::PAGE_SIZE + (n - 1);
-        let Some((code, word)) = self.pin_target(idx) else {
+        let Some((code, word)) = self.candidate_target(idx) else {
             return false;
         };
         crate::pin::toggle(&code, &word);
@@ -2004,7 +2054,7 @@ impl FeiheTextService_Impl {
     /// 切换后立刻重新查候选：钉上的词跳到第一位、取消的回到原位，这就是反馈，
     /// 不用再弹任何提示。
     fn toggle_pin_candidate(&self, idx: usize) -> bool {
-        let Some((code, word)) = self.pin_target(idx) else {
+        let Some((code, word)) = self.candidate_target(idx) else {
             return false;
         };
         crate::pin::toggle(&code, &word);
@@ -2027,6 +2077,7 @@ impl FeiheTextService_Impl {
         let addr = self as *const FeiheTextService_Impl as usize;
         let alive = Arc::downgrade(&self.alive);
         let alive2 = alive.clone();
+        let alive3 = alive.clone();
         crate::candidate::set_click_handler(addr, move || {
             let alive = alive.clone();
             Arc::new(move |index: usize| {
@@ -2048,6 +2099,16 @@ impl FeiheTextService_Impl {
                 this.on_candidate_right_click(index);
             })
         });
+        crate::candidate::set_demote_click_handler(addr, move || {
+            Arc::new(move |index: usize| {
+                let Some(_token) = alive3.upgrade() else {
+                    return;
+                };
+                // SAFETY: 同上
+                let this = unsafe { &*(addr as *const FeiheTextService_Impl) };
+                this.on_candidate_demote_click(index);
+            })
+        });
     }
 
     /// 右键点候选：切换置顶（不上屏、不打断组合态）。
@@ -2056,6 +2117,22 @@ impl FeiheTextService_Impl {
             return;
         }
         self.toggle_pin_candidate(index);
+    }
+
+    /// `Ctrl`+左键点候选：切换降权（不上屏、不打断组合态）。
+    ///
+    /// 和置顶一样，切完立刻重查候选：被按下去的词沉到最后，这就是反馈，不用再弹
+    /// 任何提示。再按一次同一个词就恢复——手势复用，用户不必记「怎么取消」。
+    fn on_candidate_demote_click(&self, index: usize) {
+        if !self.is_composing() {
+            return;
+        }
+        let Some((code, word)) = self.candidate_target(index) else {
+            return;
+        };
+        crate::demote::toggle(&code, &word);
+        self.refresh();
+        self.show_candidates();
     }
 
     /// 候选窗被点了第 `index` 项（**全表下标**，0 基）。
@@ -2316,6 +2393,9 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 自定义短语是用户拿编辑器手改的文件，改完切回窗口就该生效。
         crate::custom::refresh();
 
+        // 降权表同理：手改或删掉 `demoted.txt` 之后要能看到变化。
+        crate::demote::refresh();
+
         // 自动检测「是不是全屏」的结果也丢掉重问：用户刚从全屏游戏 Alt+Tab 回来，
         // 不该还要等缓存过期才看得见候选窗。
         crate::fullscreen::invalidate();
@@ -2518,8 +2598,13 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         // OnTestKeyDown 返回 FALSE 就不会派发 OnKeyDown，我们连看都看不到这个键，
         // 全角标点开关等于失效。返回 TRUE 只是「让我看一眼」，OnKeyDown 里
         // 该拒绝的照样返回 FALSE，键最终还是会交给应用。
+        //
+        // `Shift+4`（`￥`）同理：不认下来，OnKeyDown 根本没机会插字，应用会插 `$`。
         let take = FeiheTextService::is_code_key(vk)
-            || FeiheTextService::chinese_punct_for(vk).is_some();
+            || FeiheTextService::chinese_punct_for(vk).is_some()
+            || (FeiheTextService::shift_down()
+                && FeiheTextService::chinese_shift_punct(vk, FeiheTextService::shift4_is_dollar)
+                    .is_some());
         Ok(BOOL::from(take))
     }
 
@@ -2639,6 +2724,36 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                     self.commit_with(letter);
                 } else {
                     self.insert_direct(letter);
+                }
+                return Ok(BOOL::from(true));
+            }
+        }
+
+        // ── 中文态 Shift+4：`￥` ──────────────────────────
+        //
+        // 位置紧跟在上面那条之后：同一个 Shift 分支里，字母走「大写直出」，
+        // `4` 走「人民币符号」，其余 Shift 组合（`?` `:` `|`）照旧交还应用。
+        //
+        // 必须自己判中文态——这条路径在下面「英文态整段交还应用」之前，英文态
+        // `Shift+4` 仍然是 `$`（那是 ASCII 符号，就该由键盘布局决定）。
+        //
+        // 三种态都要接住（分词 / 组合 / 空闲），否则「打到一半按 Shift+4」会走到
+        // 数字键那条分支去选第 4 个候选——用户按的是符号，不是选词。
+        if insert::chinese()
+            && !FeiheTextService::modifiers_down()
+            && FeiheTextService::shift_down()
+        {
+            if let Some(ch) =
+                FeiheTextService::chinese_shift_punct(vk, FeiheTextService::shift4_is_dollar)
+            {
+                let mut buf = [0u8; 4];
+                let text = ch.encode_utf8(&mut buf);
+                if !self.segments.borrow().is_empty() {
+                    self.commit_segments(text);
+                } else if self.is_composing() {
+                    self.commit_with(text);
+                } else {
+                    self.insert_direct(text);
                 }
                 return Ok(BOOL::from(true));
             }
@@ -3332,6 +3447,69 @@ mod tests {
         assert_eq!(FeiheTextService::fullwidth_punct(VK_OEM_3.0 as u8), None);
         // 字母键不是标点
         assert_eq!(FeiheTextService::fullwidth_punct(0x41), None);
+    }
+
+    /// 中文态 `Shift+4` 出 `￥`（U+FFE5），不是 `$`。
+    ///
+    /// 这是所有主流中文输入法的行为：中文态恒出中文标点，`$` 是英文符号。
+    /// 以前一律把 Shift 组合交还应用，于是中文里打出来的是美元符号。
+    #[test]
+    fn shift_4_is_the_yuan_sign() {
+        let four = VK_4.0 as u8;
+        assert_eq!(
+            FeiheTextService::chinese_shift_punct(four, || true),
+            Some('\u{FFE5}'),
+            "布局上 Shift+4 是 $ 时换成全角人民币符号"
+        );
+        // 布局上 `$` 不在 Shift+4（AZERTY 的数字键要 Shift 才出数字）→ 不动，
+        // 让键盘布局自己算，用户拿到的仍然是那个布局该给的字符
+        assert_eq!(FeiheTextService::chinese_shift_punct(four, || false), None);
+    }
+
+    /// 只做 4 这一个键：别的 Shift 组合仍然交给应用。
+    ///
+    /// 各输入法对 `Shift+6`、`Shift+-` 给什么并不统一，硬猜会打出用户没按的字符。
+    #[test]
+    fn other_shift_combos_are_left_alone() {
+        for vk in [
+            0x31u8,                   // 1 !
+            0x33,                     // 3 #
+            0x35,                     // 5 %
+            0x36,                     // 6 ^
+            0x39,                     // 9 (
+            VK_OEM_MINUS.0 as u8,     // - → _
+            VK_OEM_2.0 as u8,         // / → ?
+            VK_OEM_1.0 as u8,         // ; → :
+            VK_OEM_5.0 as u8,         // \ → |
+            VK_OEM_COMMA.0 as u8,     // , → <
+            0x41,                     // A（大写走 shifted_letter）
+        ] {
+            assert_eq!(
+                FeiheTextService::chinese_shift_punct(vk, || true),
+                None,
+                "vk=0x{vk:02x} 不该被换成人民币符号"
+            );
+        }
+    }
+
+    /// 布局探测只对 `VK_4` 那次调用才会发生——它在每次按键的判定路径上，
+    /// 不能为 `A` `B` `;` 这些键白付一次 `VkKeyScanExW`。
+    #[test]
+    fn layout_probe_only_runs_for_key_4() {
+        use std::cell::Cell;
+        let called = Cell::new(0);
+        let probe = || {
+            called.set(called.get() + 1);
+            true
+        };
+        assert_eq!(FeiheTextService::chinese_shift_punct(0x41, probe), None);
+        assert_eq!(called.get(), 0, "字母键不该触发布局探测");
+        let probe = || {
+            called.set(called.get() + 1);
+            true
+        };
+        assert!(FeiheTextService::chinese_shift_punct(VK_4.0 as u8, probe).is_some());
+        assert_eq!(called.get(), 1);
     }
 
     /// 英文态的全角标点是**全角英文**，不是中文标点。
