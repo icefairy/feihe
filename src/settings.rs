@@ -9,17 +9,19 @@
 //! 「皮肤」「全拼/双拼」原来在状态浮窗上，后来挪到这里：它们改一次就长期不变，
 //! 占浮窗宽度不值得。浮窗只留随时要按的开关。
 
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
+use windows::Win32::Graphics::Gdi::{ScreenToClient, COLOR_WINDOW, HBRUSH};
 use windows::Win32::System::LibraryLoader::{
     GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
     GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 };
+// SetScrollInfo 在 windows-rs 里归在 Controls 下（GetScrollInfo 还在 WindowsAndMessaging）
+use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::Controls::Dialogs::*;
 // EnableWindow 在 windows-rs 里归到了 KeyboardAndMouse 模块（跟着 user32 的分组走）
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
@@ -39,7 +41,16 @@ const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 /// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
-const CLIENT_H: i32 = 900;
+
+/// 客户区高度上限。**内容超出就滚动**，不再靠加高窗口硬塞——
+/// 设置项只会越来越多，而 1366×768 的笔记本（国内存量很大）连 900 都装不下。
+const CLIENT_H_MAX: i32 = 820;
+
+/// 客户区高度下限：再矮就只剩两三个设置项，滚动条也基本没法用。
+const CLIENT_H_MIN: i32 = 460;
+
+/// 底部「关闭」那一栏固定不动，滚内容时不跟着走。这是给它留的高度。
+const FOOTER_H: i32 = 52;
 
 /// 项目主页。设置窗最下面显示它，点按钮直接用默认浏览器打开。
 ///
@@ -68,6 +79,10 @@ const ID_SKIN_DARK: i32 = 122;
 const ID_SKIN_EYE: i32 = 123;
 const ID_HANZI_SIMP: i32 = 171;
 const ID_HANZI_TRAD: i32 = 172;
+
+/// 模糊音九条规则的复选框，ID 连续：`ID_FUZZY_FIRST + 序号`，序号就是
+/// `fuzzy::NAMES` 的下标。加减规则时只改那张表，不用再回到这里加常量。
+const ID_FUZZY_FIRST: i32 = 181;
 const ID_FULLWIDTH: i32 = 131;
 const ID_FOLLOW: i32 = 132;
 const ID_LEARN: i32 = 133;
@@ -92,6 +107,16 @@ const ID_ABOUT: i32 = 155;
 const ID_ABOUT_LINK: i32 = 156;
 
 static WND: AtomicIsize = AtomicIsize::new(0);
+
+/// 当前滚动偏移（客户区像素，0 = 顶部）。
+static SCROLL: AtomicI32 = AtomicI32::new(0);
+
+/// 内容总高度（`build` 结束时算出来，滚动范围靠它）。
+static CONTENT_H: AtomicI32 = AtomicI32::new(0);
+
+/// 可以滚动的子控件：`(HWND, 创建时的 x, 创建时的 y)`。滚动时按「基准 - 偏移」重摆，
+/// 不重新算布局——布局只有 `build` 一处，重复实现迟早对不上。
+static SCROLLABLE: Mutex<Vec<(isize, i32, i32)>> = Mutex::new(Vec::new());
 
 fn hwnd() -> HWND {
     let raw = WND.load(Ordering::Acquire);
@@ -285,6 +310,9 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_POPUP_NEVER, cfg.popup == PopupMode::Never);
     set_checked(h, ID_READING, cfg.reading);
     set_checked(h, ID_ASSIST_DIRECT, cfg.assist_direct);
+    for (i, name) in crate::fuzzy::NAMES.iter().enumerate() {
+        set_checked(h, ID_FUZZY_FIRST + i as i32, cfg.fuzzy.is_on(name));
+    }
     set_checked(h, ID_LEARN, cfg.learn);
     if let Ok(cb) = GetDlgItem(Some(h), ID_ROWS) {
         let idx = config::clamp_rows(cfg.candidate_rows) - config::ROWS_MIN;
@@ -577,6 +605,15 @@ unsafe fn on_command(h: HWND, id: i32) {
         }
         // 项目主页：交给默认浏览器，自己不联网
         ID_ABOUT | ID_ABOUT_LINK => open_about(),
+        // 模糊音九条：ID 连续，按 `NAMES` 的下标一次派发完
+        id if (ID_FUZZY_FIRST..ID_FUZZY_FIRST + crate::fuzzy::NAMES.len() as i32).contains(&id) => {
+            let name = crate::fuzzy::NAMES[(id - ID_FUZZY_FIRST) as usize];
+            // 是 `BS_AUTOCHECKBOX`，点完系统已经把勾翻过了，按当前状态写配置
+            let on = checked(GetDlgItem(Some(h), id).unwrap_or_default());
+            config::update(|c| {
+                c.fuzzy.set(name, on);
+            });
+        }
         _ => return,
     }
 
@@ -688,6 +725,104 @@ fn pick_folder(h: HWND) -> Option<std::path::PathBuf> {
     }
 }
 
+/// 这台机器上设置窗该多高：屏幕矮的时候按屏幕缩（1366×768 的笔记本很常见），
+/// 但不低于 `CLIENT_H_MIN`、不超过 `CLIENT_H_MAX`。
+unsafe fn want_client_h() -> i32 {
+    let screen = GetSystemMetrics(SM_CYSCREEN);
+    (screen - 120).clamp(CLIENT_H_MIN, CLIENT_H_MAX)
+}
+
+/// 当前客户区高度。窗口创建后以实际值为准——高 DPI 下按比例换算可能差几个像素，
+/// 底部按钮必须按真实高度摆。
+unsafe fn client_h(h: HWND) -> i32 {
+    let mut rc = RECT::default();
+    if GetClientRect(h, &mut rc).is_err() {
+        return CLIENT_H_MAX;
+    }
+    (rc.bottom - rc.top).max(CLIENT_H_MIN)
+}
+
+/// 可滚动区域高度：客户区减去底部那条固定栏。
+unsafe fn view_h(h: HWND) -> i32 {
+    (client_h(h) - FOOTER_H).max(1)
+}
+
+/// 记下每个子控件创建时的位置，供滚动时重摆。
+///
+/// 排除「关闭」按钮：它固定在底部，滚内容时不能跟着走——滚到一半找不到关闭按钮
+/// 是很恼人的。其余控件全部参与滚动。
+unsafe fn init_scroll(h: HWND) {
+    let footer = GetDlgItem(Some(h), ID_CLOSE).unwrap_or_default();
+    let mut list: Vec<(isize, i32, i32)> = Vec::new();
+    let mut child = GetWindow(h, GW_CHILD).unwrap_or_default();
+    while !child.is_invalid() {
+        if child != footer {
+            let mut rc = RECT::default();
+            if GetWindowRect(child, &mut rc).is_ok() {
+                let mut p = POINT {
+                    x: rc.left,
+                    y: rc.top,
+                };
+                if ScreenToClient(h, &mut p).as_bool() {
+                    list.push((child.0 as isize, p.x, p.y));
+                }
+            }
+        }
+        child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+    }
+    if let Ok(mut g) = SCROLLABLE.lock() {
+        *g = list;
+    }
+    SCROLL.store(0, Ordering::Release);
+    sync_scrollbar(h);
+}
+
+/// 按内容高度和可视高度把滚动条范围刷一遍。
+unsafe fn sync_scrollbar(h: HWND) {
+    let view = view_h(h);
+    let content = CONTENT_H.load(Ordering::Acquire);
+    let max_pos = (content - view).max(0);
+    let pos = SCROLL.load(Ordering::Acquire).clamp(0, max_pos);
+    let si = SCROLLINFO {
+        cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+        nMin: 0,
+        nMax: (content - 1).max(0),
+        nPage: view as u32,
+        nPos: pos,
+        nTrackPos: pos,
+    };
+    SetScrollInfo(h, SB_VERT, &si, true);
+}
+
+/// 滚到 `pos`：夹进合法范围，再按「基准位置 - 偏移」重摆所有可滚控件。
+unsafe fn scroll_to(h: HWND, pos: i32) {
+    let max_pos = (CONTENT_H.load(Ordering::Acquire) - view_h(h)).max(0);
+    let pos = pos.clamp(0, max_pos);
+    let cur = SCROLL.load(Ordering::Acquire);
+    if pos == cur {
+        // 位置没变也要刷一次：内容高度可能在这次 build 里变过
+        sync_scrollbar(h);
+        return;
+    }
+    SCROLL.store(pos, Ordering::Release);
+    if let Ok(g) = SCROLLABLE.lock() {
+        for &(hwnd, x, base) in g.iter() {
+            let child = HWND(hwnd as *mut core::ffi::c_void);
+            let _ = SetWindowPos(
+                child,
+                None,
+                x,
+                base - pos,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+    sync_scrollbar(h);
+}
+
 unsafe fn build(h: HWND) {
     let mut y = 16;
     label(h, "输入模式", 16, y, 90, 0);
@@ -736,7 +871,25 @@ unsafe fn build(h: HWND) {
         ID_ASSIST_DIRECT,
     );
 
+    // 模糊音：按口音放宽声母/韵母的对应。九条规则横排成 3×3，一眼看全，
+    // 也不用为了"哪个口音"再套一层预设——用户自己知道该勾哪个。
     y += 80; // 上面多了一行说明 + 一行勾选
+    label(h, "模糊音", 16, y, 90, 0);
+    label(h, "（按口音选，不开就是原样）", 110, y, 330, 0);
+    for (i, name) in crate::fuzzy::NAMES.iter().enumerate() {
+        let col = (i % 3) as i32;
+        let row = (i / 3) as i32;
+        check(
+            h,
+            &crate::fuzzy::Rules::label(name),
+            16 + col * 144,
+            y + 24 + row * 26,
+            140,
+            ID_FUZZY_FIRST + i as i32,
+        );
+    }
+    // 三行复选框：首行下移 24、行距 26、控件本身 22 高，再留 8 的段间距
+    y += 24 + 2 * 26 + 22 + 8;
     label(h, "皮肤", 16, y, 90, 0);
     radio(h, "浅色", 110, y - 2, 70, ID_SKIN_LIGHT, true);
     radio(h, "深色", 190, y - 2, 70, ID_SKIN_DARK, false);
@@ -872,13 +1025,14 @@ unsafe fn build(h: HWND) {
     // 放在最下面（而不是最上面）是因为它属于「装完看一次就完」的信息，不该挤占
     // 真正要改的设置项。
     let about_y = y + 26 + rows * 20 + 4 + 30;
-    // 内容总高度是算出来的、`CLIENT_H` 是写死的，两者迟早会漂。漂了的表现是
-    // 「关于」压到「关闭」按钮上（高 DPI 下才看得出来，本地测不出），
-    // 所以在调试构建里直接断死：改了上面任何一块间距，跑一次 debug 就能发现。
+    // 内容比可视区高是**正常**的（靠滚动看），但总高度得是个合理值：
+    // 算错了会得到一条能拖到天涯海角的滚动条，或者底部内容永远滚不到。
+    let content_h = about_y + 60;
     debug_assert!(
-        about_y + 42 < CLIENT_H - 40,
-        "设置窗内容装不下了：about_y={about_y}, CLIENT_H={CLIENT_H}"
+        (200..4000).contains(&content_h),
+        "设置窗内容高度不像话：{content_h}"
     );
+    CONTENT_H.store(content_h, Ordering::Release);
     label(
         h,
         "关于：开源输入法 · Rust + windows-rs 实现 · 不联网、不弹窗、无账号",
@@ -897,7 +1051,9 @@ unsafe fn build(h: HWND) {
     );
     push(h, "打开项目主页", 320, about_y + 19, 124, 26, ID_ABOUT);
 
-    push(h, "关闭", W - 106, CLIENT_H - 40, 90, 30, ID_CLOSE);
+    // 底部这一栏**不参与滚动**：滚到底时它依然在，任何时候都能关掉窗口
+    push(h, "关闭", W - 106, client_h(h) - 40, 90, 30, ID_CLOSE);
+    init_scroll(h);
 }
 
 unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -924,6 +1080,51 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         }
         WM_CLOSE => {
             let _ = ShowWindow(h, SW_HIDE);
+            LRESULT(0)
+        }
+        WM_VSCROLL => {
+            let cmd = (w.0 & 0xFFFF) as i32;
+            let cur = SCROLL.load(Ordering::Acquire);
+            let view = view_h(h);
+            let max_pos = (CONTENT_H.load(Ordering::Acquire) - view).max(0);
+            // 一行 24px ≈ 一个复选框行距，滚起来跟得上眼睛
+            let line = 24;
+            let target = if cmd == SB_LINEUP.0 {
+                cur - line
+            } else if cmd == SB_LINEDOWN.0 {
+                cur + line
+            } else if cmd == SB_PAGEUP.0 {
+                cur - view
+            } else if cmd == SB_PAGEDOWN.0 {
+                cur + view
+            } else if cmd == SB_THUMBTRACK.0 || cmd == SB_THUMBPOSITION.0 {
+                // 拖滑块时位置在 nTrackPos 里，`WM_VSCROLL` 的 wParam 高字只够 16 位
+                // （内容超过 32767px 就会翻符号），所以走 GetScrollInfo 拿全 32 位
+                let mut si = SCROLLINFO {
+                    cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
+                    fMask: SIF_TRACKPOS,
+                    ..Default::default()
+                };
+                if GetScrollInfo(h, SB_VERT, &mut si).is_ok() {
+                    si.nTrackPos
+                } else {
+                    cur
+                }
+            } else if cmd == SB_TOP.0 {
+                0
+            } else if cmd == SB_BOTTOM.0 {
+                max_pos
+            } else {
+                cur
+            };
+            scroll_to(h, target);
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            // 高字是有符号的滚动量，一格 120
+            let delta = ((w.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+            let step = -(delta / 120) * 24 * 3;
+            scroll_to(h, SCROLL.load(Ordering::Acquire) + step);
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -967,23 +1168,29 @@ fn load_icon() -> Option<HICON> {
     }
 }
 
-/// 窗口样式（创建和反算尺寸必须用同一份，否则算出来的高度对不上）
+/// 窗口样式（创建和反算尺寸必须用同一份，否则算出来的高度对不上）。
+///
+/// `WS_VSCROLL` 常驻：设置项只增不减，内容比屏幕高是常态而不是异常，
+/// 与其把窗口撑到屏幕外（1366×768 装不下 900 的客户区），不如让它滚。
 const STYLE: WINDOW_STYLE = WINDOW_STYLE(
-    WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0,
+    WS_OVERLAPPED.0 | WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_VSCROLL.0,
 );
 
 /// 由客户区尺寸反算窗口尺寸。标题栏和边框高度随 DPI / 主题变，写死窗口高度
 /// 会在高 DPI 下把最下面那排控件截掉。
 unsafe fn window_size(client_w: i32, client_h: i32) -> (i32, i32) {
+    // **`AdjustWindowRectEx` 不为 `WS_VSCROLL` 留位置**（文档明写：要自己加
+    // `SM_CXVSCROLL`）。不补这一条，客户区会窄 17px，右边那列控件被滚动条压掉一截。
+    let vscroll = GetSystemMetrics(SM_CXVSCROLL);
     let mut rc = RECT {
         left: 0,
         top: 0,
-        right: client_w,
+        right: client_w + vscroll,
         bottom: client_h,
     };
     if AdjustWindowRectEx(&mut rc, STYLE, false, WINDOW_EX_STYLE(0)).is_err() {
         // 反算失败就按 1:1 用，宁可挤一点也不要开不出窗口
-        return (client_w, client_h);
+        return (client_w + vscroll, client_h);
     }
     (rc.right - rc.left, rc.bottom - rc.top)
 }
@@ -1002,7 +1209,7 @@ unsafe fn create() -> Option<HWND> {
     };
     RegisterClassW(&wc);
 
-    let (win_w, win_h) = window_size(W, CLIENT_H);
+    let (win_w, win_h) = window_size(W, want_client_h());
     // 标题里带版本号：用户报问题、我们查「是哪一版」全靠这一行。手写常量迟早和
     // Cargo.toml 对不上（以前就吃过「用户装的是 0.2.2、代码是 0.2.5」的亏），
     // 所以直接从编译期包版本取，改版本号不用再回来改这里。

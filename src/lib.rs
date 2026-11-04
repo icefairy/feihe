@@ -17,6 +17,7 @@ mod fancha;
 mod font;
 mod freq;
 mod fullscreen;
+mod fuzzy;
 mod hint;
 mod insert;
 mod phrase;

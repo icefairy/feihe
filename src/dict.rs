@@ -452,7 +452,43 @@ fn search(
     mode: AssistMode,
     limit: usize,
 ) -> Vec<Cow<'static, str>> {
+    // **模糊音：先把输入展开成几个「同音异写」的码，逐个查询再合并。**
+    //
+    // 展开结果的第一项恒等于原样，所以原样查询就是 `collect(prefix)`；后面每一项
+    // 都算「模糊命中」，在排序里要让一步（见 `freq::rank` 的 `tiers`）。
+    //
+    // 关掉模糊音时**一次都不展开**（`Vec::new()` 不分配）：`search` 每次按键都跑，
+    // 为了一个默认关闭的功能多一次 `String` 分配不划算。
+    //
+    // 每个变体只取前 `FUZZY_PER_VARIANT` 条：模糊音是「原样不够用时的补救」，
+    // 不是把整库同音字翻出来；不设上限的话，单键查询要多扫好几遍全表。
+    let cfg = crate::config::get();
+    let alts: Vec<String> = if pinyin || !cfg.fuzzy.any() {
+        Vec::new()
+    } else {
+        crate::fuzzy::expand(cfg.fuzzy, cfg.scheme, prefix)
+            .into_iter()
+            .skip(1) // 第 0 项就是原样
+            .collect()
+    };
     let (mut out, mut lens) = collect(pinyin, prefix, assist_prefix, mode, limit);
+    let mut tiers: Vec<u8> = vec![0; out.len()];
+
+    if !alts.is_empty() {
+        let sub = limit.min(FUZZY_PER_VARIANT);
+        for code in &alts {
+            let (o, l) = collect(pinyin, code, assist_prefix, mode, sub);
+            for (w, len) in o.into_iter().zip(l) {
+                out.push(w);
+                lens.push(len);
+                tiers.push(1);
+            }
+        }
+        // 同一个词可能既被原样命中也从某个模糊变体冒出来（`南` 的码是 `nj`，
+        // 但打 `lj` 时它也会从 `lj` 那一支出现）。去重保留**先出现的**——
+        // 原样命中排在前面，所以先出现的自然就是精确那一份。
+        dedupe_keep_first(&mut out, &mut lens, &mut tiers);
+    }
 
     // 自造词也进候选，**和词库候选一起交给下面那次词频排序**。
     //
@@ -484,7 +520,7 @@ fn search(
     // 捞不进来；现在候选不设上限，整段都参与排序，学过的词再冷门也能浮上来。
     // 学到的次数按「码 + 词」记：多音字同一个词挂多条读音，只按词记会让在
     // `oo` 里选过的「哦」跑到 `ee` 的第一位，顶掉饿 / 呃 / 额。
-    crate::freq::rank(&mut out, &lens, prefix);
+    crate::freq::rank(&mut out, &lens, &tiers, prefix);
 
     // 查询只覆盖一个音节？
     //
@@ -863,6 +899,53 @@ fn put_candidate(
         out.pop();
         lens.pop();
     }
+}
+
+/// 模糊音每个变体最多取几条候选。
+///
+/// 模糊音是「原样查不到时给个台阶」，不是把整库同音字翻出来。不设上限的话，
+/// 单键查询（`a`、`n` 这种）要多扫好几遍全表，而用户根本看不到第 97 条。
+const FUZZY_PER_VARIANT: usize = 96;
+
+/// 按词去重，保留**先出现的**那一份，三个平行数组一起删。
+///
+/// 为什么不用 `HashSet<&str>` + `retain`：`retain` 拿着 `&mut`，而集合借着 `out`
+/// 里的字符串，借用检查过不去。折成两步——先标记，集合销毁后再删。
+fn dedupe_keep_first(
+    out: &mut Vec<Cow<'static, str>>,
+    lens: &mut Vec<u8>,
+    tiers: &mut Vec<u8>,
+) {
+    debug_assert_eq!(out.len(), lens.len());
+    debug_assert_eq!(out.len(), tiers.len());
+    let mut drop = vec![false; out.len()];
+    {
+        let mut seen: std::collections::HashSet<&str> =
+            std::collections::HashSet::with_capacity(out.len());
+        for (i, w) in out.iter().enumerate() {
+            if !seen.insert(w.as_ref()) {
+                drop[i] = true;
+            }
+        }
+    }
+    let mut i = 0;
+    out.retain(|_| {
+        let keep = !drop[i];
+        i += 1;
+        keep
+    });
+    let mut i = 0;
+    lens.retain(|_| {
+        let keep = !drop[i];
+        i += 1;
+        keep
+    });
+    let mut i = 0;
+    tiers.retain(|_| {
+        let keep = !drop[i];
+        i += 1;
+        keep
+    });
 }
 
 /// 按「用户词库优先 → 静态词库」的顺序收集候选，不做动态排序。
@@ -1969,5 +2052,27 @@ pub(crate) mod tests {
         let mut out = vec![Cow::Borrowed("你好"), Cow::Borrowed("你们"), Cow::Borrowed("你")];
         promote_exact_shape(&mut out, "b", AssistMode::Ziranma, false);
         assert_eq!(out[0], "你好", "多音节查询不该把首字提到词前面");
+    }
+
+    /// 模糊音合并时同一个词可能从两条支路都冒出来（`南` 的码是 `nj`，打 `lj` 时
+    /// 它既可能在原样结果里、也可能从模糊变体里出现）。去重保留**先出现的**那一份
+    /// ——原样支路排在前面，所以精确命中不会被模糊那份顶掉；三个平行数组必须同步删。
+    #[test]
+    fn dedupe_keeps_first_and_keeps_arrays_in_step() {
+        let mut out = vec![
+            Cow::Borrowed("南"),
+            Cow::Borrowed("兰"),
+            Cow::Borrowed("南"),
+            Cow::Borrowed("难"),
+        ];
+        let mut lens = vec![2u8, 2, 4, 2];
+        let mut tiers = vec![0u8, 0, 1, 1];
+        dedupe_keep_first(&mut out, &mut lens, &mut tiers);
+        assert_eq!(
+            out.iter().map(|w| w.as_ref()).collect::<Vec<_>>(),
+            vec!["南", "兰", "难"]
+        );
+        assert_eq!(lens, vec![2, 2, 2], "码长必须跟着一起删");
+        assert_eq!(tiers, vec![0, 0, 1], "层级必须跟着一起删");
     }
 }

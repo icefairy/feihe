@@ -158,6 +158,11 @@ pub struct Config {
     /// 默认关：多数人敲到第 3 键是在继续打词，抢成辅助码等于把词吞掉。
     /// 打开的人（从自然码 / 小鹤带过来的）宁愿先出单字，词可以关掉开关或退格重打。
     pub assist_direct: bool,
+    /// 模糊音：口音写法也算命中（`n=l`、`z=zh`…）。见 `fuzzy` 模块。
+    ///
+    /// 默认**全关**：对普通话音准的人来说模糊音只会制造重码。九条规则各自独立开关，
+    /// 用户按自己的口音挑——南方口音常开 `n=l`、`z=zh`、`en=eng`，北方口音多半一条都不用。
+    pub fuzzy: crate::fuzzy::Rules,
     /// 翻页时候选窗一次摊开几行（1 = 老样子，单行横向滚动）。
     ///
     /// 单行时一页 9 个，同码字多的码（`ji` 128 个）要按 14 次 `=` 才能看完；摊开
@@ -200,6 +205,8 @@ impl Config {
         reading: true,
         // 默认关：3 键里那个孤立键更可能是在打下一个音节，自动拆会吞词。
         assist_direct: false,
+        // 默认全关：普通话标准的人开了只会多出重码。见 `fuzzy::Rules` 的说明。
+        fuzzy: crate::fuzzy::Rules::NONE,
         // 默认 5 行：一屏 45 个，覆盖 `ji`/`yi` 这类大字集的大半，又不会糊满屏幕。
         candidate_rows: 5,
         // 默认中文：中文输入法装完就该能直接打中文。
@@ -527,6 +534,7 @@ fn parse(text: &str) -> (Config, u32) {
             "popup" => cfg.popup = PopupMode::from_key(v),
             "reading" => cfg.reading = parse_bool(v),
             "assist_direct" => cfg.assist_direct = parse_bool(v),
+            "fuzzy" => cfg.fuzzy = crate::fuzzy::Rules::from_key(v),
             "candidate_rows" => cfg.candidate_rows = v.parse().map_or(5, clamp_rows),
             "chinese" => cfg.chinese = parse_bool(v),
             // v5 及更早的键名。`no_popup=1` 是用户勾过的 → 保持「一律不弹」；
@@ -645,6 +653,7 @@ fn render(cfg: &Config) -> String {
          popup={}\n\
          reading={}\n\
          assist_direct={}\n\
+         fuzzy={}\n\
          candidate_rows={}\n\
          chinese={}\n",
         cfg.scheme.key(),
@@ -660,6 +669,7 @@ fn render(cfg: &Config) -> String {
         cfg.popup.key(),
         cfg.reading as u8,
         cfg.assist_direct as u8,
+        cfg.fuzzy.to_key(),
         clamp_rows(cfg.candidate_rows),
         cfg.chinese as u8
     )
@@ -870,6 +880,25 @@ mod tests {
             AssistMode::Ziranma,
             "显式选了自然码的不能被默认值盖掉"
         );
+    }
+
+    /// 模糊音默认全关，且能原样写盘再读回来（写盘键拼错 / 少格式化参数会在这里炸）。
+    #[test]
+    fn fuzzy_rules_round_trip() {
+        assert_eq!(
+            Config::DEFAULT.fuzzy,
+            crate::fuzzy::Rules::NONE,
+            "默认全关：普通话标准的人开了只会多出重码"
+        );
+        assert_eq!(parse("").0.fuzzy, crate::fuzzy::Rules::NONE, "缺键 = 全关");
+
+        let mut c = Config::DEFAULT;
+        c.fuzzy.n_l = true;
+        c.fuzzy.en_eng = true;
+        let text = render(&c);
+        assert!(text.contains("fuzzy=n_l,en_eng"), "写盘文本：{text}");
+        let (back, _) = parse(&text);
+        assert_eq!(back.fuzzy, c.fuzzy);
     }
 
     /// 候选行数：缺省 5；手改配置写到离谱的值（0 / 99 / 乱写）要夹回 1..=9。

@@ -12,6 +12,9 @@
 //! 声母同样 `zh→v`、`ch→i`、`sh→u`；零声母一律用 `o` 占位（`an`→`oj`）；
 //! `ing` 落在分号键 `;` 上，`ü` 落在 `y` 上。
 
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scheme {
     Xiaohe,
@@ -143,7 +146,58 @@ fn final_key(scheme: Scheme, f: &str) -> Option<char> {
         .map(|(_, c)| *c)
 }
 
-/// 单个音节 → 两键码（不分配，返回两个字符）。无法编码返回 None。
+/// 声母键：20 个单字母声母 + `zh/ch/sh` 的三个代键。
+///
+/// `v/i/u` 同时是韵母键（`v`=`ui/ü`、`i`=`i`、`u`=`u`），但**在声母位**它们只表示
+/// `zh/ch/sh`——双拼每个音节恰好两键，位置本身就是语义。
+const INITIAL_KEYS: &[char] = &[
+    'b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'g', 'k', 'h', 'j', 'q', 'x', 'r', 'z', 'c', 's', 'y',
+    'w', 'v', 'i', 'u',
+];
+
+/// 结构上可能出现的两键码集合（`(声母位, 韵母位)`）。
+///
+/// 为什么需要它：模糊音是把某一位置的键换成「同音的另一套写法」（`z`↔`v`、`n`↔`l`），
+/// 换完必须确认结果还真是个合法码，否则会拿 `eh` 这种不存在的码去查库，白跑一趟
+/// 还可能让候选窗闪空。
+///
+/// 构造方式刻意**宽松**：把每个声母键配上每个韵母键，加零声母的合法组合。像
+/// `b`+`uang` 这种普通话里没有的音节也会进集合，但它的码本来就等于某个真实组合的码
+/// （`buang` 和 `bang` 在双拼里不同码，但 `b`+`uang` 生成的 `bl` 这种码没人查得到东西），
+/// 多收一个只会多一次空查询，不会给出错候选。反过来漏收会直接让模糊音失效，那更糟。
+fn valid_pairs(scheme: Scheme) -> &'static HashSet<(char, char)> {
+    static XH: OnceLock<HashSet<(char, char)>> = OnceLock::new();
+    static MS: OnceLock<HashSet<(char, char)>> = OnceLock::new();
+    let cell = match scheme {
+        Scheme::Xiaohe => &XH,
+        Scheme::Ms => &MS,
+    };
+    cell.get_or_init(|| {
+        let mut set = HashSet::with_capacity(2048);
+        for &ini in INITIAL_KEYS {
+            for (_, key) in scheme.finals() {
+                set.insert((ini, *key));
+            }
+        }
+        // 零声母：直接按「韵母本身」编码，落到哪个两键就收哪个
+        for (fin, _) in scheme.finals() {
+            if let Some(pair) = encode_chars(scheme, fin) {
+                set.insert(pair);
+            }
+        }
+        set
+    })
+}
+
+/// 这两键是不是结构上可能存在的双拼码。
+pub fn is_valid_pair(scheme: Scheme, a: char, b: char) -> bool {
+    valid_pairs(scheme).contains(&(a, b))
+}
+
+/// 这个键能不能坐在声母位上（给「只敲了半截音节」的尾巴用）。
+pub fn is_initial_key(scheme: Scheme, c: char) -> bool {
+    valid_pairs(scheme).iter().any(|(a, _)| *a == c)
+}/// 单个音节 → 两键码（不分配，返回两个字符）。无法编码返回 None。
 fn encode_chars(scheme: Scheme, syl: &str) -> Option<(char, char)> {
     let s = syl.trim();
     if s.is_empty() || !s.is_ascii() {

@@ -464,6 +464,7 @@ pub fn refresh() {
 fn order_by(
     words: &[std::borrow::Cow<'static, str>],
     lens: &[u8],
+    tiers: &[u8],
     table: &HashMap<String, Ent>,
     code: &str,
 ) -> Vec<usize> {
@@ -486,7 +487,15 @@ fn order_by(
     // 稳定排序：`sort_by_key` 保证相等元素保持原顺序，这是「不搞乱语料顺序」的前提
     order.sort_by_key(|&i| {
         let len = lens.get(i).copied().unwrap_or(u8::MAX);
-        (len, std::cmp::Reverse(count_of(&mut buf, words[i].as_ref())))
+        let n = count_of(&mut buf, words[i].as_ref());
+        // 模糊音命中的候选让一步：`tier > 0` 表示「这不是用户敲的那个码」。
+        // 减 `COUNT_PENALTY` 而不是硬排到最后——`n=l` 的人打 `lan` 就是想打「南」，
+        // 选过几次之后它该能翻上来；但一次误开模糊音不该立刻打乱手感。
+        let n = match tiers.get(i).copied().unwrap_or(0) {
+            0 => n,
+            _ => n.saturating_sub(crate::fuzzy::COUNT_PENALTY),
+        };
+        (len, std::cmp::Reverse(n))
     });
     order
 }
@@ -496,7 +505,7 @@ fn order_by(
 /// `lens` 是每个候选的**码长**（音节数 × 2），由 `dict::collect` 一起带过来。
 /// `code` 是当前查询的码——学习记录按「码 + 词」存，见 `bump`。
 /// 长度不等长时不 panic，缺的按最大长度算（排到最后），避免一处算错就崩掉宿主。
-pub fn rank(words: &mut [std::borrow::Cow<'static, str>], lens: &[u8], code: &str) {
+pub fn rank(words: &mut [std::borrow::Cow<'static, str>], lens: &[u8], tiers: &[u8], code: &str) {
     if words.len() < 2 || !enabled() {
         return;
     }
@@ -511,7 +520,7 @@ pub fn rank(words: &mut [std::borrow::Cow<'static, str>], lens: &[u8], code: &st
     if table.is_empty() {
         return;
     }
-    let mut perm = order_by(words, lens, table, code);
+    let mut perm = order_by(words, lens, tiers, table, code);
     apply_order(words, &mut perm);
 }
 
@@ -623,7 +632,7 @@ mod tests {
             Cow::Borrowed("丙"),
         ];
         // 表里没有任何词 → 顺序原样
-        rank(&mut v, &[2, 2, 2], "ab");
+        rank(&mut v, &[2, 2, 2], &[], "ab");
         assert_eq!(v, vec!["甲", "乙", "丙"]);
     }
 
@@ -633,7 +642,7 @@ mod tests {
         let mut table: HashMap<String, Ent> = HashMap::new();
         table.insert("丙".into(), ent(5));
         let v = [Cow::Borrowed("甲"), Cow::Borrowed("乙"), Cow::Borrowed("丙")];
-        assert_eq!(order_by(&v, &[2, 2, 2], &table, "ab"), vec![2, 0, 1]);
+        assert_eq!(order_by(&v, &[2, 2, 2], &[], &table, "ab"), vec![2, 0, 1]);
     }
 
     /// 学习记录是**按码**记的：在 `oo` 里选过「哦」，不该把它的次数带到 `ee` 上。
@@ -647,9 +656,38 @@ mod tests {
         table.insert("oo\t哦".into(), ent(8));
         let v = [Cow::Borrowed("饿"), Cow::Borrowed("呃"), Cow::Borrowed("哦")];
         // 查 ee：oo 的记录不算数，顺序原样
-        assert_eq!(order_by(&v, &[2, 2, 2], &table, "ee"), vec![0, 1, 2]);
+        assert_eq!(order_by(&v, &[2, 2, 2], &[], &table, "ee"), vec![0, 1, 2]);
         // 查 oo：是它自己的记录，哦排第一
-        assert_eq!(order_by(&v, &[2, 2, 2], &table, "oo"), vec![2, 0, 1]);
+        assert_eq!(order_by(&v, &[2, 2, 2], &[], &table, "oo"), vec![2, 0, 1]);
+    }
+
+    /// 模糊音命中的候选（`tier = 1`）要让一步：学习次数减 `COUNT_PENALTY` 再比。
+    ///
+    /// 为什么不是硬排到最后：`n=l` 的人打 `lan` 想要「南」，选过几次之后它该能翻上来。
+    /// 但**选过一两次不该**就压过原样命中——那会让刚打开模糊音的人手感立刻变差。
+    #[test]
+    fn fuzzy_hits_yield_to_exact_ones_until_learned() {
+        let mut table: HashMap<String, Ent> = HashMap::new();
+        table.insert("lan\t南".into(), ent(2));
+        let v = [Cow::Borrowed("兰"), Cow::Borrowed("南")];
+        // 2 - 3 饱和到 0，和「兰」的 0 打平，稳定排序保持原顺序
+        assert_eq!(order_by(&v, &[2, 2], &[0, 1], &table, "lan"), vec![0, 1]);
+
+        // 学够了（5 次）就翻过来
+        table.insert("lan\t南".into(), ent(5));
+        assert_eq!(order_by(&v, &[2, 2], &[0, 1], &table, "lan"), vec![1, 0]);
+
+        // 两个都是原样命中时，比较不吃惩罚
+        assert_eq!(order_by(&v, &[2, 2], &[0, 0], &table, "lan"), vec![1, 0]);
+    }
+
+    /// `tiers` 比 `words` 短（老调用方传空）不能 panic，按「全是原样」处理。
+    #[test]
+    fn missing_tiers_default_to_exact() {
+        let mut table: HashMap<String, Ent> = HashMap::new();
+        table.insert("哦".into(), ent(8));
+        let v = [Cow::Borrowed("饿"), Cow::Borrowed("哦")];
+        assert_eq!(order_by(&v, &[2, 2], &[], &table, "ee"), vec![1, 0]);
     }
 
     /// 老格式（只有词、没有码）继续对所有码生效，否则升级一次学习记录就白攒了
@@ -658,7 +696,7 @@ mod tests {
         let mut table: HashMap<String, Ent> = HashMap::new();
         table.insert("哦".into(), ent(8));
         let v = [Cow::Borrowed("饿"), Cow::Borrowed("哦")];
-        assert_eq!(order_by(&v, &[2, 2], &table, "ee"), vec![1, 0]);
+        assert_eq!(order_by(&v, &[2, 2], &[], &table, "ee"), vec![1, 0]);
     }
 
     /// 老格式的次数要并进这个词的**每一条**按码记录。
@@ -683,7 +721,7 @@ mod tests {
         table.insert("城".into(), ent(7));
         let v = [Cow::Borrowed("程序"), Cow::Borrowed("成"), Cow::Borrowed("城")];
         // 程序码长 4，成/城 码长 2
-        assert_eq!(order_by(&v, &[4, 2, 2], &table, "ig"), vec![2, 1, 0]);
+        assert_eq!(order_by(&v, &[4, 2, 2], &[], &table, "ig"), vec![2, 1, 0]);
     }
 
     /// 置换重排不能丢词、不能错位（用可验证的一个环来钉）
