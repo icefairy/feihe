@@ -353,6 +353,48 @@ pub fn lookup_pinyin(prefix: &str, limit: usize) -> Vec<Cow<'static, str>> {
     search(true, prefix, "", AssistMode::Off, limit)
 }
 
+/// 拼写纠错：整串零候选时的最后一招。
+///
+/// **为什么是独立函数、不并进 `search`**：`search` 是「查词库」，纠错是「查不到之后
+/// 的补救」。混在一起的直接后果是 `lookup` 一个没有整词的码会返回纠错候选，于是
+/// `textservice` 的自动分词（`maybe_split`，整串零候选时切段逐字组词）再也触发不了——
+/// 用户打「安并」这种词库没收的词，会被塞一屏「按病 / 暗冰」之类的纠错候选，反而
+/// 组不出他想要的字。
+///
+/// 所以调用顺序由 `textservice` 把关：正常查询 → 自动分词 → **还是空**才纠错。
+/// 见 `correct` 的模块文档。
+///
+/// `pinyin` 为真（全拼模式）时直接返回空：纠错是按「每个音节恰好两键」切位置的，
+/// 全拼里没有这个前提。
+pub fn corrected(prefix: &str, pinyin: bool, limit: usize) -> Vec<Cow<'static, str>> {
+    if pinyin || limit == 0 {
+        return Vec::new();
+    }
+    let mut out: Vec<Cow<'static, str>> = Vec::new();
+    for fix in crate::correct::variants(prefix, scheme()) {
+        let (o, _) = collect(false, &fix.code, "", AssistMode::Off, 1);
+        for w in o {
+            if out.iter().any(|x| x.as_ref() == w.as_ref()) {
+                continue;
+            }
+            out.push(w);
+        }
+        if out.len() >= limit {
+            break;
+        }
+    }
+    if out.len() > 1 {
+        // 按「这个错码下选过几次」排：用户接受过一次纠错，下次同一个错码它就排前面。
+        // 学的路径和别的候选完全一样（`commit_with` 记的是「错码 + 词」），
+        // 不需要另开一张「纠错学习表」。码长都一样（就是输入本身），所以排序键
+        // 退化成「次数」——0 次的保持生成顺序（稳定排序），也就是正确率顺序。
+        let lens = vec![prefix.len().min(u8::MAX as usize) as u8; out.len()];
+        let tiers = vec![0u8; out.len()];
+        crate::freq::rank(&mut out, &lens, &tiers, prefix);
+    }
+    out
+}
+
 /// 全拼模式 + 辅助码筛选
 pub fn lookup_pinyin_filtered(
     prefix: &str,
@@ -1502,6 +1544,46 @@ pub(crate) mod tests {
     /// 「同码条目多、排到后面」不算查不到，那种情况下用户翻页能翻到。
     ///
     /// 跑法：`cargo test --lib audit_dict_entries_reachable -- --ignored --nocapture`
+    /// 人工看纠错在真实词库下的表现。
+    ///
+    /// 跑法：`cargo test --lib zz_probe_correction -- --ignored --nocapture`
+    #[test]
+    #[ignore = "人工看输出用，不做断言（依赖真实词库内容）"]
+    fn zz_probe_correction() {
+        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_scheme(Scheme::Xiaohe);
+        // 左列是「按错了一个键」的码，右列是期望救回来的词
+        let cases = [
+            ("nihx", "你好"),  // c(ao) 按成 x(ua)
+            ("nihd", "你好"),  // 其实合法（hai → 你还），不该纠
+            ("vsgp", "中国"),  // o(uo) 按成 p(ie)
+            ("vshx", "中国"),  // 第二音节整个错
+            ("dihc", "电话"),  // 第一个音节错
+            ("nihxma", "你好吗"),
+            ("nihcma", "你好吗"), // 有词，不该纠
+        ];
+        for (code, want) in cases {
+            let direct = search(false, code, "", AssistMode::Off, 3);
+            let d: Vec<&str> = direct.iter().map(|w| w.as_ref()).collect();
+            let got = corrected(code, false, 8);
+            let words: Vec<&str> = got.iter().map(|w| w.as_ref()).collect();
+            let hit = words.contains(&want);
+            println!("{code:<8} 直接={d:?}  纠错命中{hit}={words:?}");
+        }
+        // 一次纠错要查多少次词库、花多久：这是热路径上的额外开销，得有个数
+        for code in ["nihx", "vsgp", "nihxma"] {
+            let n = corrected(code, false, 8).len();
+            let t = std::time::Instant::now();
+            for _ in 0..200 {
+                let _ = corrected(code, false, 8);
+            }
+            println!(
+                "{code:<8} 候选 {n} 条，单次 {:?}",
+                t.elapsed() / 200
+            );
+        }
+    }
+
     #[test]
     #[ignore = "全量审计（4.6 万条），平时不跑"]
     fn audit_dict_entries_reachable() {

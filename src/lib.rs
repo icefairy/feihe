@@ -9,6 +9,7 @@ mod classfactory;
 mod clipboard;
 mod clsid;
 mod config;
+mod correct;
 mod custom;
 mod dict;
 mod dictbin;

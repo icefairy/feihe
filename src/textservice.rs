@@ -57,6 +57,12 @@ static KEY_REFUSE: AtomicU8 = AtomicU8::new(255);
 /// 不会常驻内存。
 const CANDIDATE_LIMIT: usize = usize::MAX;
 
+/// 拼写纠错最多给几条。
+///
+/// 8 条 = 8 种「可能的按错方式」。纠错本来就是猜的，给多了用户反而无从选起；
+/// 给少了（比如 3 条）又容易把所有可能性都漏掉。
+const CORRECT_LIMIT: usize = 8;
+
 enum EditOp {
     /// 建立 composition 并写入首个双拼码。
     /// 文本由 `begin_composition` 现场从 `composition_text()` 取，字段只是占位。
@@ -1415,6 +1421,38 @@ impl FeiheTextService_Impl {
     /// 整串候选为空。切不出多段就什么都不做，等用户继续敲或退格。
     fn maybe_split(&self) {
         self.try_segment(&[], false);
+    }
+
+    /// 一条候选都没有时试拼写纠错（`/` 开头的快捷输入除外）。
+    ///
+    /// **放在 `maybe_split` 之后**，顺序不能反。自动分词救的是「词库没这个词，我
+    /// 逐字组给你」，纠错救的是「你按错了一个键」——前者覆盖面更广，先让它试。
+    /// 反过来的话，任何「词库没收录的两字组合」都会先看到一屏纠错候选，凑不出
+    /// 用户真正想要的字（`dict::corrected` 的注释里写了这条的来龙去脉）。
+    ///
+    /// 只有真的山穷水尽——切不成段、或者切开了某段根本没字——才轮到这里。
+    fn try_correction(&self) {
+        if !self.is_composing()
+            || !self.candidates.borrow().is_empty()
+            || !self.segments.borrow().is_empty()
+            || self.assist_active.get()
+        {
+            return;
+        }
+        let code = self.code.borrow().clone();
+        if code.starts_with(quick::PREFIX) {
+            return;
+        }
+        let query = FeiheTextService::query_code(&code);
+        let list = dict::corrected(&query, config::pinyin_mode(), CORRECT_LIMIT);
+        if list.is_empty() {
+            return;
+        }
+        self.candidates.borrow_mut().clone_from(&list);
+        self.selected.set(0);
+        self.page.set(0);
+        // 不弹窗模式下候选是塞在组合串里的，不刷一次用户什么也看不到
+        self.update_composition();
     }
 
     /// 尝试进入分词模式。成功返回 `true`（已 refresh + 更新组合串）。
@@ -2822,7 +2860,9 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
                 self.auto_assist();
                 self.refresh();
                 self.update_composition();
+                // 顺序要紧：先给它自动分词的机会，分词也不行才纠错
                 self.maybe_split();
+                self.try_correction();
                 Ok(BOOL::from(true))
             }
             // 其他键：先提交，再把键还给应用。
