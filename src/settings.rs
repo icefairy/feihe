@@ -323,14 +323,16 @@ unsafe fn sync(h: HWND) {
     }
     set_checked(h, ID_LEARN, cfg.learn);
     set_checked(h, ID_SUGGEST, cfg.suggest);
-    // 「联想」的数据量级和「置顶/降权」一样小，直接把条数写出来，
-    // 用户能判断它到底学没学到东西（装机第一天必然是 0）。
+    // 「联想」的数据量级和「置顶/降权」一样小，直接把条数写出来，用户能判断
+    // 它到底学没学到东西。内置表（发货就带的）单独列——清空只能清掉前者，
+    // 不写清楚的话「清空完还能联想」看起来就像没生效。
     set_text(
         h,
         ID_SUGGEST_HINT,
         &format!(
-            "已记 {} 个词对 · 数据来自你自己的输入",
-            crate::next::count()
+            "已记 {} 个词对（另内置 {} 条）· 只学你自己的输入",
+            crate::next::count(),
+            crate::next::builtin_count()
         ),
     );
     if let Ok(cb) = GetDlgItem(Some(h), ID_ROWS) {

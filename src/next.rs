@@ -1,5 +1,15 @@
 //! 上屏后的联想：记住「这个词后面通常跟什么」，下次打完它就把后续词摆出来。
 //!
+//! ## 两张表：内置 + 用户
+//!
+//! - **内置表**（`next_builtin.txt`，`include_str!` 进 DLL）：从 rime-ice 词库的复合词
+//!   反推出来的词对（`北京时间` → `北京→时间`），约 5000 个头词 / 1.5 万条。解决
+//!   「刚装完一个字都联想不出来」的冷启动。
+//! - **用户表**（`next.txt`，数据目录）：用户自己打出来的词对，按选择次数排。
+//!
+//! 查询时**用户表优先、内置表补位**：两张表的权重不是一回事（内置是词库词频，
+//! 用户是选择次数），混在一起排序会让内置表压死用户刚学的那条。
+//!
 //! ## 为什么是「词对表」而不是语言模型
 //!
 //! 联想要回答的只有一个问题：**给定上一个词，最可能的后续词是哪几个**。这是一次
@@ -7,8 +17,8 @@
 //! `handoff.md` 里那张体积表），换来的能力是「在若干同音读法里挑一个」——那是
 //! 选词消歧，不是联想。把模型塞进一个 1.8 MB 的安装包去做查表，是拿卡车送快递。
 //!
-//! 所以这里只存用户自己打出过的词对：`上一个词<TAB>下一个词<TAB>次数`。
-//! 零外部数据、零许可风险、零体积增量（文件几十 KB），代价是冷启动为空。
+//! 内置表也不需要语料：`tools/gen_next.py` 把词库里的复合词按最短前缀切开，
+//! 就得到了「北京→大学 / 时间 / 地区」这种搭配——这本来就是词库统计出来的答案。
 //!
 //! ## 只认汉字词
 //!
@@ -73,6 +83,56 @@ static LAST_FLUSH: Mutex<Option<Instant>> = Mutex::new(None);
 /// 上次读盘时 `next.txt` 的 mtime。`refresh` 靠它避免每次激活都读一遍
 /// （表大了有几百 KB，而「切窗口」是分钟级的动作）。
 static LAST_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+
+/// 内置联想表，编译期嵌进 DLL（`include_str!`，只读数据，多进程共享同一份物理页）。
+///
+/// 惰性解析：`suggest` 大部分调用命不中内置表（用户表已经有足够候选），按需解析
+/// 一次就行，省掉每次 `Activate` 的 228 KB 扫描。
+static BUILTIN: std::sync::OnceLock<Table> = std::sync::OnceLock::new();
+
+/// 内置表的文本。由 `tools/gen_next.py` 从 rime-ice 词库生成（复合词拆分），
+/// 每行 `头词<TAB>后续词 权重 后续词 权重 …`。生成参数（5000 头词 / 每头 5 个）
+/// 见那个脚本的注释，调过参数记得重新编译。
+const BUILTIN_TEXT: &str = include_str!("next_builtin.txt");
+
+fn builtin() -> &'static Table {
+    BUILTIN.get_or_init(|| parse_builtin(BUILTIN_TEXT))
+}
+
+/// 内置表的行格式和用户表不同（头词分组，一行多个后续），单独一个解析器。
+///
+/// 不复用 `parse` 的原因：那个格式一行一个词对，1.5 万行 × 20 字节 ≈ 300 KB，
+/// 而分组后头词只出现一次，省下的是文件体积——`include_str!` 的每个字节都进 DLL。
+fn parse_builtin(text: &str) -> Table {
+    let mut t = Table::new();
+    for line in text.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((head, rest)) = line.split_once('\t') else {
+            continue;
+        };
+        if !is_word(head) {
+            continue;
+        }
+        let mut tail: Vec<(String, u32)> = Vec::new();
+        let mut it = rest.split_whitespace();
+        while let (Some(w), Some(n)) = (it.next(), it.next()) {
+            if !is_word(w) {
+                continue;
+            }
+            match n.parse::<u32>() {
+                Ok(n) if n > 0 => tail.push((w.to_string(), n.min(MAX_COUNT))),
+                _ => continue,
+            }
+        }
+        if !tail.is_empty() {
+            tail.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            t.insert(head.to_string(), tail);
+        }
+    }
+    t
+}
 
 fn file() -> PathBuf {
     crate::config::dir().join("next.txt")
@@ -284,24 +344,47 @@ pub fn record(prev: &str, next: &str) {
     maybe_flush();
 }
 
-/// 查 `prev` 后面的联想词，按次数降序。
+/// 查 `prev` 后面的联想词，按「用户表优先、内置表补位」合并，去重。
+///
+/// 两张表的权重不是一回事（内置是词库词频，用户是选择次数），**不能**按数值
+/// 混排——用户打过的词对他自己永远比词库统计更可信，所以用户表整段排前面。
 pub fn suggest(prev: &str, limit: usize) -> Vec<String> {
     if !is_word(prev) || limit == 0 {
         return Vec::new();
     }
-    with_table(|t| {
-        t.get(prev)
-            .map(|v| v.iter().take(limit).map(|(w, _)| w.clone()).collect())
-            .unwrap_or_default()
-    })
+    let mine = with_table(|t| t.get(prev).cloned()).unwrap_or_default();
+    let mut out: Vec<String> = mine.iter().map(|(w, _)| w.clone()).collect();
+    if out.len() < limit {
+        if let Some(b) = builtin().get(prev) {
+            for (w, _) in b {
+                if !out.iter().any(|x| x == w) {
+                    out.push(w.clone());
+                }
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+    }
+    out.truncate(limit);
+    out
 }
 
-/// 表里有多少个词对（设置窗显示用）。
+/// 用户表里有多少个词对（设置窗显示用）。内置表不算——那是发货就带的，不是
+/// 「学到的」。
 pub fn count() -> usize {
     with_table(|t| t.values().map(|v| v.len()).sum())
 }
 
-/// 清空（设置窗的「清空」按钮）。
+/// 内置表有多少条词对（设置窗显示用）。
+pub fn builtin_count() -> usize {
+    builtin().values().map(|v| v.len()).sum()
+}
+
+/// 清空**用户表**（设置窗的「清空」按钮）。
+///
+/// 内置表不受影响——它是编译进 DLL 的，用户删不掉也不想删掉；清空之后联想
+/// 还在，只是回到「只有内置表」的冷启动状态。
 pub fn clear() {
     with_table(|t| t.clear());
     DIRTY.store(true, Ordering::Release);
@@ -414,5 +497,37 @@ mod tests {
         assert_eq!(m["北京"], vec![("时间".to_string(), 3)]);
         assert_eq!(m["我"], vec![("们".to_string(), 4)]);
         assert!(!m.contains_key(""));
+    }
+
+    /// 内置表是 `include_str!` 编进 DLL 的，**它坏了就等于联想功能带病发货**。
+    /// 这条测试锁住三件事：规模没被生成参数意外缩小、高频词都在、每一行都干净。
+    #[test]
+    fn builtin_table_parses_clean() {
+        let t = parse_builtin(BUILTIN_TEXT);
+        assert!(t.len() >= 4000, "内置表头词只有 {} 个，生成参数是不是变了", t.len());
+        for head in ["北京", "我们", "经济", "工作"] {
+            let Some(tail) = t.get(head) else {
+                panic!("内置表缺「{head}」——重新跑 tools/gen_next.py 看看");
+            };
+            assert!(!tail.is_empty() && tail.len() <= MAX_TAIL, "「{head}」的后续数量异常");
+            for (w, n) in tail {
+                assert!(is_word(w), "内置表「{head}」的后续「{w}」不是合法词");
+                assert!(*n > 0, "「{head}→{w}」权重为 0");
+            }
+        }
+    }
+
+    /// 用户表优先：同一条词对两边都有时，用户那条排前面；内置表只负责补位。
+    /// （直接调 `suggest` 会碰真实文件——这条用内置表单独验证合并逻辑的前提：
+    /// 解析出来的顺序就是按权重降序的。）
+    #[test]
+    fn builtin_tail_is_sorted_by_weight() {
+        let t = parse_builtin(BUILTIN_TEXT);
+        for tail in t.values() {
+            let ns: Vec<u32> = tail.iter().map(|(_, n)| *n).collect();
+            let mut sorted = ns.clone();
+            sorted.sort_by(|a, b| b.cmp(a));
+            assert_eq!(ns, sorted, "内置表的后续没有按权重降序");
+        }
     }
 }
