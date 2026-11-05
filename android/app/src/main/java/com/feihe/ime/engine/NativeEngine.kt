@@ -54,11 +54,42 @@ object NativeEngine {
     fun isSyllable(text: String): Boolean =
         if (ensureLoaded()) runCatching { isSyllableNative(text) }.getOrElse { false } else false
 
+    /**
+     * 初始化引擎：数据目录 + 时区偏移。**必须在任何查询之前调一次**。
+     *
+     * 不调的话 core 那边数据目录为空，`paths::dir()` 会直接 panic（这是刻意的：
+     * 宁可炸在入口，也不要静默把文件写到 `/` 下面）。
+     *
+     * `utcOffsetMinutes` 给自定义短语的 `{hour}` 之类变量用——Rust 侧拿不到时区。
+     */
+    fun init(dataDir: String) {
+        if (!ensureLoaded()) return
+        val offset = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000
+        runCatching { initNative(dataDir, offset) }
+            .onFailure { Log.e(TAG, "initNative 失败：${it.message}") }
+    }
+
+    /**
+     * 按双拼码查候选。空列表就是没有候选（不是错误）。
+     *
+     * 返回 `List` 而不是拼好的字符串：候选要一个个放进视图，中间再切一次字符串
+     * 既费事又容易在分隔符上出错。
+     */
+    fun lookup(code: String, limit: Int = 9): List<String> {
+        if (code.isEmpty() || !ensureLoaded()) return emptyList()
+        val raw = runCatching { lookupNative(code, limit) }.getOrElse { return emptyList() }
+        return if (raw.isEmpty()) emptyList() else raw.split('\n')
+    }
+
     // ── 原生方法 ────────────────────────────────────────────────────────
     //
     // 方法名 + 包名 + 类名拼起来就是 .so 里的符号名：
     // Java_com_feihe_ime_engine_NativeEngine_<方法名>。
     // 改包名或类名必须同步改 android/jni/src/lib.rs，否则运行期 UnsatisfiedLinkError。
+
+    private external fun initNative(dataDir: String, utcOffsetMinutes: Int)
+
+    private external fun lookupNative(code: String, limit: Int): String
 
     private external fun coreVersionNative(): String
 

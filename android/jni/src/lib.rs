@@ -92,3 +92,51 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_isSyllableNative<'
     let ok = std::panic::catch_unwind(|| feihe_core::shuangpin::is_syllable(&input)).unwrap_or(false);
     u8::from(ok)
 }
+
+/// `NativeEngine.initNative(dataDir, utcOffsetMinutes)`
+///
+/// 引擎启动时必须先调这个，否则数据目录是空的（core 的 `paths::dir()` 会 panic）。
+/// `utcOffsetMinutes` 给 `custom` 的 `{hour}` 之类变量用——Android 的 Rust 侧拿不到
+/// 时区，只能从 Kotlin 的 `TimeZone.getDefault().getOffset(now) / 60000` 传进来。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_initNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    data_dir: JString<'local>,
+    utc_offset_minutes: i32,
+) {
+    let dir = read_string(&mut env, &data_dir);
+    let _ = std::panic::catch_unwind(|| {
+        feihe_core::paths::init(std::path::PathBuf::from(dir));
+        feihe_core::clock::set_utc_offset_minutes(utc_offset_minutes);
+        // Android 首次没有 config.ini，这里会得到默认值；有文件就按文件来。
+        // 不调这一步的话 `pinyin_mode` / `candidate_rows` 这些原子镜像都是初值，
+        // 用户在设置里改过的选项不会生效。
+        feihe_core::config::refresh_if_changed();
+    });
+}
+
+/// `NativeEngine.lookupNative(code, limit)` —— 按双拼码查候选，`\n` 分隔。
+///
+/// 只查**一个码**，不做简繁转换、不做联想、不记录词频：那些是壳的策略（用哪个码、
+/// 什么时候学），不属于「查词库」这件事。Android 第一版先要「按了键能出字」。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    code: JString<'local>,
+    limit: i32,
+) -> jstring {
+    let code = read_string(&mut env, &code);
+    let text = std::panic::catch_unwind(move || {
+        if code.is_empty() {
+            return String::new();
+        }
+        // 上限放在这里而不是信调用方：候选窗再宽也放不下几十个，
+        // 而一次查太多会白白穿越几十次 JNI 字符串边界。
+        let n = limit.clamp(1, 60) as usize;
+        feihe_core::dict::lookup(&code, n).join("\n")
+    })
+    .unwrap_or_default();
+    make_string(&mut env, &text)
+}

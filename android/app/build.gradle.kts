@@ -76,6 +76,10 @@ val buildRust by tasks.registering(Exec::class) {
         ndkClang().absolutePath,
     )
     environment("RUSTFLAGS", "-Clink-arg=--target=aarch64-linux-android24")
+    // 和 Windows 侧的发布构建同一个开关：**绝不能**把本机的个人词库
+    // （`src/user_dict.txt`，从搜狗导出的真实打字记录）编进要发出去的包里。
+    // 不设它 base.bin 会从 46k 条涨到 98k 条，而且那些词是用户自己的。
+    environment("FEIHE_NO_USER_DICT", "1")
 
     commandLine("cargo", "build", "--release", "--target", rustTarget)
 }
