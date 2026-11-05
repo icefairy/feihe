@@ -3964,3 +3964,54 @@ export PATH="/c/llvm-mingw/llvm-mingw-20260908-ucrt-x86_64/bin:$PATH"
 **顺带的发现**：`cmdline-tools` 的目录结构不是标准的 `cmdline-tools/latest/`，
 `sdkmanager` 不带 `--sdk_root` 会报 `Could not determine SDK root`。这也是
 「`sdkmanager` 装不了包」的一半原因（另一半是 `dl.google.com` 不通）。
+
+## 真机首验（realme RMX5080 / Android 16）：跑通了，并揪出一个老 bug
+
+2026-11-05 第一次在真机上走完全链路：装包 → `ime enable` → `ime set` → 打字上屏。
+结果为：`nihao` → `nihc` → 候选「你好」→ 空格上屏；`sanguo` → `sjgo` → 「三国 / 三国志」；
+上屏后联想出现。**M2 的「能打中文」在真机上成立了。**
+
+### 抓到的 bug：联想顺序是反的
+
+「三国」上屏后，四个联想词是「时代 / 时期 / 演义 / 群英传」——**完全倒序**。
+
+原因：`parse_builtin` 把内置表的权重也套了 `n.min(MAX_COUNT)`（=500）。内置权重是
+词库统计，最大 19260817；一压全部变成 500，`sort_by` 退化成按字符串比，而字符串序
+恰好是 时代 < 时期 < 演义 < 群英传 < 鼎立，看起来就像倒序。
+
+**为什么 313 项测试没抓到**：`builtin_tail_is_sorted_by_weight` 断言的是「权重序列
+降序」，而**全相等也满足降序**。这已经是第三次栽在「测试绿得没有意义」上。
+
+修法：内置表解析不再截断（`MAX_COUNT` 只留给用户表的 +1 计数），并加
+`builtin_weights_are_not_flattened`：断言「三国」首尾权重严格不等且最大值 ≥ 1000。
+把修复回退后跑一遍，它准确报出 `[("时代",500),("时期",500),("演义",500),
+("群英传",500),("鼎立",500)]` —— 和屏幕上一模一样。
+
+> **通用教训：排序类测试必须断言「顺序能区分」，不能只断言「有序」。**
+> 全相等的序列对任何比较器都是有序的。
+
+### 真机上的四个操作坑
+
+1. **`adb install` 装 84 MB 会超时**（7 分钟没结束，被 SIGTERM）。改用
+   `adb push` + `adb shell pm install -r`，push 11 秒（7.7 MB/s），装 20 秒。
+2. **MSYS 会把 `adb push x /data/local/tmp/y` 的目标路径改写成 Windows 路径**
+   （`D:/soft/.../PortableGit/data/local/tmp/y`），报 `remote secure_mkdirs() failed`。
+   命令前加 `MSYS_NO_PATHCONV=1`。
+3. **装完必须 `ime enable` + `ime set`**，`pm install` 不会自动启用。
+   `ime list -s` 只列**已启用**的，要用 `ime list -a -s` 才能看到新装的。
+4. **验证键盘配色不要看缩略图。** 我一度从缩略图判断「键盘是黑底白键、样式没生效」，
+   实际读像素是：键缝 `#D9DCE1`（= 代码里的 `0xFFD9DCE1`）、功能键 `#B9BEC6`
+   （= `0xFFB9BEC6`）、字母键 `#FFFFFF`。**全部正确**，是我看错了。
+   判断颜色用截图取像素（`System.Drawing` 被安全策略禁了，用 python 手写 PNG 解码）。
+
+### 设备信息（下次直接对）
+
+- realme RMX5080 / RE6025L1，Android 16（API 36），arm64-v8a，`wm size 1080x2376`，
+  density override 480。adb 走 WiFi（`192.168.3.3:43995`）。
+- 键盘按键坐标（1080×2376，改布局后要重新扫）：
+  第一行 y=1766，键中心 x = 61/167/273/379/485/591/697/803/909/1017（q..p）；
+  第二行 y=1919，x = 67/185/303/421/539/657/775/893/1011（a..l）；
+  第三行 y=2120，x = 85(⇧)/214/322/430/538/646/754/862/993(⌫)（z..m）；
+  第四行 y=2200，x = 87(中)/228(，)/538(空格)/848(。)/990(↵)。
+  定位方法：扫截图里 `#D9DCE1` 的缝隙列，取相邻缝隙中点（脚本见本条 commit 前的临时文件，
+  不进仓库）。

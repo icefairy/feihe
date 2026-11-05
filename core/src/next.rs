@@ -68,6 +68,11 @@ pub const SHOW: usize = 5;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 /// 单条次数封顶。联想的排序只看相对大小，不需要精确计数。
+///
+/// **只用于用户表**（每次上屏 +1）。内置表的权重是生成器算的词库统计，
+/// 量级完全不同（最大 19260817），不能套这个上限——把它们统一压到 500 之后
+/// 所有词权重相等，排序退化成按字符串，屏幕上就是「三国」后面先出「时代」
+/// 而不是「群英传」。这条坑踩过一次，见 `builtin_weights_are_not_flattened`。
 const MAX_COUNT: u32 = 500;
 
 /// 淘汰后保留的比例（同 `freq`）。
@@ -122,7 +127,10 @@ fn parse_builtin(text: &str) -> Table {
                 continue;
             }
             match n.parse::<u32>() {
-                Ok(n) if n > 0 => tail.push((w.to_string(), n.min(MAX_COUNT))),
+                // **不套 `MAX_COUNT`**：那是用户表的计数上限（+1 累加），
+                // 内置表用的是词库统计权重，量级差四个数量级，压平之后
+                // 排序会退化成按字符串比。
+                Ok(n) if n > 0 => tail.push((w.to_string(), n)),
                 _ => continue,
             }
         }
@@ -529,5 +537,25 @@ mod tests {
             sorted.sort_by(|a, b| b.cmp(a));
             assert_eq!(ns, sorted, "内置表的后续没有按权重降序");
         }
+    }
+
+    /// 权重必须**真的**参与排序，不能被压成同一个数。
+    ///
+    /// 这条抓的是一次真实事故：`parse_builtin` 曾经把内置权重也 `min(MAX_COUNT)`
+    /// （=500），「三国」后面的 群英传 / 演义 / 时期 / 时代 全变成 500，
+    /// `sort_by` 退化成按字符串比 —— 屏幕上先出「时代」。
+    /// 上面那条 `builtin_tail_is_sorted_by_weight` **照样绿**，因为「全部相等」
+    /// 也满足它的断言。堆到真机上才看出来。
+    #[test]
+    fn builtin_weights_are_not_flattened() {
+        let t = parse_builtin(BUILTIN_TEXT);
+        let tail = t.get("三国").expect("内置表里没有「三国」");
+        assert!(tail.len() >= 3, "{tail:?}");
+        assert!(
+            tail[0].1 > tail[tail.len() - 1].1,
+            "权重被压平了，排序会退化成按字符串：{tail:?}"
+        );
+        // 首尾之间要有真实差距，不是 1 和 2 这种抖动
+        assert!(tail[0].1 >= 1000, "最大权重太小，怀疑又被截断了：{tail:?}");
     }
 }

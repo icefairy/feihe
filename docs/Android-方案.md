@@ -531,7 +531,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
 | M1 第四步：`hint` / `fancha` / `zhconv` | **已完成** | `hint`（含 `hint.txt`）整体搬走；`fancha` 开 `set_clipboard_reader`（Windows 剪贴板留在 `src/clipboard.rs`）；`zhconv` 开 `set_converter`，NLS 映射留在 `src/nls.rs`。**317 项测试全绿**（core 206 + 壳 111），DLL 4290 KB 不变，`cargo check --target aarch64-linux-android` 通过。`sogou` **明确不搬**，理由见下 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | **能打中文**：`nihao` → `nihc` →「你好」，点或空格上屏；26 键键盘 + 组合串 + 上屏/删除有 19 项 Kotlin 单测。**JNI 已有 7 个入口**（`init` / `lookup` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record`），`.so` 3645 KB（`base.bin` 2.9 MB + 联想内置表）。**联想已接**：上屏后候选条末尾出现 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都会断开上下文。**还差真机验证**——没验之前不继续堆功能 |
+| M2 Android 最小可用 | 进行中 | **能打中文**：`nihao` → `nihc` →「你好」，点或空格上屏；26 键键盘 + 组合串 + 上屏/删除有 19 项 Kotlin 单测。**JNI 已有 7 个入口**（`init` / `lookup` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record`），`.so` 3645 KB（`base.bin` 2.9 MB + 联想内置表）。**联想已接**：上屏后候选条末尾出现 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都会断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：`nihao`→`nihc`→「你好」、`sanguo`→`sjgo`→「三国/三国志」，空格上屏、联想 `→词` 都成立。首验揪出并修掉了内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
 
 ### 11.1 `sogou` 为什么不搬
 
