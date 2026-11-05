@@ -646,3 +646,81 @@ print([(i.filename,i.compress_type) for i in z.infolist() if i.filename.startswi
 
 真机上验只需要看状态条：它现在会显示 `引擎 0.3.11 (aarch64)`。打 `nihao` 时
 应当在同一行看到 `nihao→nihc`——**这是屏幕上第一处真正来自 Rust 的东西**。
+
+### 12.6 编译用签名（`android/keystore/`）
+
+Android 要求 APK 必须签名才能安装。调试包 AGP 会自动用 `~/.android/debug.keystore`
+签，但那个 key **每台机器都不一样**；`assembleRelease` 默认更是只产 unsigned 包。
+所以项目里放一把固定不变的 key：
+
+| 项 | 值 |
+|---|---|
+| 密钥库 | `android/keystore/feihe-release.p12`（PKCS12，2.5 KB） |
+| 别名 | `feihe` |
+| 密码 | `feihe-ime-2026`（store 与 key 同一个） |
+| 算法 | RSA 2048 / SHA256withRSA |
+| 有效期 | 2026-11-05 → **2056-10-28**（10950 天） |
+| 证书 SHA-256 | `5A:E2:C7:06:22:65:45:D9:9D:43:6E:D6:EB:05:50:3C:2F:A6:7C:F8:66:DB:6F:92:C3:C9:E3:5F:DA:4A:6B:29` |
+| 证书 SHA-1 | `EB:5F:F0:E5:8C:C3:04:E6:7B:72:A6:B2:77:08:78:6C:4D:8D:78:A4` |
+
+凭据写在 `android/keystore/keystore.properties`，由 `app/build.gradle.kts` 读取。
+
+**两者都进版本库，这是刻意的。** 自签名只解决「同一把 key 打出来的包能互相覆盖」，
+不承担任何身份作用；项目只做自用和侧载，不走应用商店。藏起来的结果只会是：换台
+机器 clone 下来打不出能覆盖安装的包，还得翻聊天记录找密码。真要上架那天，商店
+那份签名必须**重新生成**、不放进这个仓库。
+
+#### 为什么 debug 也用同一把 key
+
+Android 只在**签名相同**时才允许覆盖安装，否则报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，
+唯一出路是卸载。输入法的数据目录（用户词库、词频、置顶、自造词）跟着应用走，
+一卸载就全没了。如果 debug 用调试 key、release 用项目 key，那「先装 debug 试一下、
+再换 release」这条最常走的路每次都要卸载重装——统一成一把就没这事。
+
+所以 `buildTypes` 里 debug 和 release 都指向 `signingConfigs.feihe`。
+
+#### 签名方案：v2 + v3，没有 v1
+
+实测 `apksigner verify -v app-release.apk`：`v1: false / v2: true / v3: true`。
+v1（jar 签名）是给 Android 6 及更老系统用的，`minSdk = 24` 根本装不上那些版本，
+AGP 自己就会跳过——`enableV1Signing = true` 写了也不生效，已显式设 `false` 并注明。
+
+#### 校验
+
+```bash
+# 证书是不是同一把（debug 与 release 必须一致）
+"$ANDROID_HOME/build-tools/34.0.0/apksigner.bat" verify --print-certs \
+  app/build/outputs/apk/release/app-release.apk
+
+# 签名方案
+"$ANDROID_HOME/build-tools/34.0.0/apksigner.bat" verify -v app-release.apk
+```
+
+`apksigner` 是 `.bat`，运行前 `JAVA_HOME` 要指向 JDK 17。
+
+#### 丢了 key 的后果，以及重新生成
+
+**丢了 = 所有已装的包再也无法覆盖升级**，只能卸载重装，用户词库跟着丢。所以这个
+文件值得备份（跟仓库一起走就是最省事的备份）。确实要换时，前提是接受「让所有设备
+重装一次」：
+
+```bash
+cd android/keystore
+"$JDK/bin/keytool" -genkeypair -v \
+  -keystore feihe-release.p12 -storetype PKCS12 \
+  -alias feihe -keyalg RSA -keysize 2048 -validity 10950 \
+  -dname "CN=Feihe Input Method, OU=Feihe, O=Feihe, L=Beijing, ST=Beijing, C=CN" \
+  -storepass 'feihe-ime-2026' -keypass 'feihe-ime-2026'
+```
+
+换完把新的 SHA-256 指纹更新到本节。**`storeFile` 不要写成绝对路径**——那会让
+「文件不存在就退回调试签名」的判断在别人机器上永远为真。
+
+#### 两个会安静出错的点
+
+1. **`.gitattributes` 必须钉 `*.p12 binary`。** 这台机器 `core.autocrlf` 是开的，
+   不加这条 git 会把 keystore 当文本加 CRLF，下次 checkout 出来 PKCS12 直接解不开，
+   而 keytool 报的是「密码不正确」——离真正原因十万八千里。
+2. **缺 key 时 `assembleRelease` 不报错，只产出一个 unsigned APK。** 装不上，而
+   错误暴露在 adb 或用户手机上。所以 `app/build.gradle.kts` 末尾给 `assembleRelease`
+   挂了 `doFirst` 检查，文件缺失直接抛 `GradleException`。

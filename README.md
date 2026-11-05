@@ -1116,6 +1116,7 @@ core/src/assist.rs    辅助码表（自然码简版 / 小鹤音形，数据 cor
 android/              Android 壳（InputMethodService + 26 键 + 候选条）
 android/jni/          Rust 引擎的 JNI 桥（crate feihe-android，只编 Android 的 .so）
 android/app/          Kotlin：FeiheIme / keyboard / engine / voice
+android/keystore/     编译用签名（自签名，key 与密码都进库；理由见 docs/Android-方案.md §12.6）
 
 src/lib.rs            DLL 入口（DllGetClassObject / DllCanUnloadNow）
 src/clsid.rs          固定 GUID

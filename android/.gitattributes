@@ -3,3 +3,8 @@
 gradlew text eol=lf
 *.bat text eol=crlf
 *.jar binary
+
+# 签名密钥库也是二进制。core.autocrlf 一旦把它当文本加 CRLF，PKCS12 会直接解不开
+# （报 "keystore password was incorrect" 之类的误导性错误），所以必须钉死。
+*.p12 binary
+*.jks binary

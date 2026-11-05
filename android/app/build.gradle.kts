@@ -92,6 +92,28 @@ val syncRustLib by tasks.registering(Copy::class) {
     into(rustJniLibs.map { it.dir("arm64-v8a") })
 }
 
+// ── 编译用签名 ────────────────────────────────────────────────────
+//
+// 密钥库（keystore/feihe-release.p12）和密码（keystore/keystore.properties）
+// 都跟着仓库走。这是**自签名**，唯一作用是：同一台机器、同一份 key 打出来的包
+// 能覆盖安装、共享同一个数据目录。它不代表任何身份，也不是机密。
+//
+// 为什么 debug 也用它：Android 只在签名相同的时候才允许覆盖安装。debug 用默认的
+// 调试 key，release 用这把 key，两者签名不同，从 debug 换到 release 就必须先卸载——
+// 一卸载，用户词库和设置全没了。统一成一把 key 之后可以直接覆盖升级。
+val signingProps = Properties().apply {
+    val f = rootProject.file("keystore/keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+/**
+ * 密钥库真的在磁盘上才算数。这里不抛异常，因为 `assembleDebug` 在没 key 时
+ * 也应该能用（AGP 会自动退回调试签名）；只有 release 缺 key 才算错误，
+ * 那个检查放在文件末尾。
+ */
+val signingReady: Boolean = signingProps.getProperty("storeFile")
+    ?.let { rootProject.file(it).isFile } == true
+
 android {
     namespace = "com.feihe.ime"
     compileSdk = 34
@@ -110,9 +132,32 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    signingConfigs {
+        if (signingReady) {
+            create("feihe") {
+                storeFile = rootProject.file(signingProps.getProperty("storeFile"))
+                storePassword = signingProps.getProperty("storePassword")
+                keyAlias = signingProps.getProperty("keyAlias")
+                keyPassword = signingProps.getProperty("keyPassword")
+                // v2 是 Android 7+ 真正校验的那一层，不能关。v1（jar 签名）在
+                // minSdk 24 下装不了更老的系统，AGP 会自己跳过——实测 `apksigner -v`
+                // 就是 "v1 scheme: false / v2: true / v3: true"，所以这里不写 v1，
+                // 写了也只是看着像生效了。v3 顺带开，成本为零，换 key 时才有回滚余地。
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // 见上方注释：debug 和 release 必须同 key，否则换包要卸载。
+            if (signingReady) signingConfig = signingConfigs.getByName("feihe")
+        }
         release {
             isMinifyEnabled = false
+            if (signingReady) signingConfig = signingConfigs.getByName("feihe")
         }
     }
 
@@ -147,4 +192,17 @@ dependencies {
     // 句末标点这类纯逻辑不碰 Android API，跑普通 JVM 单测就够了，
     // 不需要 Robolectric / 真机。
     testImplementation("junit:junit:4.13.2")
+}
+
+// 缺密钥库时 `assembleRelease` 不会报错，它会安安静静产出一个 **unsigned** APK。
+// 那个 APK 装不上，而错误暴露在 adb 或者用户手机上，离原因很远。宁可在构建时就失败。
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    doFirst {
+        if (!signingReady) {
+            throw GradleException(
+                "缺少编译用签名：android/keystore/keystore.properties 或它指向的 .p12 不存在。" +
+                    "重建方法见 docs/Android-方案.md §12.6。"
+            )
+        }
+    }
 }

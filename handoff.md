@@ -3814,3 +3814,33 @@ AArch64、`llvm-nm -D` 里三个 `Java_` 符号、APK 的 `lib/arm64-v8a/` 里�
   `nihao` 会被当成一个音节直接失败——**键盘敲出来的串里没有空格**。
 - 不支持的只有「分词态」：已经输成中文码的长串（`nihcshij`）不切段逐段选。
   那条交互在手机上太重，见 `后续待办.md` A1。
+
+## Android：编译用签名，为什么 key 和密码一起进仓库
+
+APK 必须签名才能装。调试包 AGP 会用 `~/.android/debug.keystore`（**每台机器不同**），
+`assembleRelease` 默认更是只出 unsigned 包。所以放了一把固定的自签名 key：
+`android/keystore/feihe-release.p12` 加 `keystore.properties`，**两者都进版本库**，
+密码 `feihe-ime-2026` 就明写在文件里。
+
+判断依据：这把 key 唯一的作用是「同一把 key 打出来的包能互相覆盖」，不承担任何
+身份作用；项目只做自用和侧载，不走商店。藏起来的唯一结果是换台机器 clone 下来
+打不出能覆盖安装的包，还得翻聊天记录找密码。真要上架那天，商店那份签名另生成、
+不进这个仓库。详见 `docs/Android-方案.md` §12.6。
+
+**debug 也签同一把 key。** Android 只在签名相同时才允许覆盖安装，否则
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`，唯一出路是卸载；而输入法的数据目录（用户
+词库、词频、置顶、自造词）跟着应用走，一卸载就清零。debug 若用调试 key，
+「先装 debug 试试、再换 release」这条最常走的路每次都要求卸载重装。
+
+### 三个坑
+
+- **`.gitattributes` 必须钉 `*.p12 binary`。** 这台机器 `core.autocrlf` 是开的，
+  不钉的话 git 会把 keystore 当文本加 CRLF，下次 checkout 出来 PKCS12 直接解不开，
+  而 keytool 报的是「密码不正确」——离真正原因十万八千里。
+- **`enableV1Signing = true` 在 `minSdk 24` 下不生效。** AGP 按 minSdk 直接跳过 v1，
+  写了也是空的。实测 `apksigner verify -v` 是 `v1:false / v2:true / v3:true`，
+  所以显式设 `false` 并注明——写 `true` 只会让人以为它生效了。
+- **缺 key 时 `assembleRelease` 不报错，只产出一个 unsigned APK。** 装不上，而错误
+  暴露在 adb 输出或者用户手机上，离原因很远。已给 `assembleRelease` 挂 `doFirst`
+  抛 `GradleException`；实测（临时移走 properties 再构建）确实在 20s 时失败并指向
+  §12.6，而不是安静出一个装不上的包。
