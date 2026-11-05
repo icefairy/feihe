@@ -1,0 +1,12 @@
+# Gradle / AGP 产物
+.gradle/
+build/
+app/build/
+
+# 本机路径，不进库
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store

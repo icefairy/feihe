@@ -419,4 +419,60 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | M1 第二步：`config::dir()` 路径注入 | 待做 | 做完才能搬 `freq` / `next` / `pin` / `demote` / `custom` |
 | M1 第三步：`dict` + `dictenc` + `hint` | 待做 | `dictenc` 的单测要扫 `src/*.txt`，跟 `dict` 一起处理 |
 | M1 第四步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 待开始 | 本机无 Android SDK，需先装工具链 |
+| M2 Android 最小可用 | 进行中 | **工具链已配好**（JDK 17 + Gradle 8.7 + AGP 8.5.2 + build-tools 34，全部走国内镜像，见 §12）；骨架 IME 已能编出 2.0 MB 的 APK，清单反查通过。下一步：真机装上看能不能弹出并上屏 |
+
+---
+
+## 12. 本机开发环境（2026-11-05 配好）
+
+### 12.1 装了什么、装在哪
+
+| 组件 | 版本 | 路径 | 来源 |
+|---|---|---|---|
+| Android SDK | platform **android-34** + build-tools **34.0.0** | `D:/soft/asdk` | 平台原本就在；build-tools 从腾讯镜像补 |
+| JDK | **Temurin 17.0.20.1+1** | `D:/soft/jdk17` | 清华 Adoptium 镜像 |
+| Gradle | **8.7** | `D:/soft/gradle-8.7` | 腾讯镜像 |
+| AGP | **8.5.2** | 由 Gradle 拉 | 阿里云 google 镜像 |
+| Kotlin | **2.0.21** | 同上 | 阿里云 public 镜像 |
+
+版本是被工具链钉死的链条，动一个要连带动其余：`compileSdk 34` → 要求 `AGP ≥ 8.1.1`
+→ `AGP 8.5` 要求 `Gradle ≥ 8.7` → `AGP 8.x` 要求 **JDK 17**。机器上原有的 JDK 14
+和 JDK 8 都不够，AGP 会直接拒绝执行。
+
+### 12.2 三个必须知道的网络事实（实测）
+
+1. **`dl.google.com` 完全不通**（`http=000`，10 秒超时）。所以 `google()` 仓库不能放
+   在第一个——所有 `repositories` 块里 **阿里云镜像必须排在最前**：
+   `maven.aliyun.com/repository/google` 和 `/public`（实测 0.3 秒响应）。
+2. **`services.gradle.org` 用不了**。它返回 307 跳转，Gradle 自己的
+   `validateDistributionUrl` 校验会失败（`Test of distribution url … failed`），
+   `gradle wrapper` 直接报错。必须显式给镜像地址：
+   `gradle wrapper --gradle-distribution-url=https://mirrors.cloud.tencent.com/gradle/gradle-8.7-bin.zip`。
+   `gradle-wrapper.properties` 里存的就是这个地址，别改回官方。
+3. **`dl.google.com/android/repository` 也不通**，所以 `sdkmanager` 装不了包。
+   build-tools 是从 `mirrors.cloud.tencent.com/AndroidSDK/build-tools_r34-windows.zip`
+   直接下 zip 解开、目录名改成 `34.0.0` 放进 `build-tools/` 的。以后要补别的 SDK
+   包（platform-tools、ndk），也走这条路：下 zip → 改目录名 → 放进对应目录。
+
+### 12.3 构建
+
+```bash
+export JAVA_HOME="D:/soft/jdk17"
+export PATH="/d/soft/jdk17/bin:$PATH"
+cd android
+./gradlew.bat assembleDebug
+# 产物：android/app/build/outputs/apk/debug/app-debug.apk（骨架期 2.0 MB）
+```
+
+`android/local.properties` 里写 `sdk.dir=D:/soft/asdk`（正斜杠，不转义），这个文件
+不进版本库。
+
+### 12.4 骨架已经验到哪一步
+
+目前 `android/` 里是一个**只出「你好」的输入法**（`FeiheIme.kt`）：能装上、能在系统
+设置里勾选、键盘能弹出、`commitText` 能上屏、`deleteSurroundingText` 能删字。它
+**没有**接 `feihe-core`，也**没有**真键盘——存在的唯一目的是把平台假设一次验完。
+
+已从 APK 里反查确认（不是只看编译成功）：
+`BIND_INPUT_METHOD` 权限、`android.view.InputMethod` 意图、`android.view.im`
+元数据、`res/xml/method.xml` 都在包里。

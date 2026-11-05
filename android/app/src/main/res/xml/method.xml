@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      骨架阶段只有一个中文键盘子类型。小鹤双拼后面会再细分（音形 / 自然码），
+      那是「同一个 subtype 里的模式」，不需要多开 subtype——否则 Win+Space 那种
+      键盘列表会长出一堆看不出区别的条目。
+    -->
+    <subtype
+        android:imeSubtypeLocale="zh_CN"
+        android:imeSubtypeMode="keyboard"
+        android:label="@string/subtype_zh" />
+
+</input-method>
