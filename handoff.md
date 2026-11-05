@@ -3935,3 +3935,32 @@ export PATH="/c/llvm-mingw/llvm-mingw-20260908-ucrt-x86_64/bin:$PATH"
 - 没读宿主前文（`getTextBeforeCursor`），所以**切窗口后的第一个词学不到**上下文。
   Windows 端有 `leading_word`，手机上要走 IPC 读宿主文本，兼容性和时延都得再评估。
 - 候选给满 9 个时联想在屏幕外，得横滑。下一步可以「候选超过 6 个就只给 3 个」。
+
+## 教训：给 SDK 补组件前先看目录里有没有
+
+2026-11-05 我「补装」platform-tools，实际上 `D:/soft/asdk/platform-tools` **早就在**
+——13:08 由 AGP 首次构建时自动装好，版本 **37.0.1**。`ls` 的输出里明明有这一行，
+我还是下了腾讯镜像的 `platform-tools_r34.0.5-windows.zip` 并 `cp -r` 进去，
+把 adb / fastboot / AdbWinApi.dll 全套**降级成 34.0.5**。
+
+三件事值得记：
+
+1. **`ls` 输出里已经有的东西，不要扫一眼就动手。** 判断缺不缺要用 `[ -d path ]`
+   或者看 `package.xml` 里的 `<revision>`，不是看目录列表。
+2. **`cp -r src dest/` 在目标内已有同名目录时的行为依赖实现。** 我预期会生成
+   `platform-tools/platform-tools`，实际是**合并覆盖**。所以事前不能靠预期，
+   事后必须核对文件树——这次是靠「`.exe` 时间戳全是 16:27、`package.xml` 却是
+   13:08 的 37.0.1」这个矛盾发现的。
+3. **`package.xml` 和实际二进制不符，比版本旧本身更危险。** sdkmanager 按
+   `package.xml` 判断版本，认为已是最新就**永远不会去修**。所以把它改成了如实写
+   34.0.5 —— 网络恢复后 `sdkmanager --update` 才会提示并升回去。
+   改完用 `sdkmanager --sdk_root=D:/soft/asdk --list_installed` 验过，输出是
+   `platform-tools | 34.0.5 | Android SDK Platform-Tools 34.0.5`。
+
+还原 37.0.1 的路走不通：`dl.google.com` 直连 000，当前代理（`127.0.0.1:38282`）
+也是 000，腾讯 / 清华 / 阿里 / 中科大的 Android 镜像都只有 r34 系列。
+功能上 34.0.5 完全够用（AGP 不校验 adb 版本），所以到此为止。
+
+**顺带的发现**：`cmdline-tools` 的目录结构不是标准的 `cmdline-tools/latest/`，
+`sdkmanager` 不带 `--sdk_root` 会报 `Could not determine SDK root`。这也是
+「`sdkmanager` 装不了包」的一半原因（另一半是 `dl.google.com` 不通）。

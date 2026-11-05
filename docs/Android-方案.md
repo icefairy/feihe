@@ -553,7 +553,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 
 | 组件 | 版本 | 路径 | 来源 |
 |---|---|---|---|
-| Android SDK | platform **android-34** + build-tools **34.0.0** + platform-tools **34.0.5**（adb / fastboot） | `D:/soft/asdk` | 平台原本就在；build-tools 与 platform-tools 都从腾讯镜像下 zip 补 |
+| Android SDK | platform **android-34** + build-tools **34.0.0** + platform-tools **34.0.5** | `D:/soft/asdk` | 平台与 platform-tools 本来就在（后者是 AGP 首次构建时自动装的 **37.0.1**）；build-tools 从腾讯镜像补 zip。**注意：platform-tools 于 2026-11-05 被误覆盖成 34.0.5**，元数据已如实改写，原因见 `handoff.md` |
 | JDK | **Temurin 17.0.20.1+1** | `D:/soft/jdk17` | 清华 Adoptium 镜像 |
 | Gradle | **8.7** | `D:/soft/gradle-8.7` | 腾讯镜像 |
 | AGP | **8.5.2** | 由 Gradle 拉 | 阿里云 google 镜像 |
