@@ -28,4 +28,5 @@ pub mod calc;
 pub mod correct;
 pub mod fuzzy;
 pub mod number;
+pub mod paths;
 pub mod shuangpin;

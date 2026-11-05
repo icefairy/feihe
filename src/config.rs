@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicU8, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 
 use crate::assist::AssistMode;
@@ -360,12 +360,11 @@ pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
 }
 
 pub fn dir() -> PathBuf {
-    DATA_DIR.get_or_init(resolve_dir).clone()
+    // 真正的存储搬到了 `feihe-core::paths`（平台无关那一半）；这里只提供
+    // **Windows 的策略**：安装目录优先、不可写回落 `%APPDATA%\Feihe`。
+    // 惰性解析仍然只发生一次——`freq::file()` 每次上屏都要拼一次路径。
+    feihe_core::paths::dir_or_else(resolve_dir)
 }
-
-/// 数据目录只解析一次：`dir()` 在热路径上（`freq::file()` 每次上屏都要拼路径），
-/// 每次都去问 DLL 路径 + 试写文件太贵。
-static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// 旧位置：`%APPDATA%\Feihe`。
 pub fn legacy_dir() -> PathBuf {
