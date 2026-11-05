@@ -25,8 +25,9 @@ import com.feihe.ime.keyboard.QwertyLayout
  *
  * ## 这一版刻意没做的（别以为是漏了）
  *
- * - **多音节分词**（`nihcshij` 这种长串切段）：Windows 端有，手机上交互太重（要
- *   左右移段），第一版只做「一个音节 / 一个词、一次上屏」。
+ * - **分词态**（打一长串中文码 `nihcshij` 再切段逐段选）：Windows 端有，手机上
+ *   交互太重（要左右移段）。**全拼多音节是支持的**（`zhongguo` → `vsgo` → 「中国」），
+ *   不支持的只是「已经输成双拼码的长串」。
  * - **数字选词**：键盘没有数字行，加一行会挤掉字母键的高度。选词靠点。
  * - **联想**：上屏后不弹下一个词。手机上弹窗会压住键盘。
  * - **Shift / 符号页**：没实现就不假装支持。
@@ -191,17 +192,18 @@ class FeiheIme : InputMethodService() {
     /**
      * 重新查一遍候选。
      *
-     * 中文态下把已输入的字母交给引擎编码，再拿码去查词库。编码失败（还没打成
-     * 一个完整音节，比如 `nih`）就没有候选，但**不清空已输入的字母**——用户还在打。
+     * 中文态下把已输入的字母交给引擎编码（引擎自己切音节），再拿码去查词库。
+     * 编码失败（还没打成完整音节，比如 `nih`）就没有候选，但**不清空已输入的
+     * 字母**——用户还在打。
      *
-     * 现在的限制：`encodePinyin` 一次只吃一个音节，所以 `nihao` 能出「你好」，
-     * `nihcshij` 这种多音节串出不来。多音节切分还没暴露给 JNI，见类注释。
+     * 限制：`nihao` → `nihc` 能出「你好」，但 `nihcshij` 这种**已经输中文码**的串
+     * 还不行——用户必须一直打全拼。这个差异在类注释里写明了。
      */
     private fun refreshCandidates() {
         candidates = if (!chinese || pending.isEmpty()) {
             emptyList()
         } else {
-            val code = NativeEngine.encodePinyin(pending.toString())
+            val code = NativeEngine.encodePhrase(pending.toString())
             if (code.isEmpty()) emptyList() else NativeEngine.lookup(code, 9)
         }
         renderCandidates()
@@ -259,7 +261,7 @@ class FeiheIme : InputMethodService() {
                 append(pending)
                 // 双拼码是屏幕上第一处真正来自 Rust 引擎的东西：打 `nihao` 时
                 // 这里出现 `nihc`，说明 .so 加载成功、符号对得上、字符串能来回。
-                val code = NativeEngine.encodePinyin(pending.toString())
+                val code = NativeEngine.encodePhrase(pending.toString())
                 if (code.isNotEmpty()) append("→").append(code)
             }
             if (!NativeEngine.available) {

@@ -43,12 +43,14 @@ object NativeEngine {
         if (ensureLoaded()) runCatching { coreVersionNative() }.getOrElse { "调用失败" } else "未加载"
 
     /**
-     * 全拼 → 小鹤双拼码。`nihao` → `nihc`。
+     * 键盘上敲的一串全拼 → 小鹤双拼码。`nihao` → `nihc`、`zhongguo` → `vsgo`。
      *
-     * 失败返回空串：对「编码」这件事来说，「编不出来」和「出错」的结论一样。
+     * 里面是按「最长音节优先」猜的切分，不用你自己加空格。
+     * 失败返回空串：还没打完（`nih`）、或者拼了不存在的音节（`zzz`），
+     * 对编码这件事来说结论一样——没有结果。
      */
-    fun encodePinyin(pinyin: String): String =
-        if (ensureLoaded()) runCatching { encodePinyinNative(pinyin) }.getOrElse { "" } else ""
+    fun encodePhrase(pinyin: String): String =
+        if (ensureLoaded()) runCatching { encodePhraseNative(pinyin) }.getOrElse { "" } else ""
 
     /** 是不是一个完整合法的拼音音节。引擎没加载时一律 false（保守：不当作音节）。 */
     fun isSyllable(text: String): Boolean =
@@ -93,7 +95,7 @@ object NativeEngine {
 
     private external fun coreVersionNative(): String
 
-    private external fun encodePinyinNative(pinyin: String): String
+    private external fun encodePhraseNative(pinyin: String): String
 
     private external fun isSyllableNative(text: String): Boolean
 }

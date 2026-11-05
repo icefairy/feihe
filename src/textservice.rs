@@ -611,49 +611,10 @@ impl FeiheTextService {
 
     /// 全拼串 → 音节序列。
     ///
-    /// DP：`ok[i]` 表示 `s[i..]` 能否完整切成合法音节；可行时贪心取最长
-    /// （`xian` 优先于 `xi`+`an`，符合「长音节优先」的直觉）。
-    /// 切不出来返回 `None`——说明用户还没敲完，或者敲了不存在的拼写。
+    /// 实现在 `shuangpin::split_pinyin`（core 里，Android 也要用同一份）。
+    /// 这里保留一个薄壳是为了不动本文件里所有既有调用点和测试。
     fn split_pinyin(s: &str) -> Option<Vec<String>> {
-        let chars: Vec<char> = s.chars().collect();
-        let n = chars.len();
-        if n == 0 {
-            return None;
-        }
-        let max = shuangpin::MAX_SYLLABLE_LEN;
-        let at = |i: usize, len: usize| -> String { chars[i..i + len].iter().collect() };
-
-        let mut ok = vec![false; n + 1];
-        ok[n] = true;
-        for i in (0..n).rev() {
-            for len in 1..=max.min(n - i) {
-                if ok[i + len] && shuangpin::is_syllable(&at(i, len)) {
-                    ok[i] = true;
-                    break;
-                }
-            }
-        }
-        if !ok[0] {
-            return None;
-        }
-
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < n {
-            let mut step = 0;
-            for len in (1..=max.min(n - i)).rev() {
-                if ok[i + len] && shuangpin::is_syllable(&at(i, len)) {
-                    step = len;
-                    break;
-                }
-            }
-            if step == 0 {
-                return None;
-            }
-            out.push(at(i, step));
-            i += step;
-        }
-        Some(out)
+        shuangpin::split_pinyin(s)
     }
 
     /// 双拼串 → 音节序列（定长 2）。某个分组长度是奇数说明音节没打完。

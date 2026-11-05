@@ -64,14 +64,14 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_coreVersionNative<
 ///
 /// 编码不出来（不是合法拼音、或者超出双拼能表达的音节）返回空串。
 #[no_mangle]
-pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_encodePinyinNative<'local>(
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_encodePhraseNative<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     pinyin: JString<'local>,
 ) -> jstring {
     let input = read_string(&mut env, &pinyin);
     let code = std::panic::catch_unwind(|| {
-        feihe_core::shuangpin::encode_pinyin(feihe_core::shuangpin::Scheme::Xiaohe, &input)
+        feihe_core::shuangpin::encode_phrase(feihe_core::shuangpin::Scheme::Xiaohe, &input)
             .unwrap_or_default()
     })
     .unwrap_or_default();

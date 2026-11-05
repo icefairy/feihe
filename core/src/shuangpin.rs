@@ -461,3 +461,117 @@ mod tests {
         assert!(!Scheme::Xiaohe.is_code_char(';'));
     }
 }
+
+/// 全拼串 → 音节序列。
+///
+/// DP：`ok[i]` 表示 `s[i..]` 能否完整切成合法音节；可行时贪心取最长
+/// （`xian` 优先于 `xi`+`an`，符合「长音节优先」的直觉）。
+/// 切不出来返回 `None`——说明用户还没敲完，或者敲了不存在的拼写。
+///
+/// ## 为什么在 core 里
+///
+/// 这是**纯函数**，只依赖 `is_syllable`。它原来在 `textservice` 里（需要 `&self`
+/// 的邻居太多就一直没搬），结果 Android 端要用「全拼串 → 码」就得在 Kotlin 里重写
+/// 一遍 —— 那是第二份真值。搬过来之后 Windows 和 Android 用的是同一份。
+pub fn split_pinyin(s: &str) -> Option<Vec<String>> {
+    // 只接受纯字母。空格/标点必须在这里挡掉：`encode_chars` 会 `trim()`，
+    // 于是 `at(i, len)` 取到「 ha」这种带前导空格的片段时会被当成合法音节 `ha`，
+    // `ni hao` 就能切出 `ni` + ` ha` + `o`，编出一个看似正常其实错位的码。
+    if s.is_empty() || !s.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let at = |i: usize, len: usize| -> String { chars[i..i + len].iter().collect() };
+
+    let mut ok = vec![false; n + 1];
+    ok[n] = true;
+    for i in (0..n).rev() {
+        for len in 1..=MAX_SYLLABLE_LEN.min(n - i) {
+            if ok[i + len] && is_syllable(&at(i, len)) {
+                ok[i] = true;
+                break;
+            }
+        }
+    }
+    if !ok[0] {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let mut step = 0;
+        for len in (1..=MAX_SYLLABLE_LEN.min(n - i)).rev() {
+            if ok[i + len] && is_syllable(&at(i, len)) {
+                step = len;
+                break;
+            }
+        }
+        if step == 0 {
+            return None;
+        }
+        out.push(at(i, step));
+        i += step;
+    }
+    Some(out)
+}
+
+/// 全拼串 → 双拼码（一个音节气两键）。
+///
+/// 和 [`encode_pinyin`] 的区别：那个按**空格**切音节（给词库这种规范输入用），
+/// 这个自己**猜**音节边界（给键盘上连续敲出来的 `nihao` 用）。
+/// `nihao` → `nihc`，`zhongguo` → `vsgo`。
+///
+/// 切不出合法音节（还没打完、或者拼错）返回 `None`。
+pub fn encode_phrase(scheme: Scheme, pinyin: &str) -> Option<String> {
+    let syllables = split_pinyin(pinyin)?;
+    let mut out = String::with_capacity(syllables.len() * 2);
+    for syl in &syllables {
+        let (a, b) = encode_chars(scheme, syl)?;
+        out.push(a);
+        out.push(b);
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    /// 切分的核心承诺：**相邻两个音节拼起来不能有歧义**。
+    ///
+    /// `xian` 既可以是「先」，也可以是「西 + 安」；这里按最长优先取 `xian`。
+    #[test]
+    fn splits_prefer_the_longest_syllable() {
+        assert_eq!(split_pinyin("xian").unwrap(), vec!["xian"]);
+        assert_eq!(
+            split_pinyin("xianan").unwrap(),
+            vec!["xian", "an"],
+            "长音节优先，不是 xi+an+an"
+        );
+        assert_eq!(split_pinyin("nihao").unwrap(), vec!["ni", "hao"]);
+        assert_eq!(split_pinyin("zhongguo").unwrap(), vec!["zhong", "guo"]);
+    }
+
+    /// 切不干净就返回 `None`——用户还没打完（`nih`）或者拼了不存在的音节（`zzz`）。
+    #[test]
+    fn incomplete_input_is_rejected() {
+        assert!(split_pinyin("").is_none());
+        assert!(split_pinyin("nih").is_none(), "半截音节");
+        assert!(split_pinyin("zzz").is_none(), "不存在的拼写");
+    }
+
+    /// 键盘上敲出来的是**没有空格**的一串，这正是 `encode_phrase` 存在的理由：
+    /// `encode_pinyin` 按空格切，喂它 `nihao` 会当成一个音节而失败。
+    #[test]
+    fn encode_phrase_takes_unspaced_input() {
+        assert_eq!(encode_phrase(Scheme::Xiaohe, "nihao").as_deref(), Some("nihc"));
+        assert_eq!(
+            encode_phrase(Scheme::Xiaohe, "zhongguo").as_deref(),
+            Some("vsgo")
+        );
+        // 带空格反而应该走不通——那条路是 `encode_pinyin` 的
+        assert!(encode_phrase(Scheme::Xiaohe, "ni hao").is_none());
+    }
+}
