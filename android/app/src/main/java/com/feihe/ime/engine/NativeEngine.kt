@@ -83,6 +83,30 @@ object NativeEngine {
         return if (raw.isEmpty()) emptyList() else raw.split('\n')
     }
 
+    /**
+     * 上一个上屏词后面可能接的词。空列表 = 没有联想（这也意味着候选条不该为它留位置）。
+     *
+     * 顺序是「你自己打过的优先，内置表补位」，这个顺序在 core 里定死了，界面**不要**
+     * 重排——用户自己打过一次的词，对他永远比词库统计更可信。
+     */
+    fun suggest(prev: String, limit: Int = 4): List<String> {
+        if (prev.isEmpty() || !ensureLoaded()) return emptyList()
+        val raw = runCatching { suggestNative(prev, limit) }.getOrElse { return emptyList() }
+        return if (raw.isEmpty()) emptyList() else raw.split('\n')
+    }
+
+    /**
+     * 记一对「上次上屏 → 这次上屏」。上屏时调，越频繁越好——写盘节流在 core 里，
+     * 这里不用自己攒。
+     *
+     * `prev` 为空时直接返回：`next::record` 本来也会拒掉，但那要过一次 JNI，
+     * 而「本次输入的第一个词」是最常见的情况（每次切窗口后的第一下）。
+     */
+    fun record(prev: String, next: String) {
+        if (prev.isEmpty() || next.isEmpty() || !ensureLoaded()) return
+        runCatching { recordNative(prev, next) }
+    }
+
     // ── 原生方法 ────────────────────────────────────────────────────────
     //
     // 方法名 + 包名 + 类名拼起来就是 .so 里的符号名：
@@ -92,6 +116,10 @@ object NativeEngine {
     private external fun initNative(dataDir: String, utcOffsetMinutes: Int)
 
     private external fun lookupNative(code: String, limit: Int): String
+
+    private external fun suggestNative(prev: String, limit: Int): String
+
+    private external fun recordNative(prev: String, next: String)
 
     private external fun coreVersionNative(): String
 

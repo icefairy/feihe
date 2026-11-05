@@ -2,7 +2,7 @@
 //!
 //! 这一层**只做搬运**：把 Kotlin 的字符串变成 Rust 的 `&str`，调 `feihe-core`，
 //! 再把结果变回字符串。不放任何业务逻辑——判断、排序、编码规则全在 core 里，
-//! 那边有 308 项单测盯着，这边没有。
+//! 那边有 200 多项单测盯着，这边没有。
 //!
 //! ## 三个刻意的设计
 //!
@@ -139,4 +139,50 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupNative<'loca
     })
     .unwrap_or_default();
     make_string(&mut env, &text)
+}
+
+/// `NativeEngine.suggestNative(prev, limit)` —— `prev` 后面可能接的词，`\n` 分隔。
+///
+/// 和 `lookupNative` 同一个约定（`\n` 分隔、空串表示没有）。按「用户表优先、
+/// 内置表补位」合并，这个顺序在 core 里定死了，壳不要重排——用户自己打过的词
+/// 对他永远比词库统计更可信。
+///
+/// 这里**不记录任何东西**。学习发生在上屏那一刻（`recordNative`），联想只是读。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_suggestNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    prev: JString<'local>,
+    limit: i32,
+) -> jstring {
+    let prev = read_string(&mut env, &prev);
+    let text = std::panic::catch_unwind(move || {
+        if prev.is_empty() {
+            return String::new();
+        }
+        // 手机候选条一行放不下几个，上限比 `lookup` 更紧
+        let n = limit.clamp(1, 12) as usize;
+        feihe_core::next::suggest(&prev, n).join("\n")
+    })
+    .unwrap_or_default();
+    make_string(&mut env, &text)
+}
+
+/// `NativeEngine.recordNative(prev, next)` —— 记一对「上次上屏 → 这次上屏」。
+///
+/// 写盘由 core 的 `maybe_flush` 自己节流，所以每个词都可以调一次 —— 手机上
+/// 「每次上屏都 fsync」是不可接受的，而这件事不该由壳来判断（否则每个壳都会
+/// 各写一套节流规则，然后不一致）。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_recordNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    prev: JString<'local>,
+    next: JString<'local>,
+) {
+    let prev = read_string(&mut env, &prev);
+    let next = read_string(&mut env, &next);
+    let _ = std::panic::catch_unwind(|| {
+        feihe_core::next::record(&prev, &next);
+    });
 }
