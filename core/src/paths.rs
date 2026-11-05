@@ -29,6 +29,22 @@ use std::sync::OnceLock;
 
 static DIR: OnceLock<PathBuf> = OnceLock::new();
 
+/// 壳注册的「数据目录该在哪」策略。一个进程只有一个，所以是普通函数指针。
+///
+/// 为什么要有这条，而不是让模块直接 `dir_or_else(自己的策略)`：`config` 本身
+/// 已经搬进 core 了，它调不到壳里的 `resolve_dir`（那个要问 DLL 路径、要试写）。
+/// 反过来让壳在启动时 `init(算好的路径)` 也不行——`resolve_dir` 会做文件 I/O
+/// （试写探针、首次迁移），在 `DllMain` 里做文件 I/O 是 loader lock 大忌。
+///
+/// 所以拆成两半：**壳注册策略**（一次，纯赋值）＋ **core 首次用到时惰性执行**
+/// （此时已远离 loader lock）。行为和拆 crate 之前完全一致。
+static RESOLVER: OnceLock<fn() -> PathBuf> = OnceLock::new();
+
+/// 壳启动时注册数据目录策略。重复注册会被忽略（先到先得）。
+pub fn set_resolver(f: fn() -> PathBuf) {
+    let _ = RESOLVER.set(f);
+}
+
 /// 壳启动时调用，只生效一次（重复调用会被忽略，不会把已在用的路径换掉）。
 ///
 /// Windows 侧在 `config::resolve_dir` 里算出「安装目录优先、不可写回落
@@ -46,13 +62,21 @@ pub fn dir_or_else(first: impl FnOnce() -> PathBuf) -> PathBuf {
     DIR.get_or_init(first).clone()
 }
 
-/// 取数据目录，要求壳已经 [`init`] 过。
+/// 取数据目录。优先级：显式 [`init`] > 壳注册的 [`set_resolver`] > panic。
 ///
-/// 给「目录只能由壳决定」的平台用（Android：除 `Context` 之外没有别的合法来源）。
-/// 忘了 init 会在这里炸，消息直接说明要做什么——比后面某处
+/// 两条路是有分工的，不是冗余：
+/// - Android 的目录在 `init` 时就是确定的（`Context.getFilesDir()`），直接给。
+/// - Windows 的目录要「试写 + 首次迁移」才知道，**不能在 `DllMain` 里算**，
+///   所以注册策略、等第一次真正要读写文件时再算。
+///
+/// 两个都没设置会在这里炸，消息直接说明要做什么——比后面某处
 /// 「文件写到了 `/` 下面」好查得多。
 pub fn dir() -> PathBuf {
-    DIR.get()
-        .expect("数据目录未初始化：壳必须先调用 feihe_core::paths::init()")
-        .clone()
+    if let Some(d) = DIR.get() {
+        return d.clone();
+    }
+    if let Some(f) = RESOLVER.get() {
+        return DIR.get_or_init(f).clone();
+    }
+    panic!("数据目录未初始化：壳必须先调用 feihe_core::paths::init() 或 set_resolver()");
 }

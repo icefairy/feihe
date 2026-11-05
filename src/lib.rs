@@ -6,6 +6,7 @@ mod clipboard;
 mod clsid;
 mod config;
 mod custom;
+mod datadir;
 mod demote;
 mod dict;
 mod dictbin;
@@ -38,8 +39,8 @@ mod zhconv;
 // 搬家刻意不动调用点：真出了回归，才能确定是搬家本身的问题。
 //
 // 还在 `src/` 里的是下一批：`dictenc`（单测要扫 `src/*.txt` 做全量编码校验）、
-// `dict` / `freq` / `next` / `pin` / `phrase` / `demote` / `custom`（都要数据目录，
-// 等 `config::dir()` 改成可注入之后才能搬）。
+// `dict` / `freq` / `next` / `pin` / `phrase` / `demote` / `custom`（`config` 已经
+// 搬过去了，这批的下一个前置是把 `dictbin`/`dictenc`/`dict` 一起搬）。
 pub use feihe_core::{assist, brief, brief2, calc, correct, fuzzy, number, shuangpin};
 
 use windows::core::*;
@@ -47,13 +48,27 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 
+/// 交给 core 的全屏探测器（`config::PopupMode::Auto` 用）。
+///
+/// 写成独立的 `fn` 而不是内联闭包，是为了让「这是壳提供的策略」这件事在类型上
+/// 就是明确的——`set_fullscreen_probe` 收的就是一个裸函数指针。
+fn popup_probe() -> bool {
+    fullscreen::covers_popup(fullscreen::scene())
+}
+
 #[no_mangle]
 extern "system" fn DllMain(
     _hinst: HINSTANCE,
     reason: u32,
     _reserved: *mut core::ffi::c_void,
 ) -> BOOL {
-    let _ = reason == DLL_PROCESS_ATTACH; // Apartment 模型无需额外初始化
+    if reason == DLL_PROCESS_ATTACH {
+        // 只注册策略，**不执行**：`datadir::resolve` 会试写文件、做首次迁移，
+        // 那是文件 I/O，在 loader lock 里做会卡住甚至死锁。core 会在第一次真正
+        // 需要数据目录时惰性调用它。
+        feihe_core::paths::set_resolver(datadir::resolve);
+        config::set_fullscreen_probe(popup_probe);
+    }
     BOOL::from(true)
 }
 

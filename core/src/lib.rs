@@ -22,6 +22,7 @@
 //! （`textservice` 拆成 `Session` 纯状态机 + 壳，那是最后一步，也是唯一有风险的一步）。
 
 pub mod assist;
+pub mod config;
 pub mod brief;
 pub mod brief2;
 pub mod calc;
