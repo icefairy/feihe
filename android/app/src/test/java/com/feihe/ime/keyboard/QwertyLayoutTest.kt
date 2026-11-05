@@ -56,4 +56,16 @@ class QwertyLayoutTest {
             assertTrue("缺功能键 $need", need in kinds)
         }
     }
+
+    /**
+     * 字母页上没有任何地方能打数字，`123` 是唯一入口。
+     *
+     * 少了它不会崩，但用户会认为「这个输入法打不了数字」——而且找不到任何补救办法。
+     */
+    @Test
+    fun `有数字页入口`() {
+        val symbol = QwertyLayout.rows.flatten().firstOrNull { it.kind == KeyKind.SYMBOL }
+        assertTrue("字母页必须有 123 键", symbol != null)
+        assertEquals("123", symbol!!.label)
+    }
 }

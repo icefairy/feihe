@@ -4,6 +4,9 @@
     <!--
       输入法服务必须带 BIND_INPUT_METHOD 权限，否则系统设置里根本看不到它。
       exported=true 是必须的：系统进程要能绑定这个服务。
+
+      android:settingsActivity 是**系统设置的入口**：系统「输入法 → 飞鹤 → 设置」
+      读的就是这个属性。不写的话那一层不会显示设置入口，用户只能自己找我们。
     -->
     <application
         android:allowBackup="false"
@@ -13,7 +16,8 @@
             android:name=".FeiheIme"
             android:exported="true"
             android:label="@string/ime_name"
-            android:permission="android.permission.BIND_INPUT_METHOD">
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:settingsActivity="com.feihe.ime.SettingsActivity">
 
             <intent-filter>
                 <action android:name="android.view.InputMethod" />
@@ -24,6 +28,22 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
+
+        <!--
+          设置页。三个入口都指向它：键盘状态条上的齿轮、系统设置里的「设置」、桌面图标。
+          桌面图标（MAIN/LAUNCHER）是刻意加的——输入法装完不会自动出现在桌面上，
+          用户想找设置时第一反应是翻应用列表。
+        -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true"
+            android:label="@string/settings_title"
+            android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>

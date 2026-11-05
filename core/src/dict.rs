@@ -353,6 +353,90 @@ pub fn lookup_pinyin(prefix: &str, limit: usize) -> Vec<Cow<'static, str>> {
     search(true, prefix, "", AssistMode::Off, limit)
 }
 
+// ─────────────────────────────────────────────────────────────
+// 输入方式：按键串 → 要查的码
+// ─────────────────────────────────────────────────────────────
+//
+// Windows 端自己管着「敲进来的键就是码」这件事（`textservice` 里一个
+// `StringBuilder` 攒着，从不需要把全拼翻译成码）。Android 的 26 键键盘没有那个
+// 前提：用户在手机上按的是字母，屏幕上没有「码」的概念，所以壳必须回答一个问题
+// ——**这一串按键是双拼码，还是全拼？**
+//
+// 这个判断放在 core 里，不是因为它复杂，而是因为它是**第二份真值**的高危区：
+// 判断规则要是写在 Kotlin 里，Windows 和 Android 出了分歧就只能靠人肉对。判断
+// 本身是纯的（只依赖输入、方案、以及「这个码查得到东西吗」），所以能单测。
+
+/// 输入串解析出来的「要查的码」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    /// 拿去查词库的码（双拼码；全拼模式下的串也会先被编成双拼码）。
+    pub code: String,
+    /// 这一串是**按全拼解释**出来的，而不是原样当码。
+    /// 壳据此决定状态条上要不要显示 `全拼→码`。
+    pub from_pinyin: bool,
+}
+
+/// 按键串 → 码。`probe` 回答「这个码查得到东西吗」。
+///
+/// ## 规则（顺序就是优先级）
+///
+/// - `pinyin_mode = true`（全拼模式）：**只有一种解释**。按键就是全拼，编不出码
+///   就是没有。这里刻意不退回双拼——用户选了全拼，就是不想让 `xian` 出「西安」。
+/// - `pinyin_mode = false`（双拼模式）：**先原样当码**，查得到就用；查不到才按全拼
+///   解释。于是双拼模式实际是「双拼，且认全拼」，手机上第一次装完直接打 `nihao`
+///   也能出字，不会因为默认值是双拼就一片空白。
+///
+/// ## 为什么抽成带探针的纯函数
+///
+/// 真探针是 `any`，它的答案依赖**词库内容**，而词库内容一律不许进断言（个人词库
+/// 一导入断言当场不成立，这条在 `handoff` 里记过三次）。喂一个假探针，就能把
+/// 「什么时候该退回全拼」钉死，和词库里有没有那个词完全无关。
+pub fn resolve_code_with<F>(
+    input: &str,
+    pinyin_mode: bool,
+    scheme: Scheme,
+    probe: F,
+) -> Option<Resolved>
+where
+    F: Fn(&str) -> bool,
+{
+    if input.is_empty() {
+        return None;
+    }
+    if !pinyin_mode && probe(input) {
+        return Some(Resolved {
+            code: input.to_string(),
+            from_pinyin: false,
+        });
+    }
+    crate::shuangpin::encode_phrase(scheme, input).map(|code| Resolved {
+        code,
+        from_pinyin: true,
+    })
+}
+
+/// 按键串 → （实际用的码, 候选）。Android 的 `lookupInputNative` 就是它。
+///
+/// 返回码是给状态条用的：打 `nihao` 时显示 `nihao→nihc`，让人看得见引擎在干什么；
+/// 双拼模式下两者相同，就不显示箭头。
+pub fn lookup_input(
+    input: &str,
+    pinyin_mode: bool,
+    limit: usize,
+) -> (String, Vec<Cow<'static, str>>) {
+    if input.is_empty() || limit == 0 {
+        return (String::new(), Vec::new());
+    }
+    let Some(r) = resolve_code_with(input, pinyin_mode, scheme(), any) else {
+        return (String::new(), Vec::new());
+    };
+    // 码永远是双拼码，所以这里固定查双拼索引。全拼模式不查 `Idx::Flat`：
+    // 同一批词在两套索引里的结果一模一样（双拼是音节的 1:1 重编码），
+    // 而 Android 的 base.bin 不需要为了全拼多带一份索引。
+    let words = search(false, &r.code, "", AssistMode::Off, limit);
+    (r.code, words)
+}
+
 /// 拼写纠错：整串零候选时的最后一招。
 ///
 /// **为什么是独立函数、不并进 `search`**：`search` 是「查词库」，纠错是「查不到之后
@@ -2201,5 +2285,88 @@ pub(crate) mod tests {
         );
         assert_eq!(lens, vec![2, 2, 2], "码长必须跟着一起删");
         assert_eq!(tiers, vec![0, 0, 1], "层级必须跟着一起删");
+    }
+
+    // ── 输入方式：按键串 → 码（Android 的 26 键靠这一条活着） ──────────
+    //
+    // 这一组**不查词库**：探针是假的。理由和 `fancha` 那批一样——一旦把
+    // `lookup` 的结果写进断言，用户导入个人词库的那天它就红了，而红的位置
+    // 指向的会是「输入方式判断错了」，完全误导。
+
+    /// 全拼模式：按键就是全拼，整串编成码。
+    #[test]
+    fn pinyin_mode_encodes_the_whole_string() {
+        let r = resolve_code_with("nihao", true, Scheme::Xiaohe, |_| false).unwrap();
+        assert_eq!(r.code, "nihc");
+        assert!(r.from_pinyin);
+
+        // 还没打完（`nih`）/ 拼了不存在的音节（`zzz`）→ 没有码
+        assert!(resolve_code_with("nih", true, Scheme::Xiaohe, |_| false).is_none());
+        assert!(resolve_code_with("zzz", true, Scheme::Xiaohe, |_| false).is_none());
+    }
+
+    /// 全拼模式**一次都不问探针**。问它就意味着「又去按双拼解释了」，而用户选全拼
+    /// 正是为了「`xian` 出先、不出西安」。
+    #[test]
+    fn pinyin_mode_never_probes_the_dict() {
+        let called = std::cell::Cell::new(false);
+        let _ = resolve_code_with("xian", true, Scheme::Xiaohe, |_| {
+            called.set(true);
+            true
+        });
+        assert!(!called.get(), "全拼模式不该去问「这个双拼码有没有候选」");
+    }
+
+    /// 双拼模式：原样查得到就当码，一个字都不转。
+    ///
+    /// `xian` 在双拼用户手里是「西 + 安」（西安），在全拼用户手里是「先」——同一个
+    /// 串两种意思，**这就是为什么必须有模式开关，而不是自动猜**。
+    #[test]
+    fn shuangpin_mode_takes_the_code_as_is() {
+        let r = resolve_code_with("xian", false, Scheme::Xiaohe, |c| c == "xian").unwrap();
+        assert_eq!(r.code, "xian");
+        assert!(!r.from_pinyin, "原样当码时不该标成「按全拼解释」");
+    }
+
+    /// 双拼模式的兜底：码查不到才按全拼解释。
+    ///
+    /// 手机上第一次装完默认就是双拼，用户什么设置都没动、直接打 `nihao`——没有这条
+    /// 兜底，屏幕会一片空白，然后他会认为「输入法坏了」。
+    #[test]
+    fn shuangpin_mode_falls_back_to_pinyin() {
+        let r = resolve_code_with("nihao", false, Scheme::Xiaohe, |_| false).unwrap();
+        assert_eq!(r.code, "nihc");
+        assert!(r.from_pinyin);
+    }
+
+    /// 空串：不问探针、不给码。
+    #[test]
+    fn empty_input_asks_nothing() {
+        assert!(resolve_code_with("", false, Scheme::Xiaohe, |_| panic!("空串不该查词库")).is_none());
+        assert!(resolve_code_with("", true, Scheme::Xiaohe, |_| panic!("空串不该查词库")).is_none());
+    }
+
+    /// 编码必须跟当前方案走。**写死 `Xiaohe` 是这里最容易犯的错**：切到微软双拼后
+    /// 每个音节的韵母位置都会错，而屏幕上完全看不出来，只表现为「候选莫名其妙不对」。
+    #[test]
+    fn resolution_follows_the_current_scheme() {
+        let _g = scheme_guard();
+        for s in [Scheme::Xiaohe, Scheme::Ms] {
+            set_scheme(s);
+            let expect = shuangpin::encode_phrase(s, "shuang").expect("编码失败");
+            let (code, _) = lookup_input("shuang", true, 3);
+            assert_eq!(code, expect, "{s:?} 下全拼模式没按当前方案编码");
+        }
+        set_scheme(Scheme::Xiaohe);
+    }
+
+    /// `lookup_input` 在没码时返回空，**不是**返回一个空串码——壳靠「码是不是空」
+    /// 决定状态条上要不要显示箭头。
+    #[test]
+    fn lookup_input_gives_no_code_for_unencodable_input() {
+        let _g = scheme_guard();
+        set_scheme(Scheme::Xiaohe);
+        assert_eq!(lookup_input("", false, 9), (String::new(), Vec::new()));
+        assert_eq!(lookup_input("zzz", true, 9), (String::new(), Vec::new()));
     }
 }

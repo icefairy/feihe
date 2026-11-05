@@ -1,5 +1,6 @@
 package com.feihe.ime
 
+import android.content.Intent
 import android.inputmethodservice.InputMethodService
 import android.util.Log
 import android.util.TypedValue
@@ -13,33 +14,54 @@ import com.feihe.ime.engine.NativeEngine
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
 import com.feihe.ime.keyboard.KeyboardView
+import com.feihe.ime.keyboard.NumericLayout
 import com.feihe.ime.keyboard.QwertyLayout
 
 /**
  * 飞鹤输入法 · Android 壳（M2 阶段）。
  *
- * 现在的状态：**26 键 + 小鹤双拼 + 真候选**。
+ * 现在的状态：**26 键 + 双拼/全拼双模 + 真候选**。
  *
- * 打 `nihao` 时引擎把它编成双拼码 `nihc`，拿这个码去查词库，候选摆在键盘上方一条
- * 里，点一下上屏；空格选第一个。
+ * 按键串怎么解释由设置里的「输入方式」决定（`config.ini` 的 `pinyin_mode`，
+ * 和 Windows 端同一个字段）：
+ *
+ * - **双拼（默认）**：`nihc` 原样当码查，出「你好」。查不到时**自动按全拼再试一次**，
+ *   所以直接打 `nihao` 也出「你好」——手机上第一次装完不会一片空白。
+ * - **全拼**：一律按全拼解释。`xian` 出「先」，不是「西安」。适合不熟悉双拼的人。
  *
  * ## 这一版刻意没做的（别以为是漏了）
  *
- * - **分词态**（打一长串中文码 `nihcshij` 再切段逐段选）：Windows 端有，手机上
- *   交互太重（要左右移段）。**全拼多音节是支持的**（`zhongguo` → `vsgo` → 「中国」），
- *   不支持的只是「已经输成双拼码的长串」。
+ * - **分词态**（打一长串码 `nihcshij` 再切段逐段选）：Windows 端有，手机上
+ *   交互太重（要左右移段）。现在长串只在「恰好是某个词的前缀」时有候选。
  * - **数字选词**：键盘没有数字行，加一行会挤掉字母键的高度。选词靠点。
  * - **联想浮窗**：有联想，但**不弹独立窗口**（那会压住键盘、还会把候选条顶跳）。
  *   联想词接在候选条末尾，用 `→` 前缀区分，点一下上屏。
- * - **Shift / 符号页**：没实现就不假装支持。
+ * - **Shift**：没实现就不假装支持。
  */
 class FeiheIme : InputMethodService() {
 
-    /** 正在组合的字母（还没上屏）。中文态下它是双拼码的「原始输入」。 */
+    /** 正在组合的字母（还没上屏）。双拼模式下它就是码，全拼模式下还要翻译一次。 */
     private val pending = StringBuilder()
 
     /** 当前候选。空表示没有候选（码还没成型，或者词库里没有）。 */
     private var candidates: List<String> = emptyList()
+
+    /**
+     * 这一串按键**实际用到的码**（引擎算出来的）。
+     *
+     * 全拼模式下 `nihao` 会变成 `nihc`，状态条要显示这个箭头——它是引擎真的在干活的
+     * 唯一可见证据；双拼模式下两者相同，就不显示。空串 = 这一串还成不了码。
+     */
+    private var code: String = ""
+
+    /**
+     * 输入方式：true = 全拼，false = 双拼（默认）。
+     *
+     * 缓存起来是因为它每次按键都要用，而 `config` 那边要过锁。设置页改完之后
+     * `onStartInputView` / `onWindowShown` 会重读一次——同一个进程，改完立刻生效。
+     */
+    private var pinyinMode: Boolean = false
+
 
     /**
      * 联想词（上一个词的后续）。和 [candidates] **分开存**，因为它们不参与同一套
@@ -61,16 +83,38 @@ class FeiheIme : InputMethodService() {
     private var chinese = true
 
     private var statusText: TextView? = null
+    private var statusBar: LinearLayout? = null
     private var candidateBar: LinearLayout? = null
     private var candidateScroll: HorizontalScrollView? = null
+
+    /** 键盘容器。字母页和数字页在这里换，**不是**重建整个 InputView。 */
+    private var keyboardHost: LinearLayout? = null
+
+    /** 当前是不是数字/符号页。 */
+    private var numeric = false
 
     override fun onCreate() {
         super.onCreate()
         // 数据目录用 filesDir：输入法进程随时可能被杀，配置和词频都必须落盘到
         // 应用私有目录（不是缓存目录——缓存会被系统清掉）。
         NativeEngine.init(filesDir.absolutePath)
-        Log.i(TAG, "onCreate: 引擎 ${NativeEngine.coreVersion()}")
+        readInputMode()
+        Log.i(TAG, "onCreate: 引擎 ${NativeEngine.coreVersion()}，${modeLabel()}")
     }
+
+    /**
+     * 从配置里重读输入方式。
+     *
+     * 设置页和输入法跑在**同一个进程**里，所以那边 `setConfig` 改完，这边的
+     * `config::get()` 立刻能读到新值——不需要重载文件。重读的时机是「键盘再次
+     * 出现」（`onStartInputView` / `onWindowShown`），用户从设置页返回就能用上。
+     */
+    private fun readInputMode() {
+        pinyinMode = NativeEngine.settings()?.pinyin ?: pinyinMode
+    }
+
+    private fun modeLabel(): String = if (pinyinMode) "全拼" else "双拼"
+
 
     override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
@@ -87,8 +131,24 @@ class FeiheIme : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        // 用户可能刚从设置页切了输入方式/方案回来，这里重读一次
+        readInputMode()
         refreshStatus()
     }
+
+    /**
+     * 键盘窗口每次露出来都重读一次输入方式。
+     *
+     * `onStartInputView` 不一定每次都来（同一个输入框里收起再弹出可能只走这里），
+     * 而设置页返回后最需要的就是「改完立刻生效」。读一次配置只是一个短串的 JNI，
+     * 比让用户怀疑「设置没生效」便宜得多。
+     */
+    override fun onWindowShown() {
+        super.onWindowShown()
+        readInputMode()
+        refreshStatus()
+    }
+
 
     /**
      * 关掉全屏编辑模式。
@@ -107,10 +167,32 @@ class FeiheIme : InputMethodService() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+        }
+
+        // 状态条右侧的齿轮。**输入法必须有这个入口**：系统设置里的那一层藏得深，
+        // 用户第一次装完根本不知道去哪调方案。
+        val gear = TextView(this).apply {
+            text = "⚙"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            gravity = Gravity.CENTER
+            setTextColor(0xFF5F6368.toInt())
+            setPadding(dp(14f), dp(6f), dp(14f), dp(6f))
+            contentDescription = "输入法设置"
+            setOnClickListener { openSettings() }
+        }
+
+        statusBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(0xFFEDEEF0.toInt())
+            addView(
+                statusText,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+            )
+            addView(gear)
         }
         root.addView(
-            statusText,
+            statusBar,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -136,10 +218,40 @@ class FeiheIme : InputMethodService() {
             ),
         )
 
-        root.addView(KeyboardView.build(this, QwertyLayout.rows, ::onKey))
+        keyboardHost = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        root.addView(keyboardHost)
+        showKeyboardPage(numeric = false)
+
         refreshStatus()
         refreshCandidates()
         return root
+    }
+
+    /**
+     * 换键盘页。数字页和字母页共用同一个容器，**不重建 InputView**——
+     * 重建会走一遍 `onCreateInputView`，键盘会闪一下、候选条也会清空。
+     */
+    private fun showKeyboardPage(numeric: Boolean) {
+        val host = keyboardHost ?: return
+        this.numeric = numeric
+        host.removeAllViews()
+        host.addView(
+            KeyboardView.build(
+                this,
+                if (numeric) NumericLayout.rows else QwertyLayout.rows,
+                ::onKey,
+            ),
+        )
+        refreshStatus()
+    }
+
+    private fun openSettings() {
+        // 输入法进程里启动 Activity 必须带 NEW_TASK：这个 Context 不是一个 Activity。
+        val i = Intent(this, SettingsActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(i) }
     }
 
     private fun onKey(key: Key) {
@@ -208,8 +320,22 @@ class FeiheIme : InputMethodService() {
                 refreshCandidates()
             }
 
-            // Shift / 符号页还没实现，先什么都不做——不要假装支持
-            KeyKind.SHIFT, KeyKind.SYMBOL -> Unit
+            KeyKind.SYMBOL -> showKeyboardPage(!numeric)
+
+            KeyKind.TEXT -> {
+                // 和标点同一套：先把手上半截拼音处理掉，再打这个字符。
+                // 不这么做的话「nihao」+「1」会变成「nihao1」还在组合态里。
+                if (chinese && candidates.isNotEmpty()) {
+                    commitWord(candidates.first(), thenSuggest = false)
+                } else {
+                    commitPending()
+                }
+                commitText(key.code)
+                forgetContext()
+            }
+
+            // Shift 还没实现，先什么都不做——不要假装支持
+            KeyKind.SHIFT -> Unit
         }
     }
 
@@ -224,19 +350,21 @@ class FeiheIme : InputMethodService() {
     /**
      * 重新查一遍候选。
      *
-     * 中文态下把已输入的字母交给引擎编码（引擎自己切音节），再拿码去查词库。
+     * 中文态下把已输入的字母交给引擎，引擎决定「当双拼码还是当全拼」，并把实际用的
+     * 码一起返回（`code` 字段，给状态条）。**判断不在 Kotlin 里做**——那是第二份
+     * 真值，Windows/Android 一旦分歧就只能靠人肉对，而且症状是「候选莫名其妙不对」。
+     *
      * 编码失败（还没打成完整音节，比如 `nih`）就没有候选，但**不清空已输入的
      * 字母**——用户还在打。
-     *
-     * 限制：`nihao` → `nihc` 能出「你好」，但 `nihcshij` 这种**已经输中文码**的串
-     * 还不行——用户必须一直打全拼。这个差异在类注释里写明了。
      */
     private fun refreshCandidates() {
-        candidates = if (!chinese || pending.isEmpty()) {
-            emptyList()
+        if (!chinese || pending.isEmpty()) {
+            code = ""
+            candidates = emptyList()
         } else {
-            val code = NativeEngine.encodePhrase(pending.toString())
-            if (code.isEmpty()) emptyList() else NativeEngine.lookup(code, 9)
+            val (c, words) = NativeEngine.lookupInput(pending.toString(), pinyinMode, 9)
+            code = c
+            candidates = words
         }
         renderCandidates()
     }
@@ -304,6 +432,7 @@ class FeiheIme : InputMethodService() {
         }
 
         pending.setLength(0)
+        code = ""
         candidates = emptyList()
         suggestions = if (thenSuggest && chinese) {
             NativeEngine.suggest(word, SUGGEST_LIMIT)
@@ -324,6 +453,7 @@ class FeiheIme : InputMethodService() {
         NativeEngine.record(prev, word)
 
         pending.setLength(0)
+        code = ""
         candidates = emptyList()
         suggestions = NativeEngine.suggest(word, SUGGEST_LIMIT)
         renderCandidates()
@@ -341,6 +471,7 @@ class FeiheIme : InputMethodService() {
 
     private fun clearComposing() {
         pending.setLength(0)
+        code = ""
         candidates = emptyList()
         suggestions = emptyList()
         renderCandidates()
@@ -362,14 +493,18 @@ class FeiheIme : InputMethodService() {
     private fun refreshStatus() {
         statusText?.text = buildString {
             append(if (chinese) "中" else "英")
-            append(" · 26 键")
+            // 数字页上写输入方式会让人以为还能打拼音，所以这里跟着换。
+            // 平时写「双拼/全拼」而不是「26 键」——键盘长什么样看得见，输入方式是
+            // 看不见的，而它决定了「为什么我打 xian 出了西安」。
+            append(if (numeric) " · 数字" else " · " + modeLabel())
             if (pending.isNotEmpty()) {
                 append(" · ")
                 append(pending)
-                // 双拼码是屏幕上第一处真正来自 Rust 引擎的东西：打 `nihao` 时
-                // 这里出现 `nihc`，说明 .so 加载成功、符号对得上、字符串能来回。
-                val code = NativeEngine.encodePhrase(pending.toString())
-                if (code.isNotEmpty()) append("→").append(code)
+                // 双拼模式下码就是输入的字母，两者相同，不显示箭头；
+                // 全拼模式（或双拼模式退回全拼解释）才有 `nihao→nihc`。
+                if (code.isNotEmpty() && code != pending.toString()) {
+                    append("→").append(code)
+                }
             }
             if (!NativeEngine.available) {
                 append("  ·  引擎未加载")

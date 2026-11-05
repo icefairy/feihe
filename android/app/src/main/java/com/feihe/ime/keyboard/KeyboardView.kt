@@ -95,7 +95,9 @@ object KeyboardView {
             cornerRadius = radius
             setColor(
                 when (key.kind) {
-                    KeyKind.CHAR -> Color.WHITE
+                    // 数字/标点页上的键和字母一样是「可打的字」，给白底；
+                    // 功能键才用灰底，靠颜色就能分出「这排是打字的还是操作的」。
+                    KeyKind.CHAR, KeyKind.TEXT -> Color.WHITE
                     KeyKind.SPACE -> 0xFFF7F7F8.toInt()
                     else -> 0xFFB9BEC6.toInt()
                 }
@@ -106,14 +108,15 @@ object KeyboardView {
     }
 
     private fun accessibilityLabel(key: Key): String = when (key.kind) {
-        KeyKind.CHAR -> key.label
+        KeyKind.CHAR, KeyKind.TEXT -> key.label
         KeyKind.DELETE -> "删除"
         KeyKind.SHIFT -> "上档"
         KeyKind.SPACE -> "空格"
         KeyKind.ENTER -> "换行"
         KeyKind.PUNCT -> key.label
         KeyKind.MODE -> "切换中英文"
-        KeyKind.SYMBOL -> "符号"
+        // 按钮上写的是「123」/「ABC」，读屏念数字没有意义，念出「切到哪」才行
+        KeyKind.SYMBOL -> if (key.label == "ABC") "字母键盘" else "数字和符号"
     }
 
     private fun dp(ctx: Context, v: Float): Int =

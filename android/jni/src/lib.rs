@@ -71,8 +71,10 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_encodePhraseNative
 ) -> jstring {
     let input = read_string(&mut env, &pinyin);
     let code = std::panic::catch_unwind(|| {
-        feihe_core::shuangpin::encode_phrase(feihe_core::shuangpin::Scheme::Xiaohe, &input)
-            .unwrap_or_default()
+        // **方案必须取当前的，不能写死 Xiaohe。** 用户在设置里切到微软双拼之后，
+        // 这里还按小鹤编码的话，每个音节的韵母位置都是错的——而界面上看不出来，
+        // 只会表现为「候选莫名其妙不对」。
+        feihe_core::shuangpin::encode_phrase(feihe_core::dict::scheme(), &input).unwrap_or_default()
     })
     .unwrap_or_default();
     make_string(&mut env, &code)
@@ -113,29 +115,45 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_initNative<'local>
         // 不调这一步的话 `pinyin_mode` / `candidate_rows` 这些原子镜像都是初值，
         // 用户在设置里改过的选项不会生效。
         feihe_core::config::refresh_if_changed();
+        // 方案要同步进 `dict` 的原子量：`dict::scheme()` 是查词库时用的那份，
+        // 和 `config.scheme` 是两处状态。Windows 端在 `Activate` 里做，Android 没有
+        // 那个时机，只能在 init 里做一次 + 设置里改的时候再做一次。
+        feihe_core::dict::set_scheme(feihe_core::config::get().scheme);
     });
 }
 
-/// `NativeEngine.lookupNative(code, limit)` —— 按双拼码查候选，`\n` 分隔。
+/// `NativeEngine.lookupInputNative(input, pinyinMode, limit)` —— 按键串 → 码 + 候选。
 ///
-/// 只查**一个码**，不做简繁转换、不做联想、不记录词频：那些是壳的策略（用哪个码、
-/// 什么时候学），不属于「查词库」这件事。Android 第一版先要「按了键能出字」。
+/// 返回串的**第一行是「实际用的码」**，后面每行一个候选；空串表示「没有码，也没有
+/// 候选」。用一行塞码是为了**一次 JNI 调用**解决问题：码要显示在状态条上（`nihao→nihc`），
+/// 候选要摆进候选条，分两次调用就意味着同一串字母要过两遍边界、两遍切分。
+///
+/// 判断「这串按键是双拼码还是全拼」的逻辑在 core 的 `dict::lookup_input` 里，
+/// 不在这里——见那边的注释：它是第二份真值的高危区，必须在有单测的地方。
 #[no_mangle]
-pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupNative<'local>(
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupInputNative<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
-    code: JString<'local>,
+    input: JString<'local>,
+    pinyin_mode: jboolean,
     limit: i32,
 ) -> jstring {
-    let code = read_string(&mut env, &code);
+    let input = read_string(&mut env, &input);
     let text = std::panic::catch_unwind(move || {
+        if input.is_empty() {
+            return String::new();
+        }
+        let n = limit.clamp(1, 60) as usize;
+        let (code, words) = feihe_core::dict::lookup_input(&input, pinyin_mode != 0, n);
         if code.is_empty() {
             return String::new();
         }
-        // 上限放在这里而不是信调用方：候选窗再宽也放不下几十个，
-        // 而一次查太多会白白穿越几十次 JNI 字符串边界。
-        let n = limit.clamp(1, 60) as usize;
-        feihe_core::dict::lookup(&code, n).join("\n")
+        let mut out = code;
+        for w in words {
+            out.push('\n');
+            out.push_str(w.as_ref());
+        }
+        out
     })
     .unwrap_or_default();
     make_string(&mut env, &text)
@@ -184,5 +202,69 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_recordNative<'loca
     let next = read_string(&mut env, &next);
     let _ = std::panic::catch_unwind(|| {
         feihe_core::next::record(&prev, &next);
+    });
+}
+
+/// `NativeEngine.configNative()` —— 设置页要显示的开关快照，`key=value;…`。
+///
+/// 用「自己拼串」而不是 JSON：这里只有五个布尔/枚举，引序列化库得不偿失，
+/// 而且拼串的格式错一眼能看出来。值和 `config.ini` 里一致（`xiaohe` / `ms`、`0` / `1`），
+/// 设置页原样回写。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_configNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    let s = std::panic::catch_unwind(|| {
+        use feihe_core::shuangpin::Scheme;
+        let c = feihe_core::config::get();
+        let scheme = match c.scheme {
+            Scheme::Xiaohe => "xiaohe",
+            Scheme::Ms => "ms",
+        };
+        format!(
+            "scheme={scheme};pinyin={};traditional={};suggest={};learn={}",
+            u8::from(c.pinyin_mode),
+            u8::from(c.traditional),
+            u8::from(c.suggest),
+            u8::from(c.learn),
+        )
+    })
+    .unwrap_or_default();
+    make_string(&mut env, &s)
+}
+
+/// `NativeEngine.setConfigNative(key, value)` —— 改一项设置并落盘。
+///
+/// 只认下面这几个 key，别的一律忽略：设置页能改的东西是白名单，不能让界面
+/// 随便往 `config.ini` 里塞字段（那些字段 Windows 端还在读，塞坏了那边不认）。
+///
+/// **改方案必须同步 `dict::set_scheme`**——`config.scheme` 和 `dict::scheme()`
+/// 是两处状态，只改前者会出现「设置里显示微软双拼、查词还按小鹤」，
+/// 而这种错在界面上完全看不出来，只表现为候选莫名其妙不对。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_setConfigNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    key: JString<'local>,
+    value: JString<'local>,
+) {
+    let k = read_string(&mut env, &key);
+    let v = read_string(&mut env, &value);
+    let _ = std::panic::catch_unwind(|| {
+        use feihe_core::shuangpin::Scheme;
+        let on = v == "1";
+        match k.as_str() {
+            "scheme" => {
+                let s = if v == "ms" { Scheme::Ms } else { Scheme::Xiaohe };
+                feihe_core::config::update(|c| c.scheme = s);
+                feihe_core::dict::set_scheme(s);
+            }
+            "pinyin" => feihe_core::config::update(|c| c.pinyin_mode = on),
+            "traditional" => feihe_core::config::update(|c| c.traditional = on),
+            "suggest" => feihe_core::config::update(|c| c.suggest = on),
+            "learn" => feihe_core::config::update(|c| c.learn = on),
+            _ => {}
+        }
     });
 }

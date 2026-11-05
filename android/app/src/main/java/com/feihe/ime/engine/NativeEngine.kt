@@ -72,15 +72,26 @@ object NativeEngine {
     }
 
     /**
-     * 按双拼码查候选。空列表就是没有候选（不是错误）。
+     * 按键串 → （实际用的码, 候选）。
      *
-     * 返回 `List` 而不是拼好的字符串：候选要一个个放进视图，中间再切一次字符串
-     * 既费事又容易在分隔符上出错。
+     * 第一个值是**状态条要显示的那个码**：全拼模式下打 `nihao` 会得到 `nihc`
+     * （不相等 → 显示 `nihao→nihc`），双拼模式下原样当码（相等 → 不显示箭头）。
+     *
+     * 「这串按键是双拼码还是全拼」的判定在 core 里（`dict::lookup_input`），
+     * 这里只传 `pinyinMode`。**不要在 Kotlin 里再判一次**：那是第二份真值，
+     * 两边一旦分歧，症状是「候选莫名其妙不对」，根本查不到这里。
+     *
+     * 返回 `("" to emptyList())` 就是「没有码也没有候选」，不是错误。
      */
-    fun lookup(code: String, limit: Int = 9): List<String> {
-        if (code.isEmpty() || !ensureLoaded()) return emptyList()
-        val raw = runCatching { lookupNative(code, limit) }.getOrElse { return emptyList() }
-        return if (raw.isEmpty()) emptyList() else raw.split('\n')
+    fun lookupInput(input: String, pinyinMode: Boolean, limit: Int = 9): Pair<String, List<String>> {
+        if (input.isEmpty() || !ensureLoaded()) return "" to emptyList()
+        val raw = runCatching { lookupInputNative(input, pinyinMode, limit) }
+            .getOrElse { return "" to emptyList() }
+        if (raw.isEmpty()) return "" to emptyList()
+        // 第一行是码，剩下的是候选。split 不丢空行，但 code 不会是空串（上面判过），
+        // 所以 `drop(1)` 之后每一行都是真候选。
+        val lines = raw.split('\n')
+        return lines[0] to if (lines.size > 1) lines.subList(1, lines.size) else emptyList()
     }
 
     /**
@@ -107,6 +118,46 @@ object NativeEngine {
         runCatching { recordNative(prev, next) }
     }
 
+    /**
+     * 设置页的开关快照。`null` = 引擎没加载，设置页据此显示「引擎未就绪」而不是
+     * 一排点了没反应的开关。
+     */
+    data class Settings(
+        /** `xiaohe` 或 `ms`。 */
+        val scheme: String,
+        /** true = 全拼模式（不按双拼解释按键）。 */
+        val pinyin: Boolean,
+        val traditional: Boolean,
+        val suggest: Boolean,
+        val learn: Boolean,
+    )
+
+    fun settings(): Settings? {
+        if (!ensureLoaded()) return null
+        val raw = runCatching { configNative() }.getOrElse { return null }
+        // 格式是 `key=value;key=value`，解析出错时按默认值兜底而不是抛异常：
+        // 设置页拿不到值只需要显示默认，没必要崩。
+        val map = raw.split(';')
+            .mapNotNull { kv ->
+                val i = kv.indexOf('=')
+                if (i <= 0) null else kv.substring(0, i) to kv.substring(i + 1)
+            }
+            .toMap()
+        return Settings(
+            scheme = map["scheme"] ?: "xiaohe",
+            pinyin = map["pinyin"] == "1",
+            traditional = map["traditional"] == "1",
+            suggest = map["suggest"] == "1",
+            learn = map["learn"] == "1",
+        )
+    }
+
+    /** 改一项设置。key 是白名单里的那几个（见 `android/jni/src/lib.rs`）。 */
+    fun setSetting(key: String, value: String) {
+        if (!ensureLoaded()) return
+        runCatching { setConfigNative(key, value) }
+    }
+
     // ── 原生方法 ────────────────────────────────────────────────────────
     //
     // 方法名 + 包名 + 类名拼起来就是 .so 里的符号名：
@@ -115,11 +166,15 @@ object NativeEngine {
 
     private external fun initNative(dataDir: String, utcOffsetMinutes: Int)
 
-    private external fun lookupNative(code: String, limit: Int): String
+    private external fun lookupInputNative(input: String, pinyinMode: Boolean, limit: Int): String
 
     private external fun suggestNative(prev: String, limit: Int): String
 
     private external fun recordNative(prev: String, next: String)
+
+    private external fun configNative(): String
+
+    private external fun setConfigNative(key: String, value: String)
 
     private external fun coreVersionNative(): String
 

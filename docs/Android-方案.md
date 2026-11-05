@@ -531,7 +531,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
 | M1 第四步：`hint` / `fancha` / `zhconv` | **已完成** | `hint`（含 `hint.txt`）整体搬走；`fancha` 开 `set_clipboard_reader`（Windows 剪贴板留在 `src/clipboard.rs`）；`zhconv` 开 `set_converter`，NLS 映射留在 `src/nls.rs`。**317 项测试全绿**（core 206 + 壳 111），DLL 4290 KB 不变，`cargo check --target aarch64-linux-android` 通过。`sogou` **明确不搬**，理由见下 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | **能打中文**：`nihao` → `nihc` →「你好」，点或空格上屏；26 键键盘 + 组合串 + 上屏/删除有 19 项 Kotlin 单测。**JNI 已有 7 个入口**（`init` / `lookup` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record`），`.so` 3645 KB（`base.bin` 2.9 MB + 联想内置表）。**联想已接**：上屏后候选条末尾出现 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都会断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：`nihao`→`nihc`→「你好」、`sanguo`→`sjgo`→「三国/三国志」，空格上屏、联想 `→词` 都成立。首验揪出并修掉了内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
+| M2 Android 最小可用 | 进行中 | **能打中文，双拼/全拼双模**：双拼模式打 `nihc`、全拼模式打 `nihao`，都是「你好」；`sanguo`→「三国」。26 键 + 数字/符号页 + 组合串 + 上屏/删除有 21 项 Kotlin 单测。**JNI 8 个入口**（`init` / `lookupInput` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record` / `config`+`setConfig`），`.so` 3736 KB（`base.bin` 2.9 MB + 联想内置表）。**设置页已有三个入口**（状态条齿轮 / 系统设置 / 桌面图标），可改输入方式、双拼方案、繁体、联想、学习。**联想**：上屏后候选条末尾 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：全链路可用，并揪出内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
 
 ### 11.1 `sogou` 为什么不搬
 
@@ -544,6 +544,38 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 
 搬过去等于在 core 里放一段永远走不到的代码，还得为它维护跨平台测试。真要做
 「从文件导入词库」时，把解析部分单独拆成 `wordlist` 模块比现在整包搬干净得多。
+
+### 11.2 「这串按键是双拼码还是全拼」为什么必须在 core 里判
+
+Windows 端从来不需要回答这个问题：TSF 一个键一个键喂进来，`textservice` 攒的就是码。
+Android 的 26 键键盘不一样——用户按的是字母，屏幕上没有「码」的概念，壳必须判断。
+
+第一版图省事，直接在 `FeiheIme.kt` 里写死「按键串一律按全拼，用 `encodePhrase` 转成码」
+（当时只有这一条路能出字）。后果就是：**双拼用户打 `nihc` 一个字都出不来**，而
+「设置」里那个「全拼模式」开关写不写都没区别——因为壳压根没读它。
+
+现在的规则放在 `core/src/dict.rs` 的 `dict::resolve_code_with` / `lookup_input`：
+
+| 模式（`config.ini` 的 `pinyin_mode`） | 按键怎么解释 |
+|---|---|
+| 双拼（默认，`0`） | 先原样当码查；**查不到再按全拼解释** |
+| 全拼（`1`） | 一律按全拼解释，编不出码就是没有 |
+
+三条设计上的取舍：
+
+1. **判断必须和 Windows 共用一份。** 写在 Kotlin 里就是第二份真值，两端一旦分歧，
+   症状是「候选莫名其妙不对」，而没人会想到去比两边的判断规则。
+2. **双拼模式要能兜住全拼。** 默认值是双拼（和桌面端同一个字段），如果严格只认双拼，
+   新装用户打 `nihao` 会看到一片空白，然后判定「输入法坏了」。所以双拼模式在
+   「原样查不到」时退回全拼解释——它实际是「双拼，且认全拼」。
+3. **全拼模式不许退回双拼。** 这一条是反过来守的：选了全拼的人要的就是
+   `xian` → 「先」而不是「西安」，这时候再让双拼抢答就等于没开关。
+
+代价是双拼模式下少数串有歧义（`xian` 是「西+安」也是「先」），双拼优先——因为
+**模式是用户显式选的，按键串不是**。想反过来就在设置里切「全拼」。
+
+单测喂的是**假探针**（`resolve_code_with(input, mode, scheme, probe)`），不查真词库：
+`lookup` 的结果进断言这条，`handoff` 里已经记过三次，个人词库一导入当场不成立。
 
 ---
 
