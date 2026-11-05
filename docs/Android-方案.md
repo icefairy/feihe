@@ -528,10 +528,10 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 |---|---|---|
 | **M1 第一步：拆出 `feihe-core`** | **已完成** | 8 个零依赖叶子模块（`shuangpin` / `fuzzy` / `correct` / `number` / `calc` / `brief` / `brief2` / `assist`）搬进 `core/`，62 项单测随迁，总数仍是 308；发布模式 DLL 4285 KB（拆分前 4284 KB）。详见 `handoff.md` |
 | **M1 第二步：`config` 搬进 core** | **已完成** | 路径与全屏判断都改成壳注入（`paths::set_resolver` / `config::set_fullscreen_probe`），config 里一行系统调用不剩；308 项（230 + 78）两种配置全绿，DLL 4285/4328 KB 不变 |
-| M1 第三步：`freq` / `next` / `pin` / `phrase` / `demote` / `custom` | 待做 | `config` 已就位，这批只剩搬文件 + 改 `crate::` 路径 |
-| M1 第四步：`dict` + `dictbin` + `dictenc` + `hint` / `fancha` | 待做 | `dictenc` 的单测要扫 `src/*.txt`；`dictbin` 的内存映射有 Windows 专属分支，要开钩子 |
+| **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
+| M1 第四步：`hint` / `fancha` / `zhconv` / `sogou` | 待做 | `fancha` 牵着 `clipboard`（Windows），要开剪贴板钩子；`hint`/`fancha` 只是壳的功能，不影响 Android 出字 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | **JNI 链路已打通**：`cargo build --target aarch64-linux-android` 产 268 KB 的 `libfeihe_android.so`，Gradle 已接成 `preBuild` 的前置任务，APK 里 `lib/arm64-v8a/` 有这个文件（80.3 MiB，含 78 MB 模型）；Kotlin 侧 `NativeEngine` 能拿到引擎版本并把 `nihao` 转成 `nihc`。26 键键盘 + 组合串 + 上屏/删除已有 19 项单测。下一步：真机装上验一遍，然后把词库搬进 core 出真候选 |
+| M2 Android 最小可用 | 进行中 | **中文能打出来了**：`nihao` → `nihc` → 候选「你好」，点或空格上屏；`initNative`/`lookupNative` 已接，Gradle 的 cargo 任务带 `FEIHE_NO_USER_DICT=1`（个人词库绝不进包）。**JNI 链路已打通**：`cargo build --target aarch64-linux-android` 产 268 KB 的 `libfeihe_android.so`，Gradle 已接成 `preBuild` 的前置任务，APK 里 `lib/arm64-v8a/` 有这个文件（80.3 MiB，含 78 MB 模型）；Kotlin 侧 `NativeEngine` 能拿到引擎版本并把 `nihao` 转成 `nihc`。26 键键盘 + 组合串 + 上屏/删除已有 19 项单测。下一步：真机装上验一遍，然后把词库搬进 core 出真候选 |
 
 ---
 

@@ -3750,3 +3750,62 @@ AArch64、`llvm-nm -D` 里三个 `Java_` 符号、APK 的 `lib/arm64-v8a/` 里�
 - `cargo check --target aarch64-linux-android -p feihe-core` 通过（真编，不是看注释）。
 - `libfeihe_android.so` 268 KB；带 78 MB 模型的 APK 80.3 MiB。
 - Kotlin 单测 19 项全绿。
+
+---
+
+## Android M1：数据层搬进 core，手机上第一次打出中文（`34ca5f2` / `664bd37`）
+
+### 三处必须先开钩子，否则搬不过去
+
+| 模块 | 原依赖 | 改成 |
+|---|---|---|
+| 日志（`freq`/`dict` 都要写） | `diag`（写 `feihe.log` + 问前台窗口类名） | `core::log`（只写文件，属于数据目录）+ 壳的 `diag` 只剩 `fg_class`；core 侧 `macro_export` 了 `dlog!`，搬过去的模块 `crate::dlog!` 自动指向 core 那份 |
+| 自定义短语的时间 | `GetLocalTime` | `core::clock`：壳可注册 provider；没注册就用 `SystemTime` + 偏移分钟（Android 用）。日期分解是 Hinnant 的 `civil_from_days`，纯整数 |
+| 个人词库的加载 | `CreateFileMappingW` + `MapViewOfFile` | 读进内存再 `Box::leak`。**行为等价**：原来映射的视图也从不解除 |
+
+`dictbin::map_file` 那段有个借用检查器的坑值得记：**必须先 leak 再校验**。写成
+「先 `Bin::try_new(&data)` 校验、再 `leak(data)`」过不了——校验拿到的 `Bin<'a>` 会和
+后面 `'static` 的那份被统一成同一个生命周期，`data` 就再也 move 不走。代价是损坏文件
+会泄漏它自己那么大一块（每进程只解析一次，可接受）。
+
+### `base.bin` 跟着词库走
+
+`include_bytes!(concat!(env!("OUT_DIR"), "/base.bin"))` 的 `OUT_DIR` 是**所在 crate**
+的构建目录。词库搬进 core，生成就得跟着搬：`core/build.rs` 干这件事，根的 `build.rs`
+只剩 windres 打图标。
+
+词库**源文件**（`dict.txt` / `extra_*.txt` / `user_dict.txt`）仍在仓库根的 `src/`——
+它们由 `tools/gen_dict.py` / `gen_extra.py` 写在那里。所以 `core/build.rs` 和 core 的
+测试都用 `../src` 前缀，两个文件里都写了同一条说明。将来要连数据一起搬，改前缀即可。
+
+### 「测试因为读不到文件而空跑变绿」——这次差点又踩
+
+`dict` 里几个测试原来写 `std::fs::read_dir("src")`。搬到 core 之后 CWD 是 `core/`，
+读到的是 `core/src`（一个词库文件都没有）。`generated_words_are_all_searchable` 有
+`assert!(files.len() >= 10)` 所以红了；但**没有断言的那些就会静默变成空跑**。
+
+所以统一加了 `repo_src()`（`#[cfg(test)]`），并且 `dictenc` 那条「全量编码校验」
+在扫不到文件时直接 panic。规则：**core 里任何读词库文件的测试都不许用相对路径**。
+
+### 又两个不能 `#[cfg(test)]` 的钩子
+
+`dict::scheme_guard()` 取代了 `dict::tests::SCHEME_LOCK`。和 `config::test_guard`
+同一个原因：`mod tests` 是 `pub(crate)`，跨 crate 看不见；改成 `#[doc(hidden)] pub`
+的普通函数。**这类「测试锁」在拆 crate 时一定会撞，撞一次记一次。**
+
+顺带：core 自己的单测没有壳、没有 `DllMain`，所以 `paths::dir()` 在 `cfg!(test)` 时
+回落到进程独立的临时目录。这里 `cfg!(test)` 是准确的——只有 core 被当测试目标编译
+时才为真。
+
+### 手机上「能出字」这一版的具体取舍
+
+- JNI 只加两个方法：`initNative(dataDir, utcOffsetMinutes)` 和 `lookupNative(code, limit)`。
+  **init 的顺序不能换**：`paths::init` → `clock` 偏移 → `config::refresh_if_changed`，
+  因为 refresh 内部会读 `config::dir()`。
+- Gradle 的 cargo 任务**必须**带 `FEIHE_NO_USER_DICT=1`。不设的话 `base.bin` 从
+  46k 条涨到 98k 条，而那多出来的 5 万条是用户从搜狗导入的个人打字记录 ——
+  它会随 APK 发出去。这条和 Windows 发布构建是同一条红线。
+- 候选条常驻 40dp 占位：不留位置的话第一条候选弹出来时键盘会往上跳一下，
+  打字时这个抖动很烦。
+- **空格 = 选第一个**（没有候选时原样上屏，否则用户打了一串字母会卡住）。
+- 只支持单音节。多音节切分还留在壳里，写在类注释和 `后续待办.md` A1 里。
