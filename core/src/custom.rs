@@ -35,7 +35,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
-use windows::Win32::System::SystemInformation::GetLocalTime;
 
 /// 编码 → 这个编码下的若干条文本（按文件顺序）。
 type Table = HashMap<String, Vec<Arc<str>>>;
@@ -162,7 +161,7 @@ pub fn expand(text: &str) -> String {
     if !text.contains('{') && !text.contains('}') {
         return text.to_string();
     }
-    let now = unsafe { GetLocalTime() };
+    let now = crate::clock::now();
     let mut out = String::with_capacity(text.len() + 16);
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -203,18 +202,18 @@ pub fn expand(text: &str) -> String {
     out
 }
 
-fn variable(name: &str, now: &windows::Win32::Foundation::SYSTEMTIME) -> Option<String> {
+fn variable(name: &str, now: &crate::clock::LocalTime) -> Option<String> {
     Some(match name {
-        "year" => now.wYear.to_string(),
-        "month" => now.wMonth.to_string(),
-        "day" => now.wDay.to_string(),
-        "hour" => now.wHour.to_string(),
+        "year" => now.year.to_string(),
+        "month" => now.month.to_string(),
+        "day" => now.day.to_string(),
+        "hour" => now.hour.to_string(),
         // 分秒补两位：「9 时 05 分」读起来才对，`{minute}` 单独用时也是
-        "minute" => format!("{:02}", now.wMinute),
-        "second" => format!("{:02}", now.wSecond),
-        // wDayOfWeek：0 = 周日
+        "minute" => format!("{:02}", now.minute),
+        "second" => format!("{:02}", now.second),
+        // weekday：0 = 周日
         "weekday" => ["日", "一", "二", "三", "四", "五", "六"]
-            .get(now.wDayOfWeek as usize)?
+            .get(now.weekday as usize)?
             .to_string(),
         _ => return None,
     })
@@ -278,15 +277,14 @@ mod tests {
     /// 时间变量按「读起来是什么」补零：时分秒定长，年月日不定长。
     #[test]
     fn variables_expand_by_reading() {
-        let now = windows::Win32::Foundation::SYSTEMTIME {
-            wYear: 2026,
-            wMonth: 11,
-            wDay: 4,
-            wDayOfWeek: 3, // 周三
-            wHour: 9,
-            wMinute: 5,
-            wSecond: 7,
-            ..Default::default()
+        let now = crate::clock::LocalTime {
+            year: 2026,
+            month: 11,
+            day: 4,
+            weekday: 3, // 周三
+            hour: 9,
+            minute: 5,
+            second: 7,
         };
         assert_eq!(variable("year", &now).as_deref(), Some("2026"));
         assert_eq!(variable("month", &now).as_deref(), Some("11"));
@@ -316,8 +314,8 @@ mod tests {
     #[test]
     fn weekday_covers_all_seven() {
         for (n, want) in ["日", "一", "二", "三", "四", "五", "六"].iter().enumerate() {
-            let now = windows::Win32::Foundation::SYSTEMTIME {
-                wDayOfWeek: n as u16,
+            let now = crate::clock::LocalTime {
+                weekday: n as u16,
                 ..Default::default()
             };
             assert_eq!(variable("weekday", &now).as_deref(), Some(*want));

@@ -78,5 +78,16 @@ pub fn dir() -> PathBuf {
     if let Some(f) = RESOLVER.get() {
         return DIR.get_or_init(f).clone();
     }
+    // core 自己的单测没有壳、也没有 `DllMain`，用进程独立的临时目录。
+    // 这里 `cfg!(test)` 是**准确的**：只有 core 被当测试目标编译时它才为真；
+    // 被 root 当依赖编进来时永远是 false（那种情况下 root 的 `test_guard`
+    // 会先把解析器注册好）。
+    #[cfg(test)]
+    {
+        let d = std::env::temp_dir().join(format!("feihe-core-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&d);
+        DIR.get_or_init(|| d).clone()
+    }
+    #[cfg(not(test))]
     panic!("数据目录未初始化：壳必须先调用 feihe_core::paths::init() 或 set_resolver()");
 }

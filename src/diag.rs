@@ -21,49 +21,10 @@
 //!
 //! 日志位置就是安装目录，和 `config.ini` 放一起，用户找得到也删得掉。
 
-use std::io::Write;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::time::Instant;
-
-static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-static WRITTEN: AtomicUsize = AtomicUsize::new(0);
-
-/// 单个日志文件的上限。诊断信息几百行就够，写满多半是出了问题在刷屏。
-const LIMIT: usize = 256 * 1024;
-
-pub fn log(args: std::fmt::Arguments<'_>) {
-    if WRITTEN.load(Ordering::Relaxed) >= LIMIT {
-        return;
-    }
-    let t0 = *T0.get_or_init(Instant::now);
-    let text = format!(
-        "[{:>6}ms pid{}] {}\n",
-        t0.elapsed().as_millis(),
-        std::process::id(),
-        args
-    );
-    let path = crate::config::dir().join("feihe.log");
-    let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    else {
-        return;
-    };
-    if f.write_all(text.as_bytes()).is_ok() {
-        WRITTEN.fetch_add(text.len(), Ordering::Relaxed);
-    }
-}
-
-/// 只在「原因码变了」时记一行。
-///
-/// `OnTestKeyDown` 每按一个键都会走到拒绝判定，逐条写会把日志刷爆，也会拖慢打字。
-/// 每个调用点自己持有一个 `AtomicU8` 槽位，原因不变就一个字都不写。
-pub fn log_change(slot: &AtomicU8, code: u8, args: std::fmt::Arguments<'_>) {
-    if slot.swap(code, Ordering::Relaxed) != code {
-        log(args);
-    }
-}
+/// 写日志和「只在变化时写日志」都搬进了 `feihe_core::log`——因为 `freq` /
+/// `next` / `dict` 这些要进 core 的模块都得记日志，而「日志写哪个文件」取决于
+/// 数据目录（`paths`），跟平台无关。这里只留**平台相关的那一条**：前台窗口类名。
+pub use feihe_core::log::{log, log_change};
 
 /// 前台窗口类名。用来确认「这次激活到底发生在哪个程序里」——
 /// 「记事本没候选」和「浏览器没候选」是两回事。

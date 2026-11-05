@@ -22,14 +22,25 @@
 //! （`textservice` 拆成 `Session` 纯状态机 + 壳，那是最后一步，也是唯一有风险的一步）。
 
 pub mod assist;
-pub mod config;
 pub mod brief;
 pub mod brief2;
 pub mod calc;
+pub mod clock;
+pub mod config;
 pub mod correct;
+pub mod custom;
+pub mod demote;
+pub mod dict;
+pub mod dictbin;
+pub mod dictenc;
+pub mod freq;
 pub mod fuzzy;
+pub mod log;
+pub mod next;
 pub mod number;
 pub mod paths;
+pub mod phrase;
+pub mod pin;
 pub mod shuangpin;
 
 /// core 的版本号，跟 `Cargo.toml` 走。

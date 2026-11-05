@@ -82,9 +82,7 @@ mod tests {
 
     /// 和 textservice / dict 的用例共用一把锁：`config` 是进程级全局状态
     fn lock() -> std::sync::MutexGuard<'static, ()> {
-        crate::dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        crate::dict::scheme_guard()
     }
 
     #[test]

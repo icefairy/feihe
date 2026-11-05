@@ -3493,9 +3493,7 @@ mod tests {
     /// 碰 `SCHEME` / `pinyin_mode` 的用例统一拿 dict 模块那把共享锁串行，
     /// 否则和 dict.rs 的测试并行跑会互相篡改（小鹤码在微软方案下查不到）。
     fn lock() -> std::sync::MutexGuard<'static, ()> {
-        dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        dict::scheme_guard()
     }
 
     /// 错音容错只能**追加**，绝不能挤掉或重排正常候选。
@@ -3584,6 +3582,9 @@ mod tests {
     /// 单字（`de` → 的）仍然走删字母——那才是退格最常用的场景。
     #[test]
     fn backspace_splits_only_when_top_candidate_is_a_word() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         fn cand(v: &[&'static str]) -> Vec<Cow<'static, str>> {
             v.iter().map(|s| Cow::Borrowed(*s)).collect()
         }
@@ -4267,9 +4268,7 @@ mod tests {
     /// 上面几条只用假闭包，码表坏了它们照样过。
     #[test]
     fn split_trailing_assist_hits_real_table() {
-        let _g = dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _g = dict::scheme_guard();
         dict::set_scheme(Scheme::Xiaohe);
         for (mode, code) in [
             (AssistMode::Ziranma, "ddj"),
@@ -4316,9 +4315,7 @@ mod tests {
     /// 候选窗收起。整串 `xrji` 本来是有「璇玑」的，只是被那次拆分挡在外面。
     #[test]
     fn wrong_auto_split_folds_back() {
-        let _g = dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _g = dict::scheme_guard();
         dict::set_scheme(Scheme::Xiaohe);
         let mode = AssistMode::Xiaohe;
 
@@ -4354,9 +4351,7 @@ mod tests {
     /// 第 4 键把一个两音节词补完整了，用户要的显然是词，不是继续筛选。
     #[test]
     fn vhmu_folds_back_and_finds_the_word() {
-        let _g = dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _g = dict::scheme_guard();
         dict::set_scheme(Scheme::Xiaohe);
         let mode = AssistMode::Xiaohe;
 
@@ -4434,9 +4429,10 @@ mod tests {
     /// 所以 3 键直出能落地；这条同时钉住 `ddj` → 「带」。
     #[test]
     fn auto_assist_split_hits_single_char() {
-        let _g = dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
+        let _g = dict::scheme_guard();
         dict::set_scheme(Scheme::Xiaohe);
         let mode = AssistMode::Ziranma;
         let got = FeiheTextService::auto_assist_split("ddj", mode.max_keys(), |p, a| {
@@ -4461,9 +4457,7 @@ mod tests {
     /// `ji` 词频最高的「机」，它不带 `w`，于是永远判定「筛不出」→ 不拆。
     #[test]
     fn ji_with_shape_key_is_auto_split() {
-        let _g = dict::tests::SCHEME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _g = dict::scheme_guard();
         dict::set_scheme(Scheme::Xiaohe);
         let mode = AssistMode::Xiaohe;
         let got = FeiheTextService::auto_assist_split("jiw", mode.max_keys(), |p, a| {

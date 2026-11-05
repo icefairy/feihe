@@ -424,7 +424,7 @@ pub fn refresh() {
             n
         });
         if cleared > 0 {
-            crate::diag::log(format_args!("freq: 文件被删，重置 {cleared} 条学习记录"));
+            crate::log::log(format_args!("freq: 文件被删，重置 {cleared} 条学习记录"));
         }
         if let Ok(mut g) = LAST_MTIME.lock() {
             *g = None;

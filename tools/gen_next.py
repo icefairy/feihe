@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成内置联想表 src/next_builtin.txt
+"""生成内置联想表 core/src/next_builtin.txt
 
 ## 数据从哪来
 
@@ -36,7 +36,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "_icebase.yaml")
-OUT = os.path.join(ROOT, "src", "next_builtin.txt")
+OUT = os.path.join(ROOT, "core", "src", "next_builtin.txt")
 
 # 每个头词最多留几个后续。和 src/next.rs 的 MAX_TAIL 对齐（内置表可以更小一点：
 # 用户表是「他真的这么打过」，内置表只是冷启动的垫子，5 个够用）。

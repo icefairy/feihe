@@ -137,6 +137,9 @@ mod tests {
 
     #[test]
     fn single_char_gives_the_reverse_lookup_code() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         // 官方反查：玑 = ji + wj，连打就是 jiwj
         let r = describe("玑", Scheme::Xiaohe, AssistMode::Xiaohe, false);
         println!("{r:?}");
@@ -146,6 +149,9 @@ mod tests {
 
     #[test]
     fn word_lists_every_char_and_the_first_assist() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         let r = describe("璇玑", Scheme::Xiaohe, AssistMode::Xiaohe, false);
         println!("{r:?}");
         // 逐字明细里两个字都在，且各自带形码
@@ -157,6 +163,9 @@ mod tests {
 
     #[test]
     fn full_pinyin_mode_spells_it_out() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         let r = describe("璇玑", Scheme::Xiaohe, AssistMode::Xiaohe, true);
         println!("{r:?}");
         assert!(r[0].contains("璇 xuan+wr"), "{r:?}");
@@ -165,6 +174,9 @@ mod tests {
 
     #[test]
     fn ziranma_assist_is_one_key() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         let r = describe("的", Scheme::Xiaohe, AssistMode::Ziranma, false);
         println!("{r:?}");
         assert!(r[0].contains("的 de+b"), "{r:?}");
@@ -174,6 +186,9 @@ mod tests {
     /// 辅助码关掉时不该冒出形码，也不该留一个空的 `+`
     #[test]
     fn assist_off_shows_sound_only() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         let r = describe("玑", Scheme::Xiaohe, AssistMode::Off, false);
         println!("{r:?}");
         assert_eq!(r[0], "玑 ji");
@@ -182,6 +197,9 @@ mod tests {
 
     #[test]
     fn non_chinese_is_ignored() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         assert!(describe("hello, world", Scheme::Xiaohe, AssistMode::Xiaohe, false).is_empty());
         assert!(describe("", Scheme::Xiaohe, AssistMode::Xiaohe, false).is_empty());
         // 混排时只反查汉字
@@ -191,6 +209,9 @@ mod tests {
 
     #[test]
     fn long_text_is_capped() {
+        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
+        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
+        let _t = crate::config::test_guard();
         let r = describe("中华人民共和国万岁万岁万万岁", Scheme::Xiaohe, AssistMode::Xiaohe, false);
         assert!(r[0].ends_with('…'), "{r:?}");
         // 8 个字 + 7 个分隔 + 截断符，长度有限

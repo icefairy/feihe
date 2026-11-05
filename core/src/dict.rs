@@ -1324,6 +1324,29 @@ pub fn merge_text(text: &str) -> Result<(usize, Option<(usize, usize)>), String>
     Ok((added, None))
 }
 
+/// `SCHEME` / `pinyin_mode` 都是进程级全局状态，测试并行跑会互相篡改。
+/// 凡是碰这两个状态的用例（**包括壳那个 crate 里的**）统一拿这把锁串行。
+///
+/// 和 `config::test_guard` 同一个原因不能加 `#[cfg(test)]`：`dict` 搬进 core 之后，
+/// 调用方有一半在 `feihe` 那个 crate 里，core 正常编译时这个函数不存在就编不过。
+#[doc(hidden)]
+pub fn scheme_guard() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 词库**源文件**所在目录：仓库根的 `src/`。
+///
+/// `dict` 已经搬进 `feihe-core`，但 `dict.txt` / `extra_*.txt` / `user_dict.txt`
+/// 仍由 `tools/gen_dict.py` / `gen_extra.py` 写在仓库根的 `src/` 下（见 `core/build.rs`
+/// 的同一条说明）。测试里凡是要读这些文件的，都从这里拼路径——
+/// **不要用相对路径 `"src"`**：`cargo test` 的 CWD 是 crate 根（也就是 `core/`），
+/// 那样会读到 `core/src`，一个词库文件都没有，测试会「因为读不到文件而空跑变绿」。
+#[cfg(test)]
+fn repo_src() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src")
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1344,7 +1367,7 @@ pub(crate) mod tests {
     /// 词面从**词库自己**取，不写死：单测不能假设词库里恰好有哪个词。
     #[test]
     fn learned_candidate_beats_auto_phrase() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         // `zirj`（zi ran）：词库里自然 / 孜然 都是两字，码长一样，只差词频——正好
         // 是这次要比的那一对。词面从**词库自己**取，不写死。
@@ -1375,7 +1398,7 @@ pub(crate) mod tests {
     /// 自造词仍然要出得来——它只是不再插队，不是不出现。
     #[test]
     fn auto_phrase_still_listed_after_ranking() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         crate::phrase::learn("字然", "zi ran");
         let r = lookup("zirj", usize::MAX);
@@ -1404,7 +1427,7 @@ pub(crate) mod tests {
     /// 只断言上界，不假设词库里有哪条长词——那条规矩踩过两次。
     #[test]
     fn two_syllable_input_has_no_long_words() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         for code in ["wfjm", "ddj", "xrji", "nihc"] {
             let list = lookup(code, usize::MAX);
@@ -1427,7 +1450,7 @@ pub(crate) mod tests {
     /// 反过来说它也**不能**替换成具体词断言（那条规矩踩过两次）。
     #[test]
     fn first_agrees_with_full_lookup() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
 
         for code in ["ji", "dd", "ia", "n", "zuci", "fwhe"] {
@@ -1484,9 +1507,6 @@ pub(crate) mod tests {
     }
 
 
-    /// `SCHEME` / `pinyin_mode` 都是进程级全局状态，测试并行跑会互相篡改。
-    /// 凡是碰这两个状态的用例（包括其它模块的）统一拿这把锁串行。
-    pub(crate) static SCHEME_LOCK: Mutex<()> = Mutex::new(());
 
     /// 生成词表的每条都必须**真的能查到**。
     ///
@@ -1498,13 +1518,13 @@ pub(crate) mod tests {
     /// 别改这个测试去迁就数据。
     #[test]
     fn generated_words_are_all_searchable() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let mut bad = Vec::new();
         let mut total = 0;
         // 扫目录而不是写死清单：`tools/gen_extra.py` 加一个分类，这里要能自动跟上，
         // 否则新分类的词「生成出来了但没人验」，拼音错了也没人发现。
-        let mut files: Vec<_> = std::fs::read_dir("src")
+        let mut files: Vec<_> = std::fs::read_dir(repo_src())
             .expect("读不到 src/")
             .flatten()
             .filter_map(|e| e.file_name().into_string().ok())
@@ -1513,7 +1533,7 @@ pub(crate) mod tests {
         files.sort();
         assert!(files.len() >= 10, "分类词表只找到 {} 份", files.len());
         for name in files {
-            let text = std::fs::read_to_string(format!("src/{name}")).unwrap_or_default();
+            let text = std::fs::read_to_string(repo_src().join(&name)).unwrap_or_default();
             for line in text.lines() {
                 let Some((w, py)) = line.split_once('\t') else { continue };
                 let Some(code) = shuangpin::encode_pinyin(Scheme::Xiaohe, py) else {
@@ -1558,7 +1578,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "人工看输出用，不做断言（依赖真实词库内容）"]
     fn zz_probe_correction() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         // 左列是「按错了一个键」的码，右列是期望救回来的词
         let cases = [
@@ -1595,9 +1615,9 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "全量审计（4.6 万条），平时不跑"]
     fn audit_dict_entries_reachable() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
-        let text = std::fs::read_to_string("src/dict.txt").unwrap_or_default();
+        let text = std::fs::read_to_string(repo_src().join("dict.txt")).unwrap_or_default();
         let mut bad: Vec<String> = Vec::new();
         let mut total = 0usize;
         for line in text.lines() {
@@ -1625,7 +1645,7 @@ pub(crate) mod tests {
 
     #[test]
     fn lookup_prefix_hits() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         // nihc = ni hao（小鹤）
         let r = lookup("nihc", 10);
@@ -1640,7 +1660,7 @@ pub(crate) mod tests {
     /// （词库一改断言就飘，见项目约定）。
     #[test]
     fn self_made_phrase_comes_first() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let word = "飞鹤自造词试";
         let py = "fei he zi zao ci shi";
@@ -1663,7 +1683,7 @@ pub(crate) mod tests {
     /// 学会之后两个词都得在候选里，而且新的在前。
     #[test]
     fn two_phrases_under_one_code_coexist() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let py = "dan dan tang";
         let code = shuangpin::encode_pinyin(Scheme::Xiaohe, py).expect("should encode");
@@ -1690,7 +1710,7 @@ pub(crate) mod tests {
     /// 3. 换方案就失效——微软双拼的两键码含义不同，不能套小鹤的表
     #[test]
     fn brief2_words_are_promoted() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
 
         let r = lookup("nd", 10);
@@ -1715,7 +1735,7 @@ pub(crate) mod tests {
 
     #[test]
     fn lookup_is_ordered_by_frequency() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let r = lookup("de", 5);
         assert_eq!(
@@ -1740,7 +1760,7 @@ pub(crate) mod tests {
     ///    这一条正是 `top_by_rank` 按码长分组要保证的
     #[test]
     fn every_brief_char_ranks_first() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let mut bad = Vec::new();
         for (key, want) in crate::brief::TABLE {
@@ -1758,7 +1778,7 @@ pub(crate) mod tests {
     /// 分号键 `d;` 就是直接取第二位（见 `textservice::brief_alt`）。
     #[test]
     fn brief_alt_ranks_second() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let mut bad = Vec::new();
         for (key, want) in crate::brief::ALT {
@@ -1782,7 +1802,7 @@ pub(crate) mod tests {
     /// 后面不能再冒出单字。次选那一条先挖掉，不参与这条顺序检查。
     #[test]
     fn single_key_yields_single_chars() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         for key in "abcdefghijklmnopqrstuvwxyz".chars() {
             let mut r = lookup(&key.to_string(), 18);
@@ -1815,7 +1835,7 @@ pub(crate) mod tests {
     /// 两键以上不该有一简字，顺序回到正常排序。
     #[test]
     fn brief_does_not_apply_to_longer_codes() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         // `de` 的候选是「的/得/地…」这一批字本身，第一个仍是「的」，
         // 但那是因为静态词频，不是因为一简字（`de` 没有一简字）。
@@ -1826,7 +1846,7 @@ pub(crate) mod tests {
 
     #[test]
     fn retroflex_lookup() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         // 小鹤：shi = ui、zhong = vs
         assert!(lookup("ui", 5).iter().any(|w| &**w == "是"));
@@ -1835,7 +1855,7 @@ pub(crate) mod tests {
 
     #[test]
     fn ms_scheme_lookup() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         // 微软：ying = y;（ing 在分号键）
         set_scheme(Scheme::Ms);
         let r = lookup("y;", 10);
@@ -1859,7 +1879,7 @@ pub(crate) mod tests {
     /// 推算码给的是 sj，用户敲 fj 直接筛空，看起来就是「辅助码没生效」。
     #[test]
     fn xiaohe_assist_hits_official_code() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
 
         let first_key = lookup_filtered("dd", "f", AssistMode::Xiaohe, 45);
@@ -1879,7 +1899,7 @@ pub(crate) mod tests {
     /// 自然码辅助码：带 → 部首 巾 → j
     #[test]
     fn ziranma_assist_hits_radical() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let r = lookup_filtered("dd", "j", AssistMode::Ziranma, 45);
         assert!(r.iter().any(|w| &**w == "带"), "自然码 dd + j 应该出 带，实际 {r:?}");
@@ -1916,7 +1936,7 @@ pub(crate) mod tests {
     /// 所以不在这条断言里——除此之外任何长码词跑到短码字前面都是 bug。
     #[test]
     fn collect_orders_short_codes_first() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         for scheme in [Scheme::Xiaohe, Scheme::Ms] {
             set_scheme(scheme);
             for code in ["iu", "de", "dd", "ee", "oo", "he", "zuci", "fwhe"] {
@@ -1939,7 +1959,7 @@ pub(crate) mod tests {
     /// 敲 `jiw` 却没反应」；用户按反查工具敲 `jiwj` 也一个字都出不来。
     #[test]
     fn assist_filter_is_not_truncated_by_limit() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         assert_eq!(
             crate::assist::code_of('玑', AssistMode::Xiaohe),
             Some("wj"),
@@ -1962,7 +1982,7 @@ pub(crate) mod tests {
 
     #[test]
     fn assist_filter_narrows() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         // 小鹤 de 有 的/得/地/德…；自然码辅助码里 的→白→b，得/德→彳→c，地→土→t。
         // 注意 limit 必须足够大，否则两边都被截到 limit 条，长度比较没有意义。
         let all = lookup("de", 5000);
@@ -1994,7 +2014,7 @@ pub(crate) mod tests {
 
     #[test]
     fn pinyin_lookup_works() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         // 全拼模式：直接敲 nihao / zhongguo
         let r = lookup_pinyin("nihao", 10);
         assert!(!r.is_empty(), "nihao should have candidates");
@@ -2032,7 +2052,7 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "手工测量用，依赖 src/user_dict.txt"]
     fn overlay_cost() {
-        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/user_dict.txt");
+        let p = repo_src().join("user_dict.txt");
         let Ok(text) = std::fs::read_to_string(&p) else {
             return;
         };
@@ -2053,7 +2073,7 @@ pub(crate) mod tests {
 
     #[test]
     fn exact_code_beats_longer() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         // 打满一个词的码时，整码匹配必须排在更长的词前面。
         // iuliqi = chu li qi = 处理器；词库里还有「处理器吧」(chu li qi ba)，
         // 它来自搜狗用户词库，词频更高，如果不做整码优先就会抢走第一位。
@@ -2072,7 +2092,7 @@ pub(crate) mod tests {
 
     #[test]
     fn extra_dict_is_merged() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         // 补充表里的词要能查到（处理器不在 rime-ice 的 base 词表里）
         set_scheme(Scheme::Xiaohe);
         assert!(lookup("iuliqi", 90).iter().any(|w| &**w == "处理器"));
@@ -2084,7 +2104,7 @@ pub(crate) mod tests {
     /// 单独跑：cargo test --release perf_first_lookup -- --nocapture --test-threads=1
     #[test]
     fn perf_first_lookup() {
-        let _g = SCHEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         let t0 = std::time::Instant::now();
         let r = lookup("n", 90);

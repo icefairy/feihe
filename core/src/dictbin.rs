@@ -273,47 +273,29 @@ pub fn count_file(path: &Path) -> Option<usize> {
     Some(u32::from_le_bytes([head[8], head[9], head[10], head[11]]) as usize)
 }
 
+/// 把一个 `user.bin` 读进内存并**泄漏**成 `'static`。
+///
+/// 名字还叫 `map_file`（调用点和注释一直这么叫），但**已经不做内存映射**了。
+/// 原来 Windows 版走 `CreateFileMappingW` + `MapViewOfFile`，那两个 API 在 Android
+/// 上不存在；而个人词库只有几百 KB 到几 MB，一次读进内存的代价可以忽略。
+///
+/// 行为是等价的：原来映射的视图也**从不解除**（进程退出才回收），所以「重新编译
+/// `user.bin` 之后旧数据残留」这个既有性质不变——每次重编译多占一份，而重编译只在
+/// 设置窗里点按钮时才发生。
 pub fn map_file(path: &Path) -> Option<&'static Bin> {
-    use std::os::windows::io::AsRawHandle;
-
-    use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::Memory::{
-        CreateFileMappingW, MapViewOfFile, FILE_MAP_READ, PAGE_READONLY,
-    };
-
-    // std 打开文件时默认带 FILE_SHARE_READ|WRITE|DELETE，
-    // 所以别的进程能把 user.bin 改名替换掉（重编译要用到这个性质）。
-    let file = std::fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len() as usize;
-    if len < HEADER_LEN {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < HEADER_LEN {
         return None;
     }
-
-    let mapping = unsafe {
-        CreateFileMappingW(
-            HANDLE(file.as_raw_handle() as _),
-            None,
-            PAGE_READONLY,
-            0,
-            0,
-            windows::core::PCWSTR::null(),
-        )
-    }
-    .ok()?;
-
-    // 映射建立后自己就持有文件引用，可以把 File 关掉
-    drop(file);
-
-    let view = unsafe { MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0) };
-    let ptr = view.Value as *const u8;
-    if ptr.is_null() {
-        return None;
-    }
-
-    // SAFETY: 视图覆盖整个文件（dwNumberOfBytesToMap=0），文件在映射期间不会被
-    // 我们改写；映射永不解除，所以这个切片在进程生命周期内始终有效且只读。
-    let data: &'static [u8] = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let bin = Bin::try_new(data)?;
+    // 先泄漏再校验。反过来（先 `Bin::try_new(&data)` 校验、再 leak）在借用检查器
+    // 那里过不去：校验拿到的 `Bin<'a>` 和后面 `'static` 的那份会被统一成同一个
+    // 生命周期，`data` 就再也 move 不走。
+    //
+    // 代价是**损坏的 user.bin 会泄漏它自己那么大一块内存**。这个代价可以接受：
+    // `user_bin()` 每个进程只解析一次并缓存结果，最坏情况是几 MB，而且只在文件真的
+    // 坏了的那一次。
+    let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
+    let bin = Bin::try_new(leaked)?;
     Some(Box::leak(Box::new(bin)))
 }
 
@@ -453,7 +435,7 @@ mod tests {
     #[test]
     #[ignore = "手工测量用，依赖 src/user_dict.txt"]
     fn user_bin_vs_overlay() {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/user_dict.txt");
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/user_dict.txt");
         let Ok(text) = std::fs::read_to_string(&src) else {
             return;
         };

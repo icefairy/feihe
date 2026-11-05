@@ -5,23 +5,14 @@ mod classfactory;
 mod clipboard;
 mod clsid;
 mod config;
-mod custom;
 mod datadir;
-mod demote;
-mod dict;
-mod dictbin;
-mod dictenc;
 mod diag;
 mod dllcount;
 mod fancha;
 mod font;
-mod freq;
 mod fullscreen;
 mod hint;
 mod insert;
-mod next;
-mod phrase;
-mod pin;
 mod quick;
 mod secure;
 mod settings;
@@ -41,7 +32,10 @@ mod zhconv;
 // 还在 `src/` 里的是下一批：`dictenc`（单测要扫 `src/*.txt` 做全量编码校验）、
 // `dict` / `freq` / `next` / `pin` / `phrase` / `demote` / `custom`（`config` 已经
 // 搬过去了，这批的下一个前置是把 `dictbin`/`dictenc`/`dict` 一起搬）。
-pub use feihe_core::{assist, brief, brief2, calc, correct, fuzzy, number, shuangpin};
+pub use feihe_core::{
+    assist, brief, brief2, calc, correct, custom, demote, dict, dictbin, dictenc, freq, fuzzy, next,
+    number, phrase, pin, shuangpin,
+};
 
 use windows::core::*;
 use windows::Win32::Foundation::*;

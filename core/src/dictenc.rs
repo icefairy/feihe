@@ -267,9 +267,13 @@ mod tests {
         assert_eq!(b.xh, 1);
     }
 
-    /// 从 `src/*.txt` 收集词条，和 `build.rs` 用同一份顺序与去重规则。
+    /// 从仓库根的 `src/*.txt` 收集词条，和 `core/build.rs` 用同一份顺序与去重规则。
     fn load_all_entries(include_user: bool) -> Vec<(String, String)> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // `dictenc` 在 core 里，但**词库源文件仍在仓库根的 `src/`**（那是
+        // `tools/gen_dict.py` / `gen_extra.py` 的产出位置）。所以这里往上走一级。
+        // 这个测试的价值在于「全量编码校验」——扫不到文件会**静默变成空跑**，
+        // 照样绿但什么都没验，所以下面 `files` 为空时直接 panic。
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src");
         let mut files: Vec<String> = std::fs::read_dir(&dir)
             .expect("读 src 目录")
             .flatten()
