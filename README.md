@@ -1,9 +1,17 @@
 # 飞鹤输入法（feihe）
 
-Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
+**目标：替换搜狗输入法。** 一套 Rust 引擎（`feihe-core`）两个壳：Windows TSF（windows-rs / COM）
++ Android IME（Kotlin / JNI）。两个平台共用同一份双拼编码、词库、词频、联想与分段逻辑，
+所以「桌面改了什么，手机就是什么」，不会出现两端候选对不上。
 
-**当前版本 0.3.11** ｜ 安装包 1.83 MB ｜ 装完约 7.9 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 348 项 Rust 单测 + 58 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
+Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
+
+**Windows 端当前版本 0.3.11** ｜ 安装包 1.83 MB ｜ 装完约 7.9 MB ｜ 单字 8006 ｜ 词条 46493 ｜
+不联网、不弹窗、无账号、密码框不接管 ｜ 348 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
+
+> **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
+> 上档锁定、数字选词、离线语音输入、数据备份，已可装机（真机验收待补）。
+> 设计文档在 [`docs/Android-方案.md`](docs/Android-方案.md)，待办在 [`docs/后续待办.md`](docs/后续待办.md)。
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
 > `freq.txt`、`phrases.txt`、`pinned.txt`、`demoted.txt`、`custom.txt`、`next.txt`。**压缩一份安装目录就是完整备份**，
@@ -26,7 +34,11 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 | M2.5 | 状态浮窗 / 设置窗 / 符号软键盘 / 微软双拼 / 辅助码 / 全角标点 / 简繁 / 全拼模式 | ✅ |
 | M3 | 一简（首选 + 次选）、二简（370 条两键词）、手动置顶、候选点选、候选数衰减、全屏时藏浮窗（候选窗照弹）、UILess、自造词、回车=字母、Shift+字母 | ✅ |
 | M3.x | 组合串下划线（`ITfDisplayAttributeProvider`） | **未做** |
-| M5 | 语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关） | 已搁置 |
+| M5 | 语音输入热键 + ASR + AI 修正（星语 SenseVoice + 璇玑网关） | **Windows 端搁置**；Android 端已换成离线 paraformer，见下 |
+
+以上是 **Windows 端**里程碑。Android 端走的是另一条线（M1 拆 crate → M2 骨架 IME →
+M3 功能补齐 → M4 语音），见 [`docs/Android-方案.md`](docs/Android-方案.md) 的阶段表：
+M1/M2/M3 已完成，M4 代码完成、真机验收待补。
 
 逐条的手工验收步骤在 [`docs/验证清单.md`](docs/验证清单.md)。
 
@@ -36,8 +48,23 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 
 ## 和主流输入法比，飞鹤是什么定位
 
-一句话：**一个只有几 MB、不联网、不弹窗、源码全开的双拼输入法**。
-不打算取代搜狗的全功能，只服务「只想安安静静打双拼」的人。
+一句话：**一个只有几 MB、不联网、不弹窗、源码全开的双拼输入法，目标是把搜狗替下来**。
+
+这个目标是认真的，不是「只服务小众」的托辞：搜狗有的日常能力（双拼 / 全拼、词库、
+动态词频、联想、模糊音、纠错、自定义短语、标点、简繁、皮肤、语音、设置页、备份），
+飞鹤要么已经做了，要么在 [待办](docs/后续待办.md) 里排着。做法是**同一份 Rust 引擎
+同时喂 Windows 和 Android 两个壳**——不写第二套输入逻辑，也不靠云端补能力。
+
+**但要替换搜狗，就得把还差什么写清楚**，而不是等用户装完才发现。目前明确不如搜狗的：
+
+| 还差的能力 | 现状 |
+|---|---|
+| 云同步 / 云词库 | 没有，词频学习只在本机（这是「不联网」的代价，不打算补） |
+| 词库规模 | 4.7 万条 vs 数百万级云词库；专业术语、新词、人名地名得靠用户词库补（支持导入搜狗个人词库） |
+| 皮肤商店 | Windows 3 套内置、Android 1 套；没有在线皮肤 |
+| 手写输入 | 两端都没有 |
+| 候选窗多行展开 | Windows 有；Android 是单行横向滚动 |
+| 语音中间标点 / ASR 纠错 | 只补句末一个标点，中间不猜；见 [待办](docs/后续待办.md) 一 |
 
 体积数据是本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件，用户数据另占 7.8 MB）：
 
@@ -57,9 +84,10 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
 | 皮肤 | 3 套内置 | 皮肤商店 | 少量 |
 | 模糊音 | **原生 9 条**（声母 6 + 韵母 3，默认关） | 有 | 有 |
 | 拼写纠错 | **零候选时一键猜回来**（双拼专用） | 有 | 有 |
-| 语音输入 | **无**（M5 已搁置） | 有 | 有 |
+| 语音输入 | **Android 有**（离线 paraformer，不联网），Windows 端暂无 | 有 | 有 |
 | 云同步 / 云词库 | **无** | 有 | 有 |
 | 候选窗点击选词 | **有**（左键选词 / 右键置顶 / Ctrl+左键降权） | 有 | 有 |
+| 平台 | **Windows + Android**，共用一份引擎 | Windows / macOS / Android | Windows |
 
 **它真正占优的地方，都是「少」带来的：**
 
@@ -88,11 +116,75 @@ Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实�
   网络新词、人名地名基本查不到，得靠用户词库补（支持导入搜狗个人词库，
   见后文）。
 - **没有云**。换电脑不同步，词频学习只在本机。
-- **语音、手写还没有**（语音原计划 M5，已搁置）。
-- **安装包未签名**，首次运行会撞 SmartScreen。
+- **语音只在 Android 有**（离线，句末补一个标点；Windows 端仍未做）。手写两端都没有。
+- **安装包未签名**，首次运行会撞 SmartScreen；Android 是自签名侧载，未上架应用商店。
 
-如果你要的是「功能最全的中文输入法」，用搜狗或微软拼音；如果你要的是
-「一个安静、干净、能改的双拼引擎」，飞鹤就是为这个做的。
+目标是替换搜狗，但**不靠"比搜狗功能多"取胜**：靠的是同样的日常能力、零广告零联网、
+体积小两个数量级、源码全开可改，以及桌面 / 手机共用一份引擎带来的行为一致。
+上面那张「还差什么」表就是差距清单，也是后续开发的排期依据。
+
+## Android 输入法
+
+飞鹤的 Android 版是一个标准 `InputMethodService`，**引擎和 Windows 端是同一份
+`feihe-core`**（Rust 编成 `libfeihe_android.so`，Kotlin 通过 JNI 调）。所以候选顺序、
+词频、联想、分段这些行为两端天然一致，不存在「手机上和电脑上打出来不一样」。
+
+### 装
+
+```bash
+# 原生库和模型不进版本库（31 MB + 79 MB），先拉
+python tools/fetch_asr_model.py       # 79 MB paraformer 离线模型
+python tools/fetch_sherpa_libs.py     # 4 个 arm64 .so + silero_vad.onnx
+python tools/fetch_sherpa_libs.py --verify
+
+cd android
+JAVA_HOME=D:/soft/jdk17 ./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+装完：系统设置 → 输入法 → 启用「飞鹤输入法」→ 切换过去。设置页有三个入口：
+键盘状态条右侧齿轮、系统设置里的「设置」、以及桌面图标（输入法默认不出现在桌面，
+特意加的）。debug 与 release 用同一把自签名 key，覆盖安装不清空用户词库。
+
+> 只支持 `arm64-v8a`（现代机型都是）。模型内置在 APK 里，**识别全程离线、不联网、
+> 录音不落盘**；关闭「语音输入」后不再申请录音权限。
+
+### 已实现的功能
+
+| 功能 | 说明 |
+|---|---|
+| 26 键 QWERTY | 程序化布局，键位表可单测；小鹤双拼不改键位（改的是字母怎么解释） |
+| 双拼 / 全拼 | 双拼默认，查不到时自动按全拼再试；全拼模式 `xian` 出「先」 |
+| 真候选 | 4.7 万条词库 + 动态词频 + 置顶 / 降权 / 自造词，与桌面同一份 |
+| 逐段选择 | 长串打 `vhsjli` 出「张三李」，候选条画 `[张三][李]`，点哪段改哪段 |
+| 数字选词 | 有候选时显示 1–9，点数字选词；设置里可关，不挤占字母键高度 |
+| 上档锁定 | 单击 ⇧ 一次性大写，**长按**锁定（⇪），再点解除 |
+| 联想 | 上屏后给下一个词；会读宿主前文，切窗口后第一个词也有上下文 |
+| 数字 / 符号页 | 3×3 九宫格 + 独立标点页，两页形状一致，切页键盘不跳 |
+| 离线语音 | 按住 🎤 说话、松手上屏；silero VAD 裁静音、paraformer 识别、句末补标点 |
+| 数据备份 | 导出 / 导入 zip（系统文件选择器，不申请存储权限） |
+| 设置页 | 输入方式、方案、繁体、联想、常用词、候选个数、数字选词、语音开关、模型状态、隐私说明 |
+
+### 构建与验证
+
+```bash
+cd android
+JAVA_HOME=D:/soft/jdk17 ./gradlew testDebugUnitTest   # 71 项 JVM 单测
+JAVA_HOME=D:/soft/jdk17 ./gradlew assembleDebug       # 同时交叉编译 Rust 引擎
+```
+
+`build.gradle.kts` 在 `preBuild` 前挂了 `buildRust`（cargo 交叉编译到
+`aarch64-linux-android`）和 `syncRustLib`（拷成 jniLibs 目录形状）。需要
+`aarch64-linux-android` target、NDK r26d 的 clang、以及 `FEIHE_NO_USER_DICT=1`
+（否则本机个人词库会随包发出去）。
+
+原生库为什么用 `tools/fetch_sherpa_libs.py` 拉、以及第三方 AAR 为什么没采用，
+见 [`docs/Android-方案.md`](docs/Android-方案.md) 与 [`handoff.md`](handoff.md)。
+
+**验收状态**：单测与打包全绿，APK 内容已核对（5 个 `.so`、3 个模型 assets、
+`.onnx` 为 Stored、`RECORD_AUDIO` 在 merged manifest）。**真机手感仍待验**
+（adb WiFi 掉线），重点看：长按 ⇧ 锁定、数字行点选、分段 chip 改词、按住 🎤 说话。
+逐条操作序列见 [`docs/验证清单.md`](docs/验证清单.md) 的 Android 分组。
 
 ## 怎么打字（小鹤双拼）
 
@@ -939,7 +1031,7 @@ cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
 python tools/smoke_com.py
 
-# Android 侧 58 项 JVM 单测（键盘布局 / 上档状态机 / 数字选词 / 逐段选择 / 句末标点 / PCM 换算）
+# Android 侧 71 项 JVM 单测（键盘布局 / 上档状态机 / 数字选词 / 逐段选择 / 联想策略 / 句末标点 / PCM 换算）
 cd android && ./gradlew testDebugUnitTest
 ```
 
@@ -1182,11 +1274,30 @@ installer/unregister.cmd     卸载入口（管理员）
 build.ps1             一键构建（llvm-mingw，默认 64 + 32 位；-Arch / -Debug / -SkipTest）
 check_env.ps1         环境自检（llvm-mingw / rust target / NSIS 是否就位）
 docs/使用帮助.md       用户手册（随安装包装进安装目录，UTF-8 BOM 便于记事本打开）
-docs/验证清单.md       手工验收步骤（86 条，按里程碑分组，发版前照着跑）
+docs/验证清单.md       手工验收步骤（Windows 367 条按里程碑分组 + Android 15 条，发版前照着跑）
 handoff.md            开发笔记（实测事实 + 踩过的坑 + 为什么这么设计，不随包分发）
 dist/                 安装包产物（已 gitignore）
 rust-toolchain.toml   固定 gnu toolchain + gnullvm target
 .cargo/config.toml    固定构建 target 与 linker（含 i686 的 linker）
+
+android/              Android 输入法（Kotlin 壳 + JNI 桥，独立 workspace）
+  app/src/main/java/com/feihe/ime/
+    FeiheIme.kt       InputMethodService 主壳：组合态、候选条、按键路由、语音入口
+    SettingsActivity.kt  设置页（代码搭 UI，无 XML）
+    UiPrefs.kt        纯界面开关（SharedPreferences，不进 core config）
+    keyboard/         键位数据 + 渲染 + 上档状态机 + 数字选词（均有 JVM 单测）
+    segment/          SegmentState：逐段选择的纯状态机
+    voice/            VoiceEngine / VoiceRecorder / VoicePunctuator（离线 ASR）
+    engine/NativeEngine.kt  JNI 统一出口，加载失败静默降级不崩输入法
+    com/k2fsa/sherpa/onnx/  sherpa-onnx 官方 Kotlin API（Apache-2.0，vendored）
+  jni/src/lib.rs      Rust JNI 桥，只做搬运，判断全在 core
+  app/src/main/assets/asr/      离线模型（gitignore，fetch_asr_model.py 拉）
+  app/src/main/jniLibs/arm64-v8a/  原生库（gitignore，fetch_sherpa_libs.py 拉）
+  app/src/test/      JVM 单测（普通 JUnit，不需要真机 / Robolectric）
+docs/Android-方案.md  Android 技术选型、实测数据与阶段表
+docs/后续待办.md      跨平台统一待办（含每条「为什么现在不做」）
+tools/fetch_asr_model.py     拉 79 MB ASR 模型（SHA256 钉住）
+tools/fetch_sherpa_libs.py   拉 31 MB 原生库 + VAD 模型（SHA256 钉住）
 ```
 
 ## 词库
@@ -1444,6 +1555,8 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 ## 已知缺口
 
 写在这里是为了让人一眼看到边界，而不是试了才发现。每一条都对照代码核实过。
+**这一节只讲 Windows 端**；Android 端已实现 / 待验的功能见
+[「Android 输入法」](#android-输入法)，两端共同的差距见开头的「还差什么」表。
 
 **没做的功能**
 
@@ -1452,7 +1565,7 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 | 组合串下划线 | `GUID_DISPLAY_FEIHE` 已定义，`ITfDisplayAttributeProvider` 未实现 |
 | 模糊音 | 已做（`src/fuzzy.rs`）。在**双拼码**上按位置换键，不走 `encode_pinyin` 归并——双拼每个音节恰好两键，位置本身就是语义 |
 | 拼写纠错 | 已做（`src/correct.rs`）。同样只在双拼码上做：全拼的「删一个/加一个」在双拼里会让整串音节错位，只保留「换一个键」 |
-| 语音输入 | M5（v2）已搁置，暂无排期 |
+| 语音输入 | Windows 端 M5（v2，星语 SenseVoice + 璇玑网关）已搁置。**Android 端已做**，见 Android 一节 |
 | 删词 | 需要 SQLite（阶段二）。置顶已经做了（`pinned.txt`），删词还没有 |
 | 外挂式输入 | 既不接 UILess、也不显示组合串的程序里打不了字；键盘钩子 + 注入进程会被反作弊判成外挂，不做 |
 
@@ -1465,6 +1578,8 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 
 ## 验证清单
 
-手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)（125 条）。
-不需要全跑——改到哪块就跑哪组，比如动 `textservice.rs` 的按键路径至少要跑 M2 + 分词 +
-回车三组。自动化那部分仍然是 `cargo test` + `tools/smoke_com.py`。
+手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)
+（Windows 367 条 + Android 15 条）。不需要全跑——改到哪块就跑哪组，比如动
+`textservice.rs` 的按键路径至少要跑 M2 + 分词 + 回车三组。自动化那部分仍然是
+`cargo test --workspace`（348 项）+ `tools/smoke_com.py` + Android 的
+`gradlew testDebugUnitTest`（71 项）。

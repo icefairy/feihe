@@ -4342,3 +4342,59 @@ JNI 符号名是硬编码 `com/k2fsa/sherpa/onnx/...`，`.so` 和 Kotlin 必须�
 Android 调用层，来自 `github.com/k2-fsa/sherpa-onnx`，Copyright (c) 2023 Xiaomi
 Corporation，Apache-2.0。为的是让 JNI 符号能对上，**包名/类名/字段名一个都不能改**。
 飞鹤是 MIT；这里按 Apache-2.0 保留版权头并在此署名，未改动逻辑。
+
+## 2026-11-05（夜·续）联想打磨 + 文档口径统一为「替换搜狗」
+
+### 联想打磨（A3 两处）
+
+用户接着点了「继续完成其他 android 端欠缺的功能」。这轮补的是纯 Kotlin、能在本机
+验证的两块，都是「先写纯函数 + JVM 单测再接 UI」：
+
+1. **候选给联想让位**：原来一敲字母就把 `suggestions` 清空，所以候选和联想从不同屏
+   共存，「候选满 9 个要横滑才看得见联想」这个待办其实永远不会触发。改成**打字时
+   保留联想**（也是搜狗的行为），`CandidateBarPolicy.candidateSlots()` 在有联想时
+   把候选压到 6 个，给 `→词` 留位置；候选上限由设置页 5/7/9 控制。
+   老注释说"留着旧联想等于把几分钟前的上下文摆在手指下面"——这个顾虑现在由
+   「每次 commitWord 重算联想 + onStartInput 读宿主前文」解决了，所以反过来是安全的。
+2. **读宿主前文**：`onStartInput` 用 `getTextBeforeCursor(24, 0)` 拿前文，
+   `HostContext.lastWord` 取末尾最多 2 个汉字当上一个词。这样切到微信、或光标停在
+   已有文字后面，第一个词也有联想上下文。
+   **底线是密码框一个字都不读**：`HostContext.canRead` 按 `inputType` 位掩码挡掉
+   所有密码类 variation 和 `FLAG_NO_SUGGESTIONS`。故意不 import `InputType`
+   （那些常量在 JVM 单测里会踩 "Method not mocked"），抄成局部常量换可测性。
+   末尾是英文/数字时返回空串，不跨过去捞更前面的汉字凑词。
+
+两处都没有动 core。`UiPrefs.candidateLimit` 和之前的 `number_row` / `voice` 一样，
+是纯界面开关，不进 `config.ini`——桌面端没有"候选个数"这个概念。
+
+### 文档口径：目标改为替换搜狗
+
+用户明确「目的就是替换搜狗」，而 README 和首页原来都写着「不打算取代搜狗，只服务
+一种人」。这是方向调整，不是措辞微调，所以把**所有**对外文档一起改了：
+
+- `README.md`：开头改成"一套 Rust 引擎两个壳"+ 目标替换搜狗；新增完整的
+  **「Android 输入法」章节**（装、已实现功能表、构建与验证、验收状态）；
+  定位段新增一张「还差什么」表（云同步 / 词库规模 / 皮肤 / 手写 / 多行候选 /
+  语音中间标点）；对比表把语音改成"Android 有"、加平台行；里程碑注明是 Windows 线、
+  Android 线另见方案文档；仓库结构补 `android/` 全树；已知缺口注明只讲 Windows 端。
+- `index.html`（GitHub Pages 落地页）：title / nav / hero / 定位标题 / 对比表 /
+  未做清单 / footer 全部同步，新增 `<section id="android">` 一节。
+- `docs/使用帮助.md`（随 Windows 安装包分发）：开头明确"这是 Windows 版手册"并
+  指向 Android 章节；「现在还做不到的」注明只列 Windows；新增「十四、Android 版速查」
+  和 sherpa-onnx 的 Apache-2.0 署名。
+- `docs/验证清单.md`：开头说明分组，末尾新增 **Android（IME，真机）15 条**，
+  逐条覆盖手势、联想让位、密码框不读、语音权限与隐私、降级不崩。
+- `docs/后续待办.md`：开头写总目标；勾掉联想两处打磨和设置页剩余项；勾掉
+  「NAS 补推」「github 远程」（今天都已推通，并把凭据/代理的具体做法记下来）。
+- `docs/Android-方案.md`：开头补总目标和进度。
+
+改数字按项目约定四处一起改：README 顶部、README 对比表、index.html、
+`docs/使用帮助.md`。测试数 58 → **71**（新增 13 项 `SuggestPolicyTest`）。
+
+### 一个反复踩的坑：JUnit 断言参数顺序
+
+这轮两次编译失败都是 `assertEquals(expected, actual, "说明")` —— Kotlin 里 JUnit4
+的三参重载是 `assertEquals(message, expected, actual)`，**message 在最前**。
+写成 `assertEquals(actual, expected, "说明")` 不报类型错，而是把 "说明" 当成 expected、
+actual 当成 message，运行期才报一个看不懂的 ComparisonFailure。以后新写断言直接
+message 打头，或干脆不写第三个参数。

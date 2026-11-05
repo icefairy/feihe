@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>飞鹤输入法 · 一个只有几 MB 的 Windows 双拼输入法</title>
+<title>飞鹤输入法 · 目标替换搜狗的开源双拼输入法（Windows + Android）</title>
 <meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.83 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
@@ -204,6 +204,14 @@
     padding:9px 0;border-bottom:1px dashed var(--line-soft);
   }
   .todo div::before{content:"—";color:var(--fg-mute);flex:none}
+  /* 已实现清单：和 .todo 同布局，但用 ✓ 而不是破折号，语义不能反 */
+  .done{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 24px}
+  @media(max-width:700px){.done{grid-template-columns:1fr}}
+  .done div{
+    display:flex;gap:10px;font-size:14px;color:var(--fg-dim);
+    padding:9px 0;border-bottom:1px dashed var(--line-soft);
+  }
+  .done div::before{content:"✓";color:var(--red-soft);flex:none;font-weight:700}
 
   footer{
     padding:52px 0 64px;border-top:1px solid var(--line-soft);
@@ -221,6 +229,7 @@
     <div class="brand"><span class="mark"></span>飞鹤输入法</div>
     <div class="links">
       <a href="#compare">对比</a>
+      <a href="#android">Android 版</a>
       <a href="#features">特性</a>
       <a href="#keymap">键位</a>
       <a href="#assist">辅助码</a>
@@ -232,11 +241,12 @@
 
 <header>
   <div class="wrap hero">
-    <span class="tag">Windows TSF · Rust + windows-rs · <b>v0.3.11</b></span>
-    <h1>一个只有几 MB 的<br><span class="thin">双拼输入法</span></h1>
+    <span class="tag">Windows + Android · 一份 Rust 引擎 · <b>目标：替换搜狗</b></span>
+    <h1>一个只有几 MB 的<br><span class="thin">开源双拼输入法</span></h1>
     <p class="lede">
-      飞鹤是为「只想安安静静打双拼」的人写的。原生小鹤双拼（含一简 26 字 + 二简 370 词），词库在构建期预编码成
-      二进制嵌进 DLL，由系统 mmap 共享。不联网、不弹窗、不要账号，源码全开。
+      飞鹤的目标是把搜狗替下来：同样的日常输入能力，零广告、零联网、零账号、源码全开。
+      原生小鹤双拼（一简 26 字 + 二简 370 词），词库在构建期预编码成二进制由系统 mmap 共享。
+      <b>Windows 与 Android 共用同一份 Rust 引擎</b>，候选、词频、联想、分段两端天然一致。
     </p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/icefairy/feihe">查看源码</a>
@@ -244,9 +254,9 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n">1.83<small>MB</small></div><div class="k">安装包</div></div>
-      <div class="stat"><div class="n">8006</div><div class="k">收录单字</div></div>
-      <div class="stat"><div class="n">46493</div><div class="k">词条</div></div>
+      <div class="stat"><div class="n">2</div><div class="k">平台（Win + Android）</div></div>
+      <div class="stat"><div class="n">1.83<small>MB</small></div><div class="k">Windows 安装包</div></div>
+      <div class="stat"><div class="n">46493</div><div class="k">词条（两端共用）</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
     </div>
   </div>
@@ -256,10 +266,12 @@
   <div class="wrap">
     <div class="sec-head">
       <div class="eyebrow">Positioning</div>
-      <h2>不打算取代搜狗，只服务一种人</h2>
+      <h2>目标就是替换搜狗</h2>
       <p class="sub">
-        体积数据是本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件，用户数据另占 7.8 MB）。
-        飞鹤装完是两份 DLL，约 7.9 MB。
+        不靠「功能比搜狗多」取胜，靠的是同样的日常能力、零广告零联网、体积小两个数量级、
+        源码全开可改，以及桌面 / 手机共用一份引擎。差距也写在明面上：
+        没有云同步、词库 4.7 万条（vs 数百万）、没有皮肤商店和手写。
+        体积数据本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件；飞鹤两份 DLL 约 7.9 MB）。
       </p>
     </div>
 
@@ -285,12 +297,44 @@
           <tr><td>模糊音</td><td class="yes">9 条规则，默认关</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>拼写纠错</td><td class="yes">零候选时一键猜回来</td><td class="yes">有</td><td class="half">有</td></tr>
           <tr><td>候选个性化</td><td class="yes">右键置顶 / Ctrl+左键降权</td><td class="yes">有</td><td class="yes">有</td></tr>
-          <tr><td>语音输入</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
+          <tr><td>语音输入</td><td class="yes">Android 离线有</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>云同步 / 云词库</td><td class="no">无</td><td class="yes">有</td><td class="yes">有</td></tr>
           <tr><td>候选窗点击选词</td><td class="yes">有</td><td class="yes">有</td><td class="yes">有</td></tr>
+          <tr><td>平台</td><td class="yes">Windows + Android，共用引擎</td><td class="half">多平台</td><td class="half">Windows</td></tr>
         </tbody>
       </table>
     </div>
+  </div>
+</section>
+
+<section id="android">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Android</div>
+      <h2>手机上也是同一个引擎</h2>
+      <p class="sub">
+        Android 版是标准 IME（Kotlin 壳 + JNI），引擎就是上面那份 <code>feihe-core</code>
+        编成的 <code>libfeihe_android.so</code>。候选、词频、联想、分段两端不会各说一套。
+      </p>
+    </div>
+    <div class="done">
+      <div>26 键 QWERTY，小鹤双拼不改键位</div>
+      <div>双拼 / 全拼双模，查不到自动退回全拼</div>
+      <div>4.7 万词库 + 动态词频 + 置顶 / 降权 / 自造词</div>
+      <div>逐段选择：点候选条里的分段改某一截</div>
+      <div>数字选词行（可隐藏，不挤字母键）</div>
+      <div>上档锁定：长按 ⇧ 连续大写</div>
+      <div>联想：读宿主前文，切窗口也接得上</div>
+      <div>3×3 数字页 + 独立标点页</div>
+      <div>离线语音：按住 🎤 说话，松手上屏</div>
+      <div>数据备份：导出 / 导入 zip</div>
+      <div>设置页：输入方式 / 方案 / 繁体 / 候选个数 / 语音</div>
+      <div>全程不联网，录音不落盘、不上传</div>
+    </div>
+    <p class="sub" style="margin-top:24px">
+      构建与安装见 <a href="https://github.com/icefairy/feihe/blob/main/README.md">README 的 Android 一节</a>。
+      目前单测与打包全绿，<b>真机手感仍待验</b>（adb 掉线），不藏着。
+    </p>
   </div>
 </section>
 
@@ -609,11 +653,13 @@ rustup target add i686-pc-windows-gnullvm
       <p class="sub">省得你试了半天才发现。每一条都对照代码核实过。</p>
     </div>
     <div class="todo">
-      <div>组合串下划线（ITfDisplayAttributeProvider 未实现）</div>
-      <div>语音输入（原计划 M5，已搁置）</div>
+      <div>组合串下划线（ITfDisplayAttributeProvider 未实现，Windows 端）</div>
+      <div>Windows 端语音输入（Android 端已做离线 paraformer）</div>
       <div>删词（需要 SQLite，阶段二；置顶已经做了）</div>
       <div>云同步 / 云词库</div>
       <div>安装包代码签名</div>
+      <div>皮肤商店 / 手写输入</div>
+      <div>Android 真机手感验收（adb 掉线，未验）</div>
       <div>外挂式输入（键盘钩子 + 注入进程，反作弊会判成外挂）</div>
     </div>
     <p class="sub" style="margin-top:26px">
@@ -633,7 +679,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <footer>
   <div class="wrap row">
-    <span>飞鹤输入法 v0.3.11 · Rust + windows-rs · Windows TSF</span>
+    <span>飞鹤输入法 · 一份 Rust 引擎 · Windows TSF + Android IME · 目标替换搜狗</span>
     <a href="https://github.com/icefairy/feihe">源码</a>
     <a href="https://github.com/icefairy/feihe/blob/main/README.md">文档</a>
     <a href="https://github.com/icefairy/feihe/blob/main/handoff.md">实现笔记</a>
