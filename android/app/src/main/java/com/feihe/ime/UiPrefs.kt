@@ -20,6 +20,7 @@ object UiPrefs {
     private const val FILE = "feihe_ui"
     private const val KEY_NUMBER_ROW = "number_row"
     private const val KEY_VOICE = "voice"
+    private const val KEY_CANDIDATE_LIMIT = "candidate_limit"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -29,6 +30,21 @@ object UiPrefs {
 
     fun setShowNumberRow(ctx: Context, on: Boolean) =
         prefs(ctx).edit().putBoolean(KEY_NUMBER_ROW, on).apply()
+
+    /**
+     * 一屏最多几个候选（5 / 7 / 9，默认 9）。
+     *
+     * 这是「候选行数」那条待办在手机上的落点：候选条是单行横向滚动，没有「行数」可调，
+     * 用户真正想调的是**一次给几个**。配合 [com.feihe.ime.suggest.CandidateBarPolicy]，
+     * 有联想时会自动再少给几个，保证 `→词` 不用横滑就看得见。
+     */
+    fun candidateLimit(ctx: Context): Int =
+        com.feihe.ime.suggest.CandidateBarPolicy.sanitize(
+            prefs(ctx).getInt(KEY_CANDIDATE_LIMIT, com.feihe.ime.suggest.CandidateBarPolicy.DEFAULT_LIMIT)
+        )
+
+    fun setCandidateLimit(ctx: Context, n: Int) =
+        prefs(ctx).edit().putInt(KEY_CANDIDATE_LIMIT, n).apply()
 
     /** 语音面板开关。默认开；没模型/没授权时面板自己会降级为不可用。 */
     fun voiceEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_VOICE, true)

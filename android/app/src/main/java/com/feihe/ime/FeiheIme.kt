@@ -15,6 +15,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.feihe.ime.engine.NativeEngine
 import com.feihe.ime.segment.SegmentState
+import com.feihe.ime.suggest.CandidateBarPolicy
+import com.feihe.ime.suggest.HostContext
 import com.feihe.ime.voice.VoiceRecorder
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
@@ -113,6 +115,9 @@ class FeiheIme : InputMethodService() {
     /** 「数字选词行」开关。设置页可关；关掉后这行连组合态都不出现。 */
     private var showNumberRow = true
 
+    /** 一屏候选上限（5/7/9）。查引擎和渲染共用同一个数，避免两处不一致。 */
+    private var candidateLimit = CandidateBarPolicy.DEFAULT_LIMIT
+
     private var statusText: TextView? = null
     private var micButton: TextView? = null
     private var statusBar: LinearLayout? = null
@@ -174,6 +179,7 @@ class FeiheIme : InputMethodService() {
     private fun readUiPrefs() {
         showNumberRow = UiPrefs.showNumberRow(this)
         voiceEnabled = UiPrefs.voiceEnabled(this)
+        candidateLimit = UiPrefs.candidateLimit(this)
         micButton?.visibility = if (voiceEnabled) View.VISIBLE else View.GONE
     }
 
@@ -183,14 +189,38 @@ class FeiheIme : InputMethodService() {
     override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
         clearComposing()
-        // 换了输入框（甚至有可能是换了 App），上一个词跟这里没有任何关系。
-        // 不在这里清，切到微信输入框时会拿着半小时前在便签里打的词去联想。
-        prevWord = ""
+        // 换了输入框（甚至可能是换了 App），**同一段连续输入里攒的 prevWord 不能再沿用** ——
+        // 否则切到微信会拿着半小时前在便签里打的词去联想。
+        // 但也不能直接清空：搜狗这类输入法会读光标前的文字，切回聊天框时「北京」后面
+        // 还是能接着联想「时间」。所以改成从宿主前文里取上一个词。
+        prevWord = readHostContext(info)
+        // 顺便把这一词的联想摆出来：切回输入框不用先打一个字才看得到。
+        suggestions = if (prevWord.isNotEmpty() && chinese) {
+            NativeEngine.suggest(prevWord, SUGGEST_LIMIT)
+        } else {
+            emptyList()
+        }
+        renderCandidates()
         Log.i(
             TAG,
             "onStartInput: inputType=0x${(info?.inputType ?: 0).toString(16)} " +
-                "restarting=$restarting fieldId=${info?.fieldId}"
+                "restarting=$restarting fieldId=${info?.fieldId} prev=$prevWord"
         )
+    }
+
+    /**
+     * 读光标前的文字，取「上一个词」当联想上下文。
+     *
+     * **密码框一个字都不读**（[HostContext.canRead] 里按 inputType 位掩码判），
+     * 和 Windows 端「密码框不接管」是同一条底线。取 24 个字符足够覆盖一个词，
+     * 又不会把整段聊天记录拉进内存。IC 还没就绪 / 宿主拒绝时静默返回空串。
+     */
+    private fun readHostContext(info: EditorInfo?): String {
+        if (!HostContext.canRead(info?.inputType ?: 0)) return ""
+        val before = runCatching {
+            currentInputConnection?.getTextBeforeCursor(24, 0)
+        }.getOrNull()
+        return HostContext.lastWord(before)
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -394,9 +424,13 @@ class FeiheIme : InputMethodService() {
     private fun onKey(key: Key) {
         when (key.kind) {
             KeyKind.CHAR -> {
-                // 一开始打新东西，旧联想就必须消失：留着它等于把「几分钟前的上下文」
-                // 又摆在手指下面，点错了上屏的词完全不搭。
-                suggestions = emptyList()
+                // **联想在打字时保留**（原来一敲字母就清掉）。那个老决定的理由是
+                // "留着旧联想等于把几分钟前的上下文摆在手指下面"，但现在两处已经变了：
+                // ① onStartInput 会读宿主前文重设 prevWord，切窗口后不再是陈旧的上下文；
+                // ② 每次 commitWord 都会按刚上屏的词重算 suggestions。
+                // 保留它才能让候选条末尾的 →词 真正点得到，也和搜狗一致。
+                // 代价是候选和联想同屏，所以 refreshCandidates 里按
+                // CandidateBarPolicy 把候选压到 6 个，给联想留出位置。
                 if (ShiftMachine.upper(shiftState)) {
                     // 一次性打完就落下；锁定态保持。状态迁移在 ShiftMachine 里（有单测）。
                     shiftState = ShiftMachine.afterChar(shiftState)
@@ -563,7 +597,10 @@ class FeiheIme : InputMethodService() {
             code = ""
             candidates = emptyList()
         } else {
-            val (c, words) = NativeEngine.lookupInput(pending.toString(), pinyinMode, 9)
+            // 有联想时候选少给几个，让候选条末尾的 →词 不用横滑就看得见。
+            // 上限来自设置页；算式在 CandidateBarPolicy（有 JVM 单测）。
+            val slots = CandidateBarPolicy.candidateSlots(candidateLimit, suggestions.isNotEmpty())
+            val (c, words) = NativeEngine.lookupInput(pending.toString(), pinyinMode, slots)
             code = c
             candidates = words
         }

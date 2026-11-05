@@ -46,6 +46,7 @@ class SettingsActivity : Activity() {
     private var cfg: NativeEngine.Settings? = null
     private var schemeBox: LinearLayout? = null
     private var inputBox: LinearLayout? = null
+    private var candidateBox: LinearLayout? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,6 +100,12 @@ class SettingsActivity : Activity() {
         schemeBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         list.addView(card("双拼方案", schemeBox!!))
         renderScheme()
+
+        // 候选个数：手机候选条是单行横向滚动，"行数"在这里就是"一次给几个"。
+        // 纯界面开关（UiPrefs），引擎没加载也能改，所以 alwaysEnabled。
+        candidateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        list.addView(card("候选个数", candidateBox!!))
+        renderCandidateLimit()
 
         list.addView(
             card(
@@ -261,6 +268,33 @@ class SettingsActivity : Activity() {
                 renderInputMode()
             },
         )
+    }
+
+    /**
+     * 候选个数（5 / 7 / 9）。
+     *
+     * 手机候选条是单行横向滚动，桌面端那种"候选行数"在这儿没有对应物，用户真正能
+     * 调的是**一次给几个**。单独说明"有联想时会自动少给几个"，否则用户会以为设了 9
+     * 却只看到 6 个是 bug —— 那是 [com.feihe.ime.suggest.CandidateBarPolicy] 在给
+     * 联想让位。
+     */
+    private fun renderCandidateLimit() {
+        val box = candidateBox ?: return
+        box.removeAllViews()
+        val cur = UiPrefs.candidateLimit(this)
+        com.feihe.ime.suggest.CandidateBarPolicy.LIMITS.forEach { n ->
+            box.addView(
+                choiceRow(
+                    "$n 个",
+                    cur == n,
+                    true,
+                    if (n == 9) "默认。有联想时仍会自动压到 6 个，给 →词 留位置" else null,
+                ) {
+                    UiPrefs.setCandidateLimit(this, n)
+                    renderCandidateLimit()
+                },
+            )
+        }
     }
 
     private fun renderScheme() {
