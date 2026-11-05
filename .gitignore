@@ -37,6 +37,8 @@ __pycache__/
 # AI 助手的工作记录（每日日志等），属于本地状态，不参与协作。
 /.workbuddy-ai/
 /.workbuddy/
+# HMEM 连接配置，含 apiKey，不进版本库
+/.hmem.json
 
 # ── 词表生成器的每次运行报告（随时可重跑，不进版本库）────────────
 /tools/wordlists/_review.txt
