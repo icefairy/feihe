@@ -3844,3 +3844,61 @@ APK 必须签名才能装。调试包 AGP 会用 `~/.android/debug.keystore`（*
   暴露在 adb 输出或者用户手机上，离原因很远。已给 `assembleRelease` 挂 `doFirst`
   抛 `GradleException`；实测（临时移走 properties 再构建）确实在 20s 时失败并指向
   §12.6，而不是安静出一个装不上的包。
+
+## Android M1：`hint` / `fancha` / `zhconv` 搬进 core，`sogou` 明确不搬
+
+搬完之后 `src/` 里剩下的都真的离不开 Windows（注册表、剪贴板、NLS、QUNS、TSF/UI）。
+验收：**317 项**测试全绿（core 206 + 壳 111），DLL 4290 KB 不变，
+`cargo check -p feihe-core --target aarch64-linux-android` 通过。
+
+### `hint`：唯一一个「整体搬、零改动」的
+
+它连 `hint.txt` 一起进 `core/src/`（`include_str!` 找同目录），代码里只有
+`crate::shuangpin` / `crate::dict`，都在 core。`tools/gen_hint.py` 的 `OUT` 跟着改，
+否则下次重生成会写回 `src/`，然后 core 里那份变成过期数据——**这种「两份同名数据、
+一份没人更新」是最难发现的一类 bug**。
+
+### `fancha`：剪贴板开钩子，但真正的工作在测试上
+
+唯一系统调用是 `clipboard::text()`，换成 `set_clipboard_reader` 就行。麻烦的是测试：
+原来七条用例全在断言 `describe("玑")` 的输出，而那是**拿真实词库的读音**算出来的。
+搬到 core 之后，core 的测试进程数据目录是空的临时目录（`paths` 在 `cfg!(test)` 时
+回落），`readings_for` 拿不到任何读音 → 要么红，要么「静默空跑变绿」。
+
+于是把主体拆成 `describe_reading(chars, readings, …)`：读数从参数进来。
+测试喂一张假表（玑→ji、璇→xuan、的→de），断言只钉**格式**——音怎么排、连打串怎么接、
+截断标在哪——以及辅助码（`+wj` / `+wr` / `+b` 来自 `assist.txt`，编译期嵌入，可以钉）。
+`describe` 只剩「过滤汉字 → 截断 → 查词库 → 交给上面」四步。
+
+**`dict::readings_for` 的结果一律不进断言**，这条在 `handoff` 里已经记过两次了
+（个人词库一导入，断言当场不成立），这次是第三次，写在代码注释里。
+
+### `zhconv`：映射留在壳，core 只留开关
+
+`LCMapStringEx` 只有 Windows 有。方案不是「往 core 里塞一张 s2t 表」，而是
+`set_converter(fn(&str) -> Option<String>)`：NLS 实现搬进 `src/nls.rs`，`DllMain` 注册。
+好处是 core 里能让 Android 用的部分（配置开关、ASCII 快路径、失败兜底）保持可测，
+而具体某个字映射成什么交给壳的测试——那本来就是 Windows NLS 的行为。
+
+core 的测试用「只把『设』换成『設』」的假转换器；真实映射的四条断言在 `src/nls.rs`。
+选表还是选 NLS 的取舍没变：NLS 零体积、跟着系统更新，代价是依赖 zh-CN 区域数据；
+换 Android 实现时只需要写一个 `to_traditional` 并注册，core 一个字不用动。
+
+### `sogou` 不搬（写进方案文档 §11.1，避免下次又列进待办）
+
+`import_auto` 靠注册表找搜狗目录、`.scel` 是私有格式、产物写 `user_dict.txt`——
+三步全是桌面导入流程。Android 上没有注册表也没有 `.scel`，搬过去是一段永远走不到的
+代码。真要做「从文件导入」时再单独拆 `wordlist` 模块。
+
+### 顺带踩回来的坑：`cargo test` 要 llvm-mingw 在 PATH
+
+`[build] target = x86_64-pc-windows-gnullvm` 意味着测试二进制也要用 mingw 链接器，
+而 shell 里没有 `build.ps1` 设好的 PATH，报的是
+`linker x86_64-w64-mingw32-gcc not found`。命令里补一句就够：
+
+```bash
+export PATH="/c/llvm-mingw/llvm-mingw-20260908-ucrt-x86_64/bin:$PATH"
+```
+
+另外 workspace 的 `default-members` 是 `[".", "core"]`，所以在根目录敲 `cargo test --lib`
+会跑**两个包**；只看 `tail` 容易只看到 core 那份结果，以为壳没跑。

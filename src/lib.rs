@@ -8,11 +8,10 @@ mod config;
 mod datadir;
 mod diag;
 mod dllcount;
-mod fancha;
 mod font;
 mod fullscreen;
-mod hint;
 mod insert;
+mod nls;
 mod quick;
 mod secure;
 mod settings;
@@ -22,19 +21,19 @@ mod statusbar;
 mod textservice;
 mod theme;
 mod uielement;
-mod zhconv;
 
 // ── 已经搬进 `feihe-core` 的平台无关模块 ────────────────────────────
 //
 // 挂回 crate 根之后，下面所有 `crate::shuangpin::…` 之类的**老路径一字不用改**。
 // 搬家刻意不动调用点：真出了回归，才能确定是搬家本身的问题。
 //
-// 还在 `src/` 里的是下一批：`dictenc`（单测要扫 `src/*.txt` 做全量编码校验）、
-// `dict` / `freq` / `next` / `pin` / `phrase` / `demote` / `custom`（`config` 已经
-// 搬过去了，这批的下一个前置是把 `dictbin`/`dictenc`/`dict` 一起搬）。
+// 留在 `src/` 的是**真的离不开 Windows 的**：`sogou`（注册表找搜狗目录 + 导入）、
+// `clipboard`（剪贴板 API）、`fullscreen`（QUNS）、`nls`（NLS 简繁表）、UI 与 TSF
+// 那一堆。core 里凡是需要这些能力的（`zhconv` 的映射、`fancha` 读剪贴板）都改成
+// 壳注入的钩子，见各自的模块注释。
 pub use feihe_core::{
-    assist, brief, brief2, calc, correct, custom, demote, dict, dictbin, dictenc, freq, fuzzy, next,
-    number, phrase, pin, shuangpin,
+    assist, brief, brief2, calc, correct, custom, demote, dict, dictbin, dictenc, fancha, freq,
+    fuzzy, hint, next, number, phrase, pin, shuangpin, zhconv,
 };
 
 use windows::core::*;
@@ -62,6 +61,10 @@ extern "system" fn DllMain(
         // 需要数据目录时惰性调用它。
         feihe_core::paths::set_resolver(datadir::resolve);
         config::set_fullscreen_probe(popup_probe);
+        // 简繁映射（NLS）和剪贴板都属于「只有 Windows 有实现」的能力，
+        // 同样只登记函数指针——真正的系统调用发生在用户按下繁体开关 / 敲 `/fc` 时。
+        feihe_core::zhconv::set_converter(nls::to_traditional);
+        feihe_core::fancha::set_clipboard_reader(clipboard::text);
     }
     BOOL::from(true)
 }

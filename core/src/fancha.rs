@@ -19,10 +19,32 @@
 //! 这个词库就是打字时用的那一个，所以反查出来的码**一定能敲出来**——用外部字典
 //! 反查会和词库对不上，用户照着敲反而打不出字。
 
+use std::sync::OnceLock;
+
 use crate::assist::{self, AssistMode};
 use crate::config;
 use crate::dict;
 use crate::shuangpin::{self, Scheme};
+
+/// 剪贴板读取器。Windows 壳在 `DllMain` 里注册成 `clipboard::text`。
+///
+/// Android 壳没有 `/fc` 入口，也就不注册——`from_clipboard` 会走「读不到剪贴板」
+/// 那条分支。这正是想要的：**没实现的能力要显式地没有**，而不是编一份假的。
+///
+/// 为什么要钩子而不是直接把 `OpenClipboard` 搬进来：和 `paths::set_resolver`
+/// 同一个理由，core 里不许出现任何系统调用，而「怎么读剪贴板」本来就是各平台
+/// 自己的事（Android 还要处理 API 33 的分区存储与 `ClipboardManager` 的前台限制）。
+static CLIPBOARD: OnceLock<fn() -> Option<String>> = OnceLock::new();
+
+/// 由壳注册。重复注册无效（第一次生效），和 `paths::set_resolver` 一致。
+pub fn set_clipboard_reader(f: fn() -> Option<String>) {
+    let _ = CLIPBOARD.set(f);
+}
+
+/// 读剪贴板。没注册读取器时返回 `None`（不是 panic）——`/fc` 不属于核心功能。
+fn clipboard_text() -> Option<String> {
+    CLIPBOARD.get().and_then(|f| f())
+}
 
 /// 一次最多反查几个字。再长就不是「一个词」了，输出会长到候选窗放不下。
 const MAX_CHARS: usize = 8;
@@ -61,7 +83,28 @@ pub fn describe(text: &str, scheme: Scheme, mode: AssistMode, flat: bool) -> Vec
     let truncated = chars.len() > MAX_CHARS;
     chars.truncate(MAX_CHARS);
 
+    // 读音只有这一个来源：打字用的那个词库。用外部字典反查会和词库对不上，
+    // 用户照着敲反而打不出字。
     let readings = dict::readings_for(&chars);
+    describe_reading(&chars, &readings, scheme, mode, flat, truncated)
+}
+
+/// 反查主体：`readings[i]` 是第 i 个字在词库里的全部读音（空 = 词库里没有这个字）。
+///
+/// 读数从参数进来，是为了单测能喂一张**固定的假表**。这不是为了好写测试——
+/// `dict::readings_for` 的结果**不许进断言**：词库会随用户导入的个人词表变化
+/// （`handoff.md` 里记过两次），拿它断言等于给自己埋一个「换个词库就红」的雷。
+/// 这里能钉死的只有格式：音怎么排、连打串怎么接、截断标在哪。
+fn describe_reading(
+    chars: &[char],
+    readings: &[Vec<String>],
+    scheme: Scheme,
+    mode: AssistMode,
+    flat: bool,
+    truncated: bool,
+) -> Vec<String> {
+    debug_assert_eq!(chars.len(), readings.len(), "读音表和字数必须一一对应");
+
     let mut detail: Vec<String> = Vec::with_capacity(chars.len());
     // 连打串：每个字取第一个读音
     let mut song = String::new();
@@ -119,7 +162,7 @@ pub fn describe(text: &str, scheme: Scheme, mode: AssistMode, flat: bool) -> Vec
 
 /// `/fc` 的候选：读剪贴板 → 反查。
 pub fn from_clipboard() -> Vec<String> {
-    let Some(text) = crate::clipboard::text() else {
+    let Some(text) = clipboard_text() else {
         return vec!["（读不到剪贴板，稍等一下再试）".to_string()];
     };
     let cfg = config::get();
@@ -135,13 +178,37 @@ pub fn from_clipboard() -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// 固定的假读音表。**不用真实词库**——`dict::readings_for` 的结果会随用户
+    /// 导入的个人词表变化，拿它断言等于埋雷（`handoff.md` 里记过两次）。
+    /// 辅助码（`+wj` / `+wr` / `+b`）来自 `core/src/assist.txt`，是编译期嵌入的
+    /// 固定数据，可以钉。
+    fn fake_readings(chars: &[char]) -> Vec<Vec<String>> {
+        chars
+            .iter()
+            .map(|c| match c {
+                '玑' => vec!["ji".to_string()],
+                '璇' => vec!["xuan".to_string()],
+                '的' => vec!["de".to_string()],
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// 和 `describe` 同一套前置（只留汉字、截断），但读音换成假表。
+    fn fc(text: &str, scheme: Scheme, mode: AssistMode, flat: bool) -> Vec<String> {
+        let mut chars: Vec<char> = text.chars().filter(|c| is_han(*c)).collect();
+        let truncated = chars.len() > MAX_CHARS;
+        chars.truncate(MAX_CHARS);
+        if chars.is_empty() {
+            return Vec::new();
+        }
+        describe_reading(&chars, &fake_readings(&chars), scheme, mode, flat, truncated)
+    }
+
     #[test]
     fn single_char_gives_the_reverse_lookup_code() {
-        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
-        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
-        let _t = crate::config::test_guard();
         // 官方反查：玑 = ji + wj，连打就是 jiwj
-        let r = describe("玑", Scheme::Xiaohe, AssistMode::Xiaohe, false);
+        let r = fc("玑", Scheme::Xiaohe, AssistMode::Xiaohe, false);
         println!("{r:?}");
         assert!(r[0].starts_with("玑 ji+wj"), "{r:?}");
         assert_eq!(r[1], "jiwj", "{r:?}");
@@ -149,10 +216,7 @@ mod tests {
 
     #[test]
     fn word_lists_every_char_and_the_first_assist() {
-        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
-        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
-        let _t = crate::config::test_guard();
-        let r = describe("璇玑", Scheme::Xiaohe, AssistMode::Xiaohe, false);
+        let r = fc("璇玑", Scheme::Xiaohe, AssistMode::Xiaohe, false);
         println!("{r:?}");
         // 逐字明细里两个字都在，且各自带形码
         assert!(r[0].contains("璇 xr+wr"), "{r:?}");
@@ -163,10 +227,7 @@ mod tests {
 
     #[test]
     fn full_pinyin_mode_spells_it_out() {
-        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
-        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
-        let _t = crate::config::test_guard();
-        let r = describe("璇玑", Scheme::Xiaohe, AssistMode::Xiaohe, true);
+        let r = fc("璇玑", Scheme::Xiaohe, AssistMode::Xiaohe, true);
         println!("{r:?}");
         assert!(r[0].contains("璇 xuan+wr"), "{r:?}");
         assert_eq!(r[1], "xuanji → wr", "{r:?}");
@@ -174,10 +235,7 @@ mod tests {
 
     #[test]
     fn ziranma_assist_is_one_key() {
-        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
-        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
-        let _t = crate::config::test_guard();
-        let r = describe("的", Scheme::Xiaohe, AssistMode::Ziranma, false);
+        let r = fc("的", Scheme::Xiaohe, AssistMode::Ziranma, false);
         println!("{r:?}");
         assert!(r[0].contains("的 de+b"), "{r:?}");
         assert_eq!(r[1], "deb");
@@ -186,10 +244,7 @@ mod tests {
     /// 辅助码关掉时不该冒出形码，也不该留一个空的 `+`
     #[test]
     fn assist_off_shows_sound_only() {
-        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
-        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
-        let _t = crate::config::test_guard();
-        let r = describe("玑", Scheme::Xiaohe, AssistMode::Off, false);
+        let r = fc("玑", Scheme::Xiaohe, AssistMode::Off, false);
         println!("{r:?}");
         assert_eq!(r[0], "玑 ji");
         assert_eq!(r[1], "ji");
@@ -197,22 +252,31 @@ mod tests {
 
     #[test]
     fn non_chinese_is_ignored() {
-        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
-        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
-        let _t = crate::config::test_guard();
         assert!(describe("hello, world", Scheme::Xiaohe, AssistMode::Xiaohe, false).is_empty());
         assert!(describe("", Scheme::Xiaohe, AssistMode::Xiaohe, false).is_empty());
         // 混排时只反查汉字
-        let r = describe("a璇1", Scheme::Xiaohe, AssistMode::Xiaohe, false);
+        let r = fc("a璇1", Scheme::Xiaohe, AssistMode::Xiaohe, false);
         assert_eq!(r[0], "璇 xr+wr", "{r:?}");
+    }
+
+    /// 词库里查不到的字：音留 `?`，形码照给（辅助码表比词库大）。
+    #[test]
+    fn unknown_char_keeps_the_assist_code() {
+        let r = fc("囧", Scheme::Xiaohe, AssistMode::Xiaohe, false);
+        println!("{r:?}");
+        assert!(r[0].contains("囧 ?"), "{r:?}");
+        // 全是未知字时连打串是空的，只返回明细一条
+        assert_eq!(r.len(), 1, "{r:?}");
     }
 
     #[test]
     fn long_text_is_capped() {
-        // 这批用例会走到 `dict::lookup` → `config::dir()`，而 core 的数据目录
-        // 解析器是在 `test_guard()` 里注册的。不拿锁就会在 core 侧 panic。
-        let _t = crate::config::test_guard();
-        let r = describe("中华人民共和国万岁万岁万万岁", Scheme::Xiaohe, AssistMode::Xiaohe, false);
+        let r = fc(
+            "中华人民共和国万岁万岁万万岁",
+            Scheme::Xiaohe,
+            AssistMode::Xiaohe,
+            false,
+        );
         assert!(r[0].ends_with('…'), "{r:?}");
         // 8 个字 + 7 个分隔 + 截断符，长度有限
         assert!(r[0].chars().count() < 100, "{r:?}");

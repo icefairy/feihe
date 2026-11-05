@@ -529,9 +529,21 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | **M1 第一步：拆出 `feihe-core`** | **已完成** | 8 个零依赖叶子模块（`shuangpin` / `fuzzy` / `correct` / `number` / `calc` / `brief` / `brief2` / `assist`）搬进 `core/`，62 项单测随迁，总数仍是 308；发布模式 DLL 4285 KB（拆分前 4284 KB）。详见 `handoff.md` |
 | **M1 第二步：`config` 搬进 core** | **已完成** | 路径与全屏判断都改成壳注入（`paths::set_resolver` / `config::set_fullscreen_probe`），config 里一行系统调用不剩；313 项（125 + 188）两种配置全绿，DLL 4285/4328 KB 不变 |
 | **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
-| M1 第四步：`hint` / `fancha` / `zhconv` / `sogou` | 待做 | `fancha` 牵着 `clipboard`（Windows），要开剪贴板钩子；`hint`/`fancha` 只是壳的功能，不影响 Android 出字 |
+| M1 第四步：`hint` / `fancha` / `zhconv` | **已完成** | `hint`（含 `hint.txt`）整体搬走；`fancha` 开 `set_clipboard_reader`（Windows 剪贴板留在 `src/clipboard.rs`）；`zhconv` 开 `set_converter`，NLS 映射留在 `src/nls.rs`。**317 项测试全绿**（core 206 + 壳 111），DLL 4290 KB 不变，`cargo check --target aarch64-linux-android` 通过。`sogou` **明确不搬**，理由见下 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
 | M2 Android 最小可用 | 进行中 | **中文能打出来了**：`nihao` → `nihc` → 候选「你好」，点或空格上屏；`initNative`/`lookupNative` 已接，Gradle 的 cargo 任务带 `FEIHE_NO_USER_DICT=1`（个人词库绝不进包）。**JNI 链路已打通**：`cargo build --target aarch64-linux-android` 产 268 KB 的 `libfeihe_android.so`，Gradle 已接成 `preBuild` 的前置任务，APK 里 `lib/arm64-v8a/` 有这个文件（80.3 MiB，含 78 MB 模型）；Kotlin 侧 `NativeEngine` 能拿到引擎版本并把 `nihao` 转成 `nihc`。26 键键盘 + 组合串 + 上屏/删除已有 19 项单测。下一步：真机装上验一遍，然后把词库搬进 core 出真候选 |
+
+### 11.1 `sogou` 为什么不搬
+
+它看着像「纯解析」，其实三段都长在 Windows 上：
+
+1. `import_auto` 靠注册表（`HKCU\Software\SogouInput`）找用户的搜狗目录；
+2. `.scel` 细胞词库是搜狗私有格式，解析器本身能跨平台，但**Android 上文件从哪来**
+   没有答案；
+3. 产物写 `user_dict.txt`，那是桌面端「从搜狗导入…」流程的一部分。
+
+搬过去等于在 core 里放一段永远走不到的代码，还得为它维护跨平台测试。真要做
+「从文件导入词库」时，把解析部分单独拆成 `wordlist` 模块比现在整包搬干净得多。
 
 ---
 
@@ -541,7 +553,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 
 | 组件 | 版本 | 路径 | 来源 |
 |---|---|---|---|
-| Android SDK | platform **android-34** + build-tools **34.0.0** | `D:/soft/asdk` | 平台原本就在；build-tools 从腾讯镜像补 |
+| Android SDK | platform **android-34** + build-tools **34.0.0** + platform-tools **34.0.5**（adb / fastboot） | `D:/soft/asdk` | 平台原本就在；build-tools 与 platform-tools 都从腾讯镜像下 zip 补 |
 | JDK | **Temurin 17.0.20.1+1** | `D:/soft/jdk17` | 清华 Adoptium 镜像 |
 | Gradle | **8.7** | `D:/soft/gradle-8.7` | 腾讯镜像 |
 | AGP | **8.5.2** | 由 Gradle 拉 | 阿里云 google 镜像 |

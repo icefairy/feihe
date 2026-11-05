@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""生成 `src/hint.txt`：易错词的带调读音 + 错误读音容错码。
+"""生成 `core/src/hint.txt`：易错词的带调读音 + 错误读音容错码。
 
 ## 这张表解决两个问题
 
@@ -38,7 +38,7 @@
 ## 用法
 
     python tools/gen_hint.py            # 只报告
-    python tools/gen_hint.py --write    # 写 src/hint.txt
+    python tools/gen_hint.py --write    # 写 core/src/hint.txt
 """
 
 import glob
@@ -49,7 +49,8 @@ from pypinyin import Style, lazy_pinyin, pinyin
 from pypinyin.contrib.tone_convert import to_normal, to_tone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "src", "hint.txt")
+# 表跟着模块走：`core/src/hint.rs` 用 `include_str!("hint.txt")` 编译期嵌入。
+OUT = os.path.join(ROOT, "core", "src", "hint.txt")
 
 
 def strip_tone(s: str) -> str:

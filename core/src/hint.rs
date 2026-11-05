@@ -6,7 +6,7 @@
 //! 2. 多音字词只挂一个读音，按另一个读音打永远打不出来——打 `zhongqing`
 //!    出的是「钟情」，「重庆」不出现。用户并不知道自己读错了，只会以为没这个词。
 //!
-//! 两个问题都由 `src/hint.txt` 解决，那是一张**自动生成的小表**（见
+//! 两个问题都由本模块同目录的 `hint.txt` 解决，那是一张**自动生成的小表**（见
 //! `tools/gen_hint.py`）：每行「词 / 带调读音 / 按字级默认读音拼出来的全拼」。
 //! 只有「词库读音 ≠ 该字默认读音」的词才进来，全库 4.5 万条里只有 753 条。
 //!
@@ -187,6 +187,9 @@ mod tests {
     /// 错音容错：按默认读音打也要能查到「重庆」。
     #[test]
     fn wrong_reading_finds_word() {
+        // `wrong_reading` 按**当前**方案选索引，而方案是全局状态，
+        // 拿锁免得和别的用例抢。
+        let _g = crate::dict::scheme_guard();
         let xh = shuangpin::encode_pinyin(Scheme::Xiaohe, "zhong qing").expect("编码失败");
         assert!(
             wrong_reading(&xh, false, 4).contains(&"重庆"),

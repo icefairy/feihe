@@ -33,8 +33,10 @@ pub mod demote;
 pub mod dict;
 pub mod dictbin;
 pub mod dictenc;
+pub mod fancha;
 pub mod freq;
 pub mod fuzzy;
+pub mod hint;
 pub mod log;
 pub mod next;
 pub mod number;
@@ -42,6 +44,7 @@ pub mod paths;
 pub mod phrase;
 pub mod pin;
 pub mod shuangpin;
+pub mod zhconv;
 
 /// core 的版本号，跟 `Cargo.toml` 走。
 ///

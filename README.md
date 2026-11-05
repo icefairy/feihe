@@ -369,7 +369,7 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
   先出「钟情」（它本来就是这个词），翻到最后还有「重庆」。
 
 「易错」的判定是逐字比较：词库读音 ≠ 这个字的默认读音、且该字是多音字。全库 4.6 万条
-里只有 **753 条**（`重庆`、`弹窗`、`川芎`、`六安`、`水雷屯`…），表在 `src/hint.txt`，
+里只有 **753 条**（`重庆`、`弹窗`、`川芎`、`六安`、`水雷屯`…），表在 `core/src/hint.txt`，
 26 KB，随 DLL 发布。其余词的读音没有歧义，不标注也不占宽度。
 
 设置里可以关掉标注（`reading=0`），候选窗宽度回到旧样子；错音容错不受这个开关影响
@@ -1084,10 +1084,9 @@ uninstall_tip.ps1  注销脚本
 ```
 index.html            项目主页（GitHub Pages 用，单文件零依赖，内嵌全部 CSS）
 
-core/                 平台无关的核心（feihe-core）：**一个系统 API 都不许出现**。
-                      Windows 壳和以后的 Android 壳共用这一份，`src/lib.rs` 用
-                      `pub use feihe_core::{…}` 挂回根，老路径 `crate::shuangpin::…` 不变。
-core/                 平台无关的核心（零第三方依赖；Windows 和 Android 共用同一份）
+core/                 平台无关的核心（feihe-core）：**一个系统 API 都不许出现**，
+                      零第三方依赖。Windows 壳和 Android 壳共用这一份，`src/lib.rs`
+                      用 `pub use feihe_core::{…}` 挂回根，老路径 `crate::shuangpin::…` 不变。
 core/build.rs         生成 base.bin（词库预编码成三段码数组）
 core/src/lib.rs       模块表 + VERSION
 core/src/paths.rs     数据目录注入（放哪由壳决定，core 只存）
@@ -1112,6 +1111,10 @@ core/src/calc.rs      算式求值（`/c` 用）
 core/src/brief.rs     一级简码（26 键各配一字）
 core/src/brief2.rs    二级简码（两键一词，数据 core/src/brief2.txt）
 core/src/assist.rs    辅助码表（自然码简版 / 小鹤音形，数据 core/src/assist.txt）
+core/src/hint.rs      易错词读音提示 + 错音容错（数据 core/src/hint.txt，编译期嵌入）
+core/src/hint.txt     易错词读音表（753 条，gen_hint.py 生成，勿手改）
+core/src/fancha.rs    反查（汉字 → 音 + 辅助码，`/fc` 用；剪贴板由壳注入）
+core/src/zhconv.rs    简繁：开关 + ASCII 快路径 + 兜底（映射表由壳注入）
 
 android/              Android 壳（InputMethodService + 26 键 + 候选条）
 android/jni/          Rust 引擎的 JNI 桥（crate feihe-android，只编 Android 的 .so）
@@ -1133,21 +1136,19 @@ src/extra_place.txt   地名（438 条，同上）
 src/extra_drug.txt    通用药品名（611 条，同上）
 src/extra_tcm_herb.txt   中药名（466 条，同上）
 src/extra_tcm_patent.txt 中成药名 / 方剂（327 条，同上）
-src/hint.txt          易错词读音表（753 条，gen_hint.py 生成，勿手改）
 src/user_dict.txt     用户词库（import_sogou.py 生成，可反复重跑；未导入时为空文件）
 tools/wordlists/      上面 12 份词表的源（一行一个词，手工可编辑）
 tools/gen_extra.py    词表 → 拼音 → src/extra_*.txt（拼音用 pypinyin，词库读音校验）
-tools/gen_hint.py     易错词 → 带调读音 + 错音码 → src/hint.txt
+tools/gen_hint.py     易错词 → 带调读音 + 错音码 → core/src/hint.txt
 tools/pinyin_overrides.txt  人工校正的多音字 / 地名古音读音
 build.rs              编译图标资源（windres）；词库构建在 core/build.rs
 src/candidate.rs      候选窗（自绘 WS_POPUP + GDI，不抢焦点，支持鼠标点选）
-src/hint.rs           易错词读音提示 + 错音容错（hint.txt 的三套前缀索引）
 src/statusbar.rs      状态浮窗（中/英、全/半、符号、设置；可拖动 + 前台判定）
 src/softkbd.rs        特殊符号软键盘（9×5 自绘网格）
 src/settings.rs       设置窗（原生控件：输入模式 / 方案 / 皮肤 / 字形 / 全角 / 不弹窗 / 调频 / 置顶 / 词库）
 src/uielement.rs      TSF UILess：把候选交给宿主自绘（ITfCandidateListUIElement）
 tools/gen_next.py     生成 core/src/next_builtin.txt：词库复合词按最短前缀拆成词对
-src/zhconv.rs         简繁转换（LCMapStringEx + LCMAP_TRADITIONAL_CHINESE）
+src/nls.rs            简繁映射的 Windows 实现（LCMapStringEx，经 set_converter 注入 core）
 src/theme.rs          皮肤调色板（浅色 / 深色 / 护眼）
 src/font.rs           自绘窗口共用字体 + 填充/描边/文字居中
 src/insert.rs         任意窗口往文档写文本、读写中英开关（同步 edit session）
