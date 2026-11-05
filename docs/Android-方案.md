@@ -175,21 +175,45 @@ feihe/                       现有仓库
 
 | 模型 | 形态 | int8 实际体积 | 标点 | 中英混读 | 冷加载（骁龙 665） |
 |---|---|---|---|---|---|
-| **SenseVoiceSmall** | 非流式 | **228.2 MB**（239,233,841 B） | **自带** | 好 | 未测（非流式架构，预计 3–10 s） |
+| **SenseVoiceSmall** | 非流式 | **228.2 MB**（239,233,841 B） | **有**（需 `use_itn=1`） | 好 | 未测（非流式架构，预计 3–10 s） |
+| paraformer-zh-small | 非流式 | **79 MB** | **无** | 中英双语可以 | RTF 0.076（很快） |
 | Zipformer Multi-zh | 流式 | 72.8 MB | 无 | 大写字母可以，整词不行 | 10.1 s |
 | Zipformer 14M | 流式 | 24.2 MB | 无 | 差（字母念成汉字） | 2.7 s |
 | X-ASR 双语标点 | 流式 | 161.4 MB | **自带** | 好 | 13.4 s |
 | silero VAD | — | 0.2 MB | — | — | — |
 
-（后四行来自一篇 Redmi Note 8 / 骁龙 665 的真机横评；SenseVoice 的大小是我直接从
-ModelScope 拉 `Content-Range` 读出来的，`tokens.txt` 另计 308 KB。）
+（Zipformer / X-ASR 几行来自一篇 Redmi Note 8 / 骁龙 665 的真机横评；SenseVoice 的大小
+是我直接从 ModelScope 拉 `Content-Range` 读出来的，`tokens.txt` 另计 308 KB；
+paraformer-zh-small 的数字来自 sherpa-onnx 官方模型页。）
 
-**选 SenseVoice，理由只有一条但足够硬：它自带标点。**
+#### 「星语里那个 80 多 MB」= paraformer-zh-small，不是 SenseVoice
 
-输入法的语音是往输入框里**塞一段能直接发的文本**，不是转写稿。Zipformer 那几个
-小模型吐出来的是不带标点的一长串汉字——「今天天气不错我们去公园吧」——用户还得
-自己回去加标点，这个体验比不支持语音还糟。SenseVoice 一次前向同时给标点和数字
-规整（`use_itn`），这才是能用的听写。
+`csukuangfj/sherpa-onnx-paraformer-zh-small-2024-03-09` 的 `model.int8.onnx` 正好 **79 MB**，
+而且星语那份 sherpa-onnx 官方 demo 的 `OfflineRecognizer.kt:450` 里就有这个预设名。
+所以「80 多 MB」这个印象是真的，但它对应的是**另一个模型**。
+
+另外要说清楚：**星语的 app 里其实从来没有 ASR 模型**。`m1/android-app/app/src/main/assets/`
+只有 `3dspeaker campplus`（27 MB，声纹）和 `silero_vad.onnx`（629 KB）；ASR 是
+`.gitignore` 掉的 `m1/models/`，脚本里引的是 WSL 里的
+`sherpa-onnx-sense-voice-…-2024-07-17`。调研文档里那句「234M int8 量化（~60-120MB）」
+是**估算**，实测 228 MB——我一开始也照抄了这个估算，后来才发现。
+
+#### 为什么 79 MB 那个不能用：它不出标点
+
+官方模型页给的全部示例输出都是连续字符串，一个标点都没有：
+
+```
+对我做了介绍啊那么我想说的是呢大家如果对我的研究感兴趣呢
+重点呢想谈三个问题首先呢就是这一轮全球金融动荡的表现
+```
+
+paraformer 系全都这样（标点要靠外挂 CT-Transformer，约 62 MB，79 + 62 = 141 MB，
+比 SenseVoice 还差）。输入法的语音是往输入框塞**一段能直接发的文本**，不是转写稿；
+没有标点就得用户自己回去补，那还不如不做语音。
+
+SenseVoice 的标点来自 `use_itn=1`（官方示例，关 ITN 是 `开饭时间早上九点至下午五点`，
+开 ITN 是 `开放时间早上9点至下午5点。`——顺带把数字也规整了）。**这个开关必须开，
+默认不开。**
 
 流式在这里反而**不是**优点：输入法的语音是按住说话、松手出字，一句话几秒钟，
 中间结果闪来闪去只会干扰。非流式天生匹配这个交互。
