@@ -3,7 +3,7 @@
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
 **当前版本 0.3.11** ｜ 安装包 1.83 MB ｜ 装完约 7.9 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 308 项单元测试 ｜ 安装需要管理员（注册写 HKLM）
+不联网、不弹窗、无账号、密码框不接管 ｜ 313 项单元测试 ｜ 安装需要管理员（注册写 HKLM）
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
 > `freq.txt`、`phrases.txt`、`pinned.txt`、`demoted.txt`、`custom.txt`、`next.txt`。**压缩一份安装目录就是完整备份**，
@@ -931,7 +931,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想，共 308 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想，共 313 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 # 308 = feihe（TSF 壳）246 项 + feihe-core（平台无关）62 项。两个包都会跑，
 # 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 62 项会被静默跳过。
@@ -1087,7 +1087,24 @@ index.html            项目主页（GitHub Pages 用，单文件零依赖，内
 core/                 平台无关的核心（feihe-core）：**一个系统 API 都不许出现**。
                       Windows 壳和以后的 Android 壳共用这一份，`src/lib.rs` 用
                       `pub use feihe_core::{…}` 挂回根，老路径 `crate::shuangpin::…` 不变。
-core/src/shuangpin.rs 小鹤双拼编码（全拼→两键码，带单测当规格）
+core/                 平台无关的核心（零第三方依赖；Windows 和 Android 共用同一份）
+core/build.rs         生成 base.bin（词库预编码成三段码数组）
+core/src/lib.rs       模块表 + VERSION
+core/src/paths.rs     数据目录注入（放哪由壳决定，core 只存）
+core/src/config.rs    配置读写（数据目录下 config.ini）
+core/src/log.rs       诊断日志（feihe.log，256 KB 上限）
+core/src/clock.rs     本地时间（自定义短语的 {year}/{hour}/{weekday}）
+core/src/shuangpin.rs 小鹤双拼编码（全拼→两键码）+ 全拼串切分（split_pinyin）
+core/src/dict.rs      词库查询（静态二进制 + 运行时覆盖层，二分前缀扫描）
+core/src/dictbin.rs   词库二进制的零解析读取器（段偏移 + 索引表 + 字节池）
+core/src/dictenc.rs   FHDB 编码器（core/build.rs 与运行期各 #[path] 引入一次，只此一份）
+core/src/freq.rs      动态词频（选词计数 → 稳定重排候选，freq.txt 落盘）
+core/src/phrase.rs    自造词（逐段拼出来的新词，全拼入库，phrases.txt 落盘）
+core/src/pin.rs       手动置顶（编码 → 词，pinned.txt 落盘，压过一切默认排序）
+core/src/demote.rs    手动降权（编码 → 一串词，demoted.txt 落盘，沉到候选最后）
+core/src/next.rs      上屏后联想（内置表 + 用户词对表，next.txt 落盘）
+core/src/next_builtin.txt  内置联想表（gen_next.py 从 rime-ice 复合词生成，编译进 .so / DLL）
+core/src/custom.rs    自定义短语（custom.txt）
 core/src/fuzzy.rs     模糊音（在双拼码上按位置换键）
 core/src/correct.rs   拼写纠错（换一个键，不删不加）
 core/src/number.rs    中文数字 / 金额
@@ -1096,14 +1113,17 @@ core/src/brief.rs     一级简码（26 键各配一字）
 core/src/brief2.rs    二级简码（两键一词，数据 core/src/brief2.txt）
 core/src/assist.rs    辅助码表（自然码简版 / 小鹤音形，数据 core/src/assist.txt）
 
+android/              Android 壳（InputMethodService + 26 键 + 候选条）
+android/jni/          Rust 引擎的 JNI 桥（crate feihe-android，只编 Android 的 .so）
+android/app/          Kotlin：FeiheIme / keyboard / engine / voice
+
 src/lib.rs            DLL 入口（DllGetClassObject / DllCanUnloadNow）
 src/clsid.rs          固定 GUID
 src/classfactory.rs   IClassFactory
 src/dllcount.rs       COM 对象计数（DllCanUnloadNow 用）
 src/textservice.rs    TSF 核心（Activate / 按键 sink / 组合态 / edit session / 候选调度）
-src/dict.rs           词库查询（静态二进制 + 运行时覆盖层，二分前缀扫描）
-src/dictbin.rs        词库二进制的零解析读取器（段偏移 + 索引表 + 字节池）
-src/dictenc.rs        FHDB 编码器（build.rs 与运行期各 #[path] 引入一次，只此一份）
+src/datadir.rs        数据目录策略（安装目录优先、不可写回落 %APPDATA%；只注册不执行）
+src/diag.rs           诊断日志的平台部分（前台窗口类名）
 src/dict.txt          基础词库（38573 条 / 626KB，gen_dict.py 生成，勿手改）
 src/extra_dict.txt    常用词补充表（183 行，手工维护，只放基础词库里缺的词）
 src/extra_common.txt  日常常用词（4892 条，gen_extra.py 生成，勿手改）
@@ -1118,33 +1138,21 @@ tools/wordlists/      上面 12 份词表的源（一行一个词，手工可编
 tools/gen_extra.py    词表 → 拼音 → src/extra_*.txt（拼音用 pypinyin，词库读音校验）
 tools/gen_hint.py     易错词 → 带调读音 + 错音码 → src/hint.txt
 tools/pinyin_overrides.txt  人工校正的多音字 / 地名古音读音
-build.rs              生成 base.bin（预编码三套码）+ 编译图标资源
+build.rs              编译图标资源（windres）；词库构建在 core/build.rs
 src/candidate.rs      候选窗（自绘 WS_POPUP + GDI，不抢焦点，支持鼠标点选）
 src/hint.rs           易错词读音提示 + 错音容错（hint.txt 的三套前缀索引）
 src/statusbar.rs      状态浮窗（中/英、全/半、符号、设置；可拖动 + 前台判定）
 src/softkbd.rs        特殊符号软键盘（9×5 自绘网格）
 src/settings.rs       设置窗（原生控件：输入模式 / 方案 / 皮肤 / 字形 / 全角 / 不弹窗 / 调频 / 置顶 / 词库）
 src/uielement.rs      TSF UILess：把候选交给宿主自绘（ITfCandidateListUIElement）
-src/freq.rs           动态词频（选词计数 → 稳定重排候选，freq.txt 落盘）
-src/phrase.rs         自造词（用户逐段拼出来的新词，全拼入库，phrases.txt 落盘）
-src/brief.rs          一级简码表（26 键首选字 + 26 条次选，`d;` 取次选）
-src/brief2.rs         二级简码（两键出两字词，懒解析 brief2.txt + 二分）
-src/brief2.txt        二简词表（370 条，gen_brief2.py 生成，可手改）
-src/pin.rs            手动置顶（编码 → 词，pinned.txt 落盘，压过一切默认排序）
-src/demote.rs         手动降权（编码 → 一串词，demoted.txt 落盘，沉到候选最后）
-src/next.rs           上屏后联想（内置表 + 用户词对表，next.txt 落盘）
-src/next_builtin.txt  内置联想表（gen_next.py 从 rime-ice 复合词生成，编译进 DLL）
-tools/gen_next.py     生成上表的脚本：词库复合词按最短前缀拆成词对
+tools/gen_next.py     生成 core/src/next_builtin.txt：词库复合词按最短前缀拆成词对
 src/zhconv.rs         简繁转换（LCMapStringEx + LCMAP_TRADITIONAL_CHINESE）
 src/theme.rs          皮肤调色板（浅色 / 深色 / 护眼）
 src/font.rs           自绘窗口共用字体 + 填充/描边/文字居中
 src/insert.rs         任意窗口往文档写文本、读写中英开关（同步 edit session）
-src/config.rs         配置读写（安装目录下 config.ini）
-src/assist.rs         辅助码查表（自然码 / 小鹤音形，多码用 | 分隔任一命中）
-src/assist.txt        辅助码表（gen_assist.py 生成，勿手改）
+src/sogou.rs          搜狗词库导入器的运行期版本（设置窗「从搜狗导入…」）
 tools/gen_dict.py     基础词库生成器（拉雾凇拼音 rime-ice，按词频取前 N 条）
 tools/import_sogou.py 搜狗词库导入器（构建期：解析搜狗用户词库 → src/user_dict.txt）
-src/sogou.rs          同一个导入器的运行期版本（设置窗「从搜狗导入…」）
 tools/gen_assist.py   辅助码表生成器（自然码：Unihan 部首；小鹤：官方码表缓存）
 tools/fetch_xhup.py   小鹤官方形码抓取器（增量，结果存 tools/xhup_cache.txt，随仓库走）
 tools/xhup_cache.txt  小鹤官方形码缓存（字<TAB>形码，8000+ 字，勿手改）
@@ -1306,7 +1314,7 @@ rime-ice 是「书面语料」词表，缺一批日常真的会打的词：电�
 （说明你手改了 txt 但没重新编译），运行时自动退回文本覆盖层，避免「改了不生效」。
 点一次「编译个人词库」就回到快路径。
 
-`user.bin` 和 `base.bin` 用的是**同一个编码器**（`src/dictenc.rs`，`build.rs` 与运行期
+`user.bin` 和 `base.bin` 用的是**同一个编码器**（`core/src/dictenc.rs`，`core/build.rs` 与运行期
 各以 `#[path]` 引入一次）。两边各写一份的话，改了布局忘改另一边，症状是「导入的词
 静默不生效」，极难查。
 

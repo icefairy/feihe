@@ -156,12 +156,12 @@ feihe/                       现有仓库
 
 **硬约束**：`feihe-core` 里出现任何 `windows::` 都算编译失败。用 `cargo denmy`（或 `grep`）在 CI 里卡住。
 
-**为什么这步最难**：`textservice.rs` 里"组句状态机"和"TSF 调用"是混在一起的（1800 行的 `OnKeyDown`）。拆分时最容易出的错是**顺手改了逻辑**——Windows 端有 308 项单测和一份验证清单，所有行为必须逐条对得上。策略：
+**为什么这步最难**：`textservice.rs` 里"组句状态机"和"TSF 调用"是混在一起的（1800 行的 `OnKeyDown`）。拆分时最容易出的错是**顺手改了逻辑**——Windows 端有 313 项单测和一份验证清单，所有行为必须逐条对得上。策略：
 
 1. 先做**纯剪切**：`Session` 只搬状态和决策（`fn key(&mut self, k: Key) -> Action`），不搬任何 `ITf*`。
 2. 每个搬出来的函数保留原注释和单测，测试跟着搬。
 3. Windows 壳改成"把键事件喂给 Session，执行返回的 Action"。
-4. **判定标准**：308 项单测全绿 + 验证清单里 M3.x 全过 ≠ 完成；还要真机打字对比一遍（用同一个词库、同一串输入，输出必须逐字相同）。
+4. **判定标准**：313 项单测全绿 + 验证清单里 M3.x 全过 ≠ 完成；还要真机打字对比一遍（用同一个词库、同一串输入，输出必须逐字相同）。
 
 工作量粗估：core 拆分 + Windows 回归约 **2–3 周**（`textservice.rs` 占一半）。
 
@@ -431,7 +431,7 @@ transducer 的解码路径；paraformer 是 CIF + 注意力解码，没有这个
 
 | 阶段 | 内容 | 估算 | 交付判据 |
 |---|---|---|---|
-| **M1** | crate 拆分：`feihe-core` + `feihe-win`，`textservice.rs` 拆成 `session.rs`（纯状态机）+ 壳 | **2–3 周** | Windows 端 308 项单测全绿 + 真机逐字对比一致 |
+| **M1** | crate 拆分：`feihe-core` + `feihe-win`，`textservice.rs` 拆成 `session.rs`（纯状态机）+ 壳 | **2–3 周** | Windows 端 313 项单测全绿 + 真机逐字对比一致 |
 | **M2** | Android 最小可用：IME 骨架 + 26 键键盘 + 候选条 + 双拼输入 + 上屏 + 读配置 | **3–4 周** | 能装、能打字、能选词、能标点 |
 | **M3** | 功能补齐：联想 / 短语 / 置顶 / 降权 / 简繁 / 模糊音 / 纠错 / 快捷输入 | **2–3 周** | 与 Windows 端功能对齐（除 Windows 专属项） |
 | **M4** | 语音：sherpa-onnx 集成 + 79 MB 模型打进 assets（`noCompress`）+ 句末标点 + 语音面板 | **2 周** | 装完立刻能说话上屏，全程不联网；句末有句号 |
@@ -527,7 +527,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | 阶段 | 状态 | 说明 |
 |---|---|---|
 | **M1 第一步：拆出 `feihe-core`** | **已完成** | 8 个零依赖叶子模块（`shuangpin` / `fuzzy` / `correct` / `number` / `calc` / `brief` / `brief2` / `assist`）搬进 `core/`，62 项单测随迁，总数仍是 308；发布模式 DLL 4285 KB（拆分前 4284 KB）。详见 `handoff.md` |
-| **M1 第二步：`config` 搬进 core** | **已完成** | 路径与全屏判断都改成壳注入（`paths::set_resolver` / `config::set_fullscreen_probe`），config 里一行系统调用不剩；308 项（230 + 78）两种配置全绿，DLL 4285/4328 KB 不变 |
+| **M1 第二步：`config` 搬进 core** | **已完成** | 路径与全屏判断都改成壳注入（`paths::set_resolver` / `config::set_fullscreen_probe`），config 里一行系统调用不剩；313 项（125 + 188）两种配置全绿，DLL 4285/4328 KB 不变 |
 | **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
 | M1 第四步：`hint` / `fancha` / `zhconv` / `sogou` | 待做 | `fancha` 牵着 `clipboard`（Windows），要开剪贴板钩子；`hint`/`fancha` 只是壳的功能，不影响 Android 出字 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
