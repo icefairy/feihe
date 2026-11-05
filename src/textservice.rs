@@ -18,7 +18,10 @@ use crate::dllcount;
 use crate::insert;
 use crate::quick;
 use crate::settings;
-use crate::shuangpin::{self, Scheme};
+use crate::shuangpin::Scheme;
+// `shuangpin::split_pinyin` 只剩测试用（生产路径走 `feihe_core::segment`）
+#[cfg(test)]
+use crate::shuangpin;
 use crate::softkbd;
 use crate::statusbar;
 use crate::uielement;
@@ -612,42 +615,29 @@ impl FeiheTextService {
     /// 全拼串 → 音节序列。
     ///
     /// 实现在 `shuangpin::split_pinyin`（core 里，Android 也要用同一份）。
-    /// 这里保留一个薄壳是为了不动本文件里所有既有调用点和测试。
+    /// 生产路径已经全部走 `feihe_core::segment`，这个薄壳只剩测试在用，
+    /// 所以带 `cfg(test)`——留着是为了那些用例一个字都不用改。
+    #[cfg(test)]
     fn split_pinyin(s: &str) -> Option<Vec<String>> {
         shuangpin::split_pinyin(s)
     }
 
     /// 双拼串 → 音节序列（定长 2）。某个分组长度是奇数说明音节没打完。
+    ///
+    /// 实现在 `feihe_core::segment`（桌面和手机共用一份）。生产路径已经直接调
+    /// core，这里只剩测试在用。
+    #[cfg(test)]
     fn syllables_ds(code: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        for group in code.split(Self::SEP) {
-            if group.is_empty() {
-                continue; // 连续分隔符 / 结尾多敲了一个
-            }
-            let chars: Vec<char> = group.chars().collect();
-            if chars.len() % 2 != 0 {
-                return Vec::new();
-            }
-            for c in chars.chunks(2) {
-                out.push(c.iter().collect());
-            }
-        }
-        out
+        // 实现搬去了 `feihe_core::segment`：Android 端要复用同一份切分规则，
+        // 两边各写一遍一定会对不上（症状是「手机和桌面切出来的词不一样」）。
+        // 这里只保留转发，调用点和测试都不用改。
+        feihe_core::segment::double_syllables(code)
     }
 
     /// 全拼串 → 音节序列。任一分组切不出来就整体放弃。
+    #[cfg(test)]
     fn syllables_full(code: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        for group in code.split(Self::SEP) {
-            if group.is_empty() {
-                continue;
-            }
-            match Self::split_pinyin(group) {
-                Some(v) => out.extend(v),
-                None => return Vec::new(),
-            }
-        }
-        out
+        feihe_core::segment::full_syllables(code)
     }
 
     /// 把编码拆成音节序列，`'` 是用户强制指定的边界，一定在那里断开。
@@ -655,11 +645,7 @@ impl FeiheTextService {
     /// 返回空 Vec 表示「还不能切」——双拼某个分组长度是奇数、或全拼某个分组
     /// 切不出合法音节。调用方据此决定再等等，而不是急着拆分上屏。
     fn syllables(code: &str) -> Vec<String> {
-        if config::pinyin_mode() {
-            Self::syllables_full(code)
-        } else {
-            Self::syllables_ds(code)
-        }
+        feihe_core::segment::syllables(code, config::pinyin_mode())
     }
 
     /// 把第 `idx` 段拆成逐音节段（「李明」→「李」+「明」）。
@@ -817,16 +803,7 @@ impl FeiheTextService {
     /// 先按「每段都能出候选」做 DP；DP 失败（某个音节词库里完全没有）就退到逐音节。
     /// 返回空 Vec 表示音节不完整（还没打完），调用方应「再等等」。
     fn plan_segments(code: &str, has: impl Fn(&str) -> bool) -> Vec<String> {
-        let units = FeiheTextService::syllables(code);
-        if units.len() < 2 {
-            return Vec::new();
-        }
-        let codes = FeiheTextService::split_segments_units(&units, has);
-        if codes.len() >= 2 {
-            codes
-        } else {
-            units
-        }
+        feihe_core::segment::plan(code, config::pinyin_mode(), has)
     }
 
     /// 把音节序列切成多段，要求**每一段都能出候选**。
@@ -835,46 +812,9 @@ impl FeiheTextService {
     /// 用 DP 而不是贪心最长：`vhsjli` 纯贪心会切成 `vh`(张) + `sj`(三) + `li`(李)，
     /// 因为 `vh` 单独就有候选。先算 `ok[i]`（从第 i 个音节起能否切完），
     /// 再在可行的前提下贪心取最长段，得到 `vhsj`(张三) + `li`(李)。
+    #[cfg(test)]
     fn split_segments_units(units: &[String], has: impl Fn(&str) -> bool) -> Vec<String> {
-        let n = units.len();
-        if n < 2 {
-            return Vec::new();
-        }
-        let join = |i: usize, len: usize| -> String { units[i..i + len].concat() };
-
-        // ok[i] = 从第 i 个音节到末尾可以完整切分
-        let mut ok = vec![false; n + 1];
-        ok[n] = true;
-        for i in (0..n).rev() {
-            for len in 1..=(n - i) {
-                if ok[i + len] && has(&join(i, len)) {
-                    ok[i] = true;
-                    break;
-                }
-            }
-        }
-        if !ok[0] {
-            return Vec::new();
-        }
-
-        // 贪心取最长段（在 ok 约束下）
-        let mut out = Vec::new();
-        let mut i = 0;
-        while i < n {
-            let mut step = 0;
-            for len in (1..=(n - i)).rev() {
-                if ok[i + len] && has(&join(i, len)) {
-                    step = len;
-                    break;
-                }
-            }
-            if step == 0 {
-                break;
-            }
-            out.push(join(i, step));
-            i += step;
-        }
-        out
+        feihe_core::segment::split_segments(units, has)
     }
 
     /// 按当前模式切段（生产路径直接用 `split_segments_units`，因为它已经拿着

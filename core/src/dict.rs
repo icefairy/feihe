@@ -427,14 +427,116 @@ pub fn lookup_input(
     if input.is_empty() || limit == 0 {
         return (String::new(), Vec::new());
     }
-    let Some(r) = resolve_code_with(input, pinyin_mode, scheme(), any) else {
-        return (String::new(), Vec::new());
-    };
-    // 码永远是双拼码，所以这里固定查双拼索引。全拼模式不查 `Idx::Flat`：
-    // 同一批词在两套索引里的结果一模一样（双拼是音节的 1:1 重编码），
-    // 而 Android 的 base.bin 不需要为了全拼多带一份索引。
-    let words = search(false, &r.code, "", AssistMode::Off, limit);
-    (r.code, words)
+    match resolve_code_with(input, pinyin_mode, scheme(), any) {
+        Some(r) => {
+            // 码永远是双拼码，所以这里固定查双拼索引。全拼模式不查 `Idx::Flat`：
+            // 同一批词在两套索引里的结果一模一样（双拼是音节的 1:1 重编码），
+            // 而 Android 的 base.bin 不需要为了全拼多带一份索引。
+            let mut words = search(false, &r.code, "", AssistMode::Off, limit);
+            if words.is_empty() {
+                // 整码查不到 → 试整句（`vhsjli` → 张三李）。**只在查不到时试**：
+                // 整词优先，否则打 `nihc` 会先看到一堆拼凑的整句。
+                if let Some(sentence) = compose_sentence(&r.code) {
+                    words.push(Cow::Owned(sentence));
+                }
+            }
+            (r.code, words)
+        }
+        None => {
+            // 编不出码。全拼模式下这就等于「没有」；双拼模式下更可能是**一长串码**
+            // （`vhsjli` 编不出任何拼音），那就交给分段——这正是手机上分词态缺的那块。
+            if pinyin_mode {
+                return (String::new(), Vec::new());
+            }
+            match compose_sentence(input) {
+                Some(sentence) => (input.to_string(), vec![Cow::Owned(sentence)]),
+                None => (String::new(), Vec::new()),
+            }
+        }
+    }
+}
+
+/// 长串自动分词上屏：把双拼码切成几段，每段取第一名拼起来。
+///
+/// 手机上打 `vhsjli` 之前是空候选条，现在会给出「张三李」。分段规则和桌面端
+/// **共用同一份**（`crate::segment::plan`）——这一点比结果好不好看更重要：两边
+/// 各写一遍的话，同一个码在手机和桌面上切出不同的词，没人查得到原因。
+pub fn compose_sentence(code: &str) -> Option<String> {
+    compose_sentence_with(code, any_aligned, |c| first_aligned(c).map(|w| w.to_string()))
+}
+
+/// 一个双拼码覆盖几个音节（每音节恰好两键）。
+fn syllables_of(code: &str) -> usize {
+    code.len() / 2
+}
+
+/// 一次对齐扫描最多看多少条候选。
+///
+/// 看着小，其实是**下界**推出来的：双拼码长 = 2 × 音节数，而前缀匹配要求词码以
+/// 段码开头，所以段码覆盖 n 个音节时，能匹配到的词**至少** n 个音节、n 个字——
+/// 也就是说「字数对得上」的那一档恰好是码长最短的一档，`collect` 的排序
+/// （码长升序）把它们放在最前面。留 12 条余量是给置顶/一简字那几道显式插入用的。
+///
+/// 这个值不能随便加大：`any_aligned` 在 DP 里会被调用 O(n²) 次，一次按键几十次
+/// 查询，每条候选都要走一遍词频/降级/置顶流水线。
+const ALIGN_SCAN: usize = 12;
+
+/// 这个码下有没有**字数正好等于音节数**的候选（不认前缀）。
+///
+/// 和 `any` 的区别只有一个：**字数必须对齐**。分段时必须用它——`any` 认前缀，
+/// 于是「张三李四」（码 `vhsjlisj`）会被当成 `vhsjli` 存在（用户只敲了三个音节），
+/// DP 于是以为整串就是一个词，切分退化成逐字，整句变成「长三裏」。
+///
+/// 用「汉字个数」而不是「码长字段」判断：码长字段要从 `collect` 里透出来，
+/// 而那条流水线后面还挂着一简字 / 二简词 / 短语 / 置顶一堆插入，长度数组会失配。
+/// 汉字个数是候选自己的属性，改不到一半。
+pub fn any_aligned(code: &str) -> bool {
+    let want = syllables_of(code);
+    if want == 0 {
+        return false;
+    }
+    lookup(code, ALIGN_SCAN)
+        .iter()
+        .any(|w| w.chars().count() == want)
+}
+
+/// 这个码下**字数正好等于音节数**的第一名（不认前缀）。理由同 [`any_aligned`]。
+pub fn first_aligned(code: &str) -> Option<Cow<'static, str>> {
+    let want = syllables_of(code);
+    if want == 0 {
+        return None;
+    }
+    lookup(code, ALIGN_SCAN)
+        .into_iter()
+        .find(|w| w.chars().count() == want)
+}
+
+/// [`compose_sentence`] 的实现，两个词典操作从参数进来。
+///
+/// 抽成「带两个闭包的纯函数」和 `resolve_code_with` 同一个理由：真实现依赖词库
+/// 内容，而词库内容一律不许进断言（个人词库一导入断言当场不成立）。
+/// 喂假表就能把「怎么算一段、缺字时怎么办」钉死。
+///
+/// 任何一段查不到字就**整句放弃**：混着段码的「整句」（比如 `面ap`）上屏只会让人
+/// 莫名其妙。宁可什么都不给，让用户接着打或按回车原样上屏。
+pub fn compose_sentence_with(
+    code: &str,
+    has: impl Fn(&str) -> bool,
+    first: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    // 一个音节谈不上分段。门槛放在 4（两个音节）上，顺带把「打一半」的串挡在外面。
+    if code.len() < 4 {
+        return None;
+    }
+    let segs = crate::segment::plan(code, false, has);
+    if segs.len() < 2 {
+        return None;
+    }
+    let mut out = String::with_capacity(segs.len() * 2);
+    for s in &segs {
+        out.push_str(&first(s)?);
+    }
+    Some(out)
 }
 
 /// 拼写纠错：整串零候选时的最后一招。
@@ -2368,5 +2470,64 @@ pub(crate) mod tests {
         set_scheme(Scheme::Xiaohe);
         assert_eq!(lookup_input("", false, 9), (String::new(), Vec::new()));
         assert_eq!(lookup_input("zzz", true, 9), (String::new(), Vec::new()));
+    }
+
+    // ── 长串自动分词（手机上第一次有「整句」候选） ──────────────────
+    //
+    // 假表：`vh`=张、`sj`=三、`li`=李，`vhsj`=张三。所有断言都不碰真词库。
+
+    fn fake_has(c: &str) -> bool {
+        matches!(c, "vh" | "sj" | "li" | "vhsj" | "vhsjli")
+    }
+
+    fn fake_first(c: &str) -> Option<String> {
+        Some(
+            match c {
+                "vh" => "张",
+                "sj" => "三",
+                "li" => "李",
+                "vhsj" => "张三",
+                _ => return None,
+            }
+            .to_string(),
+        )
+    }
+
+    /// 该切成 `vhsj|li` 而不是 `vh|sj|li`：能切完的前提下取最长段。
+    #[test]
+    fn compose_sentence_prefers_the_longest_segments() {
+        let s = compose_sentence_with("vhsjli", fake_has, fake_first);
+        assert_eq!(s.as_deref(), Some("张三李"));
+    }
+
+    /// 缺字就整句放弃。**不许**出现「张三」+ 段码这种混搭上屏。
+    #[test]
+    fn compose_sentence_gives_up_when_a_segment_has_no_word() {
+        // `sj` 在 `has` 里，但 `first` 给不出词（模拟「存在性探测和取第一名不一致」，
+        // 或者词在这条路径上查不到）——这时宁可什么都不给。
+        let first = |c: &str| if c == "sj" { None } else { fake_first(c) };
+        assert_eq!(compose_sentence_with("vhsjli", fake_has, first), None);
+    }
+
+    /// 一个音节谈不上分段，硬拼只会把单字当「整句」塞进候选条。
+    #[test]
+    fn compose_sentence_needs_two_syllables() {
+        assert_eq!(compose_sentence_with("vh", fake_has, fake_first), None);
+        assert_eq!(compose_sentence_with("vhs", fake_has, fake_first), None, "奇数长度");
+    }
+
+    /// 返回的整句**全部是汉字**（这条不假设具体词，但能挡住「混进段码」的回归）。
+    #[test]
+    fn real_sentence_contains_no_ascii() {
+        let _g = scheme_guard();
+        set_scheme(Scheme::Xiaohe);
+        // 词库里有没有这一串不确定，所以只对这个条件下该成立的结论做断言
+        if let Some(s) = compose_sentence("vhsjli") {
+            assert!(
+                s.chars().all(|c| !c.is_ascii()),
+                "整句里混进了编码：{s:?}"
+            );
+            assert!(s.chars().count() >= 2, "至少两段，结果不该是单字：{s:?}");
+        }
     }
 }

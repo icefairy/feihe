@@ -531,7 +531,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
 | M1 第四步：`hint` / `fancha` / `zhconv` | **已完成** | `hint`（含 `hint.txt`）整体搬走；`fancha` 开 `set_clipboard_reader`（Windows 剪贴板留在 `src/clipboard.rs`）；`zhconv` 开 `set_converter`，NLS 映射留在 `src/nls.rs`。**317 项测试全绿**（core 206 + 壳 111），DLL 4290 KB 不变，`cargo check --target aarch64-linux-android` 通过。`sogou` **明确不搬**，理由见下 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | **能打中文，双拼/全拼双模**：双拼模式打 `nihc`、全拼模式打 `nihao`，都是「你好」；`sanguo`→「三国」。26 键 + 数字/符号页 + 上档（⇧ 一次性大写）+ 组合串 + 上屏/删除，共 **26 项 Kotlin 单测**。**JNI 12 个入口**（`init` / `lookupInput` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record` / `config` / `setConfig` / `dataFiles` / `manifest` / `reloadAll`），`.so` 3.6 MiB（3 778 232 字节，含 `base.bin` 2.9 MB + 联想内置表）。**设置页三个入口**（状态条齿轮 / 系统设置 / 桌面图标）：输入方式、双拼方案、繁体、联想、学习、**数据备份（导出/导入 zip）**。**联想**：上屏后候选条末尾 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：全链路可用，并揪出内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
+| M2 Android 最小可用 | 进行中 | **能打中文，双拼/全拼双模**：双拼模式打 `nihc`、全拼模式打 `nihao`，都是「你好」；`sanguo`→「三国」。26 键 + 数字/符号页 + 上档（⇧ 一次性大写）+ 组合串 + 上屏/删除，共 **26 项 Kotlin 单测**。**JNI 12 个入口**（`init` / `lookupInput` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record` / `config` / `setConfig` / `dataFiles` / `manifest` / `reloadAll`），`.so` 3.6 MiB（3 778 232 字节，含 `base.bin` 2.9 MB + 联想内置表）。**设置页三个入口**（状态条齿轮 / 系统设置 / 桌面图标）：输入方式、双拼方案、繁体、联想、学习、**数据备份（导出/导入 zip）**。**长串自动整句**：`vhsjli`→「张三李」、`nihaoshijie`→「你好世界」（分段规则与桌面共用 core 的 `segment`）。**联想**：上屏后候选条末尾 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：全链路可用，并揪出内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
 
 ### 11.1 `sogou` 为什么不搬
 
@@ -600,6 +600,30 @@ Android 的 26 键键盘不一样——用户按的是字母，屏幕上没有�
 还有一个和「不假装支持」相关的取舍：备份包是**外部输入**，导入端只认 `DATA_FILES`
 里的名字（一字不差），`../config.ini` 这类路径天然进不来，单个文件超过 32 MB 直接拒绝
 （挡解压炸弹）。
+
+### 11.4 长串自动整句：分段规则从 `textservice` 搬进 core
+
+手机上打 `vhsjli` 之前是空候选条——3 个音节、词库里没有「张三李」这个词，于是什么
+都没有。桌面端不是这样：它进分词态，切成 `张三|李` 让人逐段选。手机上没做逐段选
+（交互重），但**第一层必须有**：把码切成几段、各段取第一名拼成「张三李」当一个候选。
+
+切分逻辑从 `textservice` 搬到了 `feihe_core::segment`（`syllables` / `split_segments`
+/ `plan`），桌面侧只剩转发。这是刻意的：分段规则是「同一个码切出哪些词」的唯一真值，
+在 Kotlin 里重写一遍的结果是两端切法不同，而症状是「手机和桌面不一样」，没人查得到原因。
+
+搬的过程中撞出一个真问题：**分段用的「这一段有没有词」不能用 `dict::any`**。它是
+**前缀探测**，而词库里有「张三李四」（码 `vhsjlisj`），`any("vhsjli")` 因此为真，
+DP 于是认为整串就是一个词、`codes.len() >= 2` 不成立、退回逐音节，整句变成「长三裏」。
+
+修法是加 `dict::any_aligned` / `dict::first_aligned`：**字数必须等于音节数**。
+为什么用字数而不是码长字段：码长要走 `collect` 透出来，而那条流水线后面还挂着一简字 /
+二简词 / 短语 / 置顶一堆插入，长度数组会失配；字数则是候选自己的属性。
+扫描上限只用 12 条也有依据：双拼码长 = 2 × 音节数，前缀匹配要求词码以段码开头，
+所以「字数对得上」的恰好是码长最短的那一档，`collect` 的排序把它们放在最前面。
+
+真词库上验过：`vhsjli` → 张三李、`nihaoshijie`（全拼串）→ 你好世界、
+`wobuzhidao` → 我不知道、`zhonghuarenmingongheguo` → 中华人民共和国、
+`mmap`（编码混英文）→ 整句放弃、什么都不给。耗时 0.1–2 ms，只在「整码查不到」时才跑。
 
 ---
 

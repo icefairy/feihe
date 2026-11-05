@@ -1115,6 +1115,8 @@ core/src/hint.rs      易错词读音提示 + 错音容错（数据 core/src/hin
 core/src/hint.txt     易错词读音表（753 条，gen_hint.py 生成，勿手改）
 core/src/fancha.rs    反查（汉字 → 音 + 辅助码，`/fc` 用；剪贴板由壳注入）
 core/src/zhconv.rs    简繁：开关 + ASCII 快路径 + 兜底（映射表由壳注入）
+core/src/segment.rs   长串切分：编码 → 音节 → 分段（桌面分词态与手机整句共用）
+core/src/backup.rs    用户数据备份清单（哪些文件算用户数据）+ 导入后重载
 
 android/              Android 壳（InputMethodService + 26 键 + 候选条）
 android/jni/          Rust 引擎的 JNI 桥（crate feihe-android，只编 Android 的 .so）
