@@ -6,9 +6,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 // 直接复用运行时的编码器，避免双拼逻辑写两份、改一处忘一处。
-// `src/shuangpin.rs` / `src/dictenc.rs` 只依赖 std，可以原样拉进 build script 编译。
+// `core/src/shuangpin.rs` / `src/dictenc.rs` 只依赖 std，可以原样拉进 build script
+// 编译。`shuangpin` 已经搬进 `feihe-core`，所以路径是 `core/src/...`——**改它之前
+// 先确认 `src/` 下没有同名文件**，否则会静默编到旧的那份去。
 #[allow(dead_code)]
-#[path = "src/shuangpin.rs"]
+#[path = "core/src/shuangpin.rs"]
 mod shuangpin;
 #[allow(dead_code)]
 #[path = "src/dictenc.rs"]

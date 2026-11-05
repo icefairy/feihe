@@ -3611,3 +3611,69 @@ Tatoeba 的中文语料又太小。所以走了**第三条路——不需要语�
 （`gen_dict.py` 一开始就在用它）同一性质；生成文件的头部写明了来源。
 
 308 项单测（+3：内置表规模/内容、行序、非法词过滤）。
+
+---
+
+## Android M1：拆出 `feihe-core`（第一批 8 个模块）
+
+起因见 `docs/Android-方案.md`：`windows` crate 在 `aarch64-linux-android` 上编不过，
+所以只要引擎代码还挂在同一个 crate 里，Android 端**一行都复用不了**——哪怕这些模块
+本身一个系统调用都不碰。
+
+### 布局为什么是「根包 + `core/`」，不是 `crates/win` + `crates/core`
+
+根 `Cargo.toml` 同时是 workspace 根和 Windows 侧的包（`feihe` = TSF shell），
+平台无关的东西放 `core/`（`feihe-core`）。**不**把 Windows 侧也挪进 `crates/win`：
+`installer/build_setup.ps1`、`build.ps1`、`repair.nsi` 里到处是
+`target\<triple>\release\feihe.dll` 和 `src\*.txt` 的路径，挪一下要改五个脚本，
+换不来任何收益。目录形状服从工具链，不服从审美。
+
+### `pub use` 挂回根：刻意不动调用点
+
+```rust
+// src/lib.rs
+pub use feihe_core::{assist, brief, brief2, calc, correct, fuzzy, number, shuangpin};
+```
+
+有了这句，`crate::shuangpin::encode(…)` 之类的**老路径一个字都不用改**。这是刻意的：
+搬家要是不动调用点，将来真出了回归，才能确定问题在搬家本身而不是顺手改的那几行。
+代价是 core 里的模块对外全部 `pub`（原来有几个 `pub(crate)`）。
+
+### 第一批搬什么、为什么不搬
+
+搬：`shuangpin` `fuzzy` `correct` `number` `calc` `brief` `brief2` `assist`——即
+「零个 `crate::` 外部引用」的叶子。共 62 项测试。
+
+没搬，各有原因：
+
+| 模块 | 为什么留 |
+|---|---|
+| `dllcount` | 零依赖，但它是 COM 引用计数（`DllCanUnloadNow`）。Android 没有 COM，放进 core 是撒谎 |
+| `dictenc` | 能搬，但单测 `load_all_entries` 要扫 `$CARGO_MANIFEST_DIR/src/*.txt` 做全量编码校验。搬进 `core/` 之后 `src` 变成 `core/src`，只剩两个 txt，测试会**静默变成空跑**（照样绿，只是什么都没验）。留到第二批跟 `dict` 一起处理 |
+| `freq` `next` `pin` `phrase` `demote` `custom` | 都要 `config::dir()` 拼数据文件路径。等路径注入做完 |
+| `dict` / `hint` / `fancha` | 依赖上面那些 |
+
+### 三个会安静咬人的地方
+
+1. **`cargo test` 默认只测当前包。** 拆完在根目录敲 `cargo test`，core 那 62 项被
+   **静默跳过**——测试全绿，但少跑了一大半。所以 `Cargo.toml` 里写了
+   `default-members = [".", "core"]`，用配置堵死，不靠人记得加 `--workspace`。
+2. **`build.rs` 的 `#[path]` 指向 `core/src/shuangpin.rs`。** 它和 `src/` 下的文件
+   靠文件名认路，哪天 `src/` 里又冒出一个同名文件，就会静默编到旧的那份去（编译
+   不报错，行为不对）。改 `build.rs` 前先 `ls` 一眼。
+3. **`assist::RAW` 从 `pub(crate)` 升成 `pub`。** `dict.rs` 里那条「每个字的形码都能
+   被辅助码表命中」的单测要读它，跨 crate 之后 `pub(crate)` 就看不见了。
+
+顺带把两个生成脚本的输出路径改了：`tools/gen_assist.py` → `core/src/assist.txt`、
+`tools/gen_brief2.py` → `core/src/brief2.txt`。不改的话下次重新生成会写回 `src/`，
+然后 `include_str!` 找不到文件——这种错误还算好发现，怕的是两个同名文件同时存在。
+
+### 验收
+
+- 308 项测试（246 + 62）默认配置和 `FEIHE_NO_USER_DICT=1` 都全绿，**一条没丢**。
+- 发布模式 DLL **4285 KB**，拆分前 4284 KB——差的 1 KB 是 crate 边界带来的对齐差异，
+  `include_str!` 的数据和 LTO 结果都没变。
+- core 自身 **零 clippy 警告**（既有那 38 条全在 `src/`）。
+- 下一步：`config::dir()` 改成 `OnceLock<PathBuf>` + `init(dir)`，然后搬
+  `freq` / `next` / `pin` / `demote` / `custom`，再搬 `dict` + `dictenc`，最后才是
+  `textservice` 拆纯状态机（唯一有风险的一步）。

@@ -338,3 +338,15 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 - **能用星语的**：sherpa-onnx 离线 ASR 的模型选型与集成样板（记得砍掉声纹）。
 - **最大风险**：crate 拆分影响 Windows 现有产品。
 - **最省的第一步**：先做一个只出"你好"的 Android IME 验证平台假设，再决定要不要投入 10 周。
+
+---
+
+## 11. 实施进度
+
+| 阶段 | 状态 | 说明 |
+|---|---|---|
+| **M1 第一步：拆出 `feihe-core`** | **已完成** | 8 个零依赖叶子模块（`shuangpin` / `fuzzy` / `correct` / `number` / `calc` / `brief` / `brief2` / `assist`）搬进 `core/`，62 项单测随迁，总数仍是 308；发布模式 DLL 4285 KB（拆分前 4284 KB）。详见 `handoff.md` |
+| M1 第二步：`config::dir()` 路径注入 | 待做 | 做完才能搬 `freq` / `next` / `pin` / `demote` / `custom` |
+| M1 第三步：`dict` + `dictenc` + `hint` | 待做 | `dictenc` 的单测要扫 `src/*.txt`，跟 `dict` 一起处理 |
+| M1 第四步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
+| M2 Android 最小可用 | 待开始 | 本机无 Android SDK，需先装工具链 |

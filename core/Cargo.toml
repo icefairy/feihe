@@ -1,0 +1,14 @@
+[package]
+name = "feihe-core"
+version = "0.3.11"
+edition = "2021"
+description = "飞鹤输入法 · 平台无关的核心逻辑（双拼编码 / 纠错 / 数字 / 简码 / 辅助码表）"
+license = "MIT"
+
+[lib]
+name = "feihe_core"
+
+# 这个 crate 的依赖必须是**空的**，或者只有 `tyme4rs` 这种纯 Rust 实现。
+# 一条 `windows` 都不许出现——它在 Android/arm64 上根本编不过，那正是拆 crate
+# 的全部理由。CI 里有 `cargo tree` 的闸（见 docs/Android-方案.md M1）。
+[dependencies]

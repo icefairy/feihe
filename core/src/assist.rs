@@ -23,8 +23,12 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// 原始表文本。`pub(crate)` 只给单测做格式校验用（格式错了筛选会静默失效）。
-pub(crate) static RAW: &str = include_str!("assist.txt");
+/// 原始表文本。`pub` 只给单测做格式校验用（格式错了筛选会静默失效）。
+///
+/// 为什么不是 `pub(crate)`：搬进 `feihe-core` 之后，校验它的单测还留在 Windows 侧
+/// （`dict.rs` 里那条「每个字的形码都能被辅助码表命中」），跨 crate 就看不见
+/// `pub(crate)` 了。这东西没有任何运行时调用方，放开只影响 API 面，不影响性能。
+pub static RAW: &str = include_str!("assist.txt");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AssistMode {

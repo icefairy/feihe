@@ -933,6 +933,8 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ```bash
 # 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想，共 308 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
+# 308 = feihe（TSF 壳）246 项 + feihe-core（平台无关）62 项。两个包都会跑，
+# 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 62 项会被静默跳过。
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
 python tools/smoke_com.py
@@ -1081,12 +1083,24 @@ uninstall_tip.ps1  注销脚本
 
 ```
 index.html            项目主页（GitHub Pages 用，单文件零依赖，内嵌全部 CSS）
+
+core/                 平台无关的核心（feihe-core）：**一个系统 API 都不许出现**。
+                      Windows 壳和以后的 Android 壳共用这一份，`src/lib.rs` 用
+                      `pub use feihe_core::{…}` 挂回根，老路径 `crate::shuangpin::…` 不变。
+core/src/shuangpin.rs 小鹤双拼编码（全拼→两键码，带单测当规格）
+core/src/fuzzy.rs     模糊音（在双拼码上按位置换键）
+core/src/correct.rs   拼写纠错（换一个键，不删不加）
+core/src/number.rs    中文数字 / 金额
+core/src/calc.rs      算式求值（`/c` 用）
+core/src/brief.rs     一级简码（26 键各配一字）
+core/src/brief2.rs    二级简码（两键一词，数据 core/src/brief2.txt）
+core/src/assist.rs    辅助码表（自然码简版 / 小鹤音形，数据 core/src/assist.txt）
+
 src/lib.rs            DLL 入口（DllGetClassObject / DllCanUnloadNow）
 src/clsid.rs          固定 GUID
 src/classfactory.rs   IClassFactory
 src/dllcount.rs       COM 对象计数（DllCanUnloadNow 用）
 src/textservice.rs    TSF 核心（Activate / 按键 sink / 组合态 / edit session / 候选调度）
-src/shuangpin.rs      小鹤双拼编码（全拼→两键码，带单测当规格）
 src/dict.rs           词库查询（静态二进制 + 运行时覆盖层，二分前缀扫描）
 src/dictbin.rs        词库二进制的零解析读取器（段偏移 + 索引表 + 字节池）
 src/dictenc.rs        FHDB 编码器（build.rs 与运行期各 #[path] 引入一次，只此一份）

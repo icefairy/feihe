@@ -15,10 +15,15 @@ dependencies = [
 name = "feihe"
 version = "0.3.11"
 dependencies = [
+ "feihe-core",
  "tyme4rs",
  "windows",
  "windows-core",
 ]
+
+[[package]]
+name = "feihe-core"
+version = "0.3.11"
 
 [[package]]
 name = "lazy_static"

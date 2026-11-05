@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成辅助码表 src/assist.txt
+"""生成辅助码表 core/src/assist.txt
 
 两套方案：
 
@@ -37,7 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UNIHAN_ZIP = os.path.join(ROOT, "_unihan.zip")
 XHUP_CACHE = os.path.join(ROOT, "tools", "xhup_cache.txt")
 OVERRIDES = os.path.join(ROOT, "tools", "assist_overrides.txt")
-OUT = os.path.join(ROOT, "src", "assist.txt")
+OUT = os.path.join(ROOT, "core", "src", "assist.txt")
 SRC = os.path.join(ROOT, "src")
 
 # 康熙部首 1..214 的拼音首字母，按部首序号排列，每行 10 个便于核对。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成二简词表（`src/brief2.txt` 的数据行）
+"""生成二简词表（`core/src/brief2.txt` 的数据行）
 
 二简词的码 = **首字首码 + 次字首码**，也就是小鹤双拼两键码的第一个键：
 
@@ -18,7 +18,7 @@
 文件开头的 `#` 注释块（表头说明）原样保留，只替换数据行。
 
 用法：
-    python tools/gen_brief2.py                  # 重写 src/brief2.txt
+    python tools/gen_brief2.py                  # 重写 core/src/brief2.txt
     python tools/gen_brief2.py --check          # 只比对，不写盘（CI 用）
 """
 
@@ -26,7 +26,7 @@ import io
 import sys
 
 DICT = "src/dict.txt"
-OUT = "src/brief2.txt"
+OUT = "core/src/brief2.txt"
 
 # 小鹤入门 2.1「二简词」首选 273
 PRIMARY = """

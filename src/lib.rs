@@ -1,15 +1,10 @@
 // 飞鹤输入法 · DLL 入口与 COM 导出
 // M1：注册用外部 installer（reg 脚本），DLL 只需 DllGetClassObject/DllCanUnloadNow
-mod assist;
-mod brief;
-mod brief2;
-mod calc;
 mod candidate;
 mod classfactory;
 mod clipboard;
 mod clsid;
 mod config;
-mod correct;
 mod custom;
 mod demote;
 mod dict;
@@ -21,17 +16,14 @@ mod fancha;
 mod font;
 mod freq;
 mod fullscreen;
-mod fuzzy;
 mod hint;
 mod insert;
 mod next;
-mod number;
 mod phrase;
 mod pin;
 mod quick;
 mod secure;
 mod settings;
-mod shuangpin;
 mod softkbd;
 mod sogou;
 mod statusbar;
@@ -39,6 +31,16 @@ mod textservice;
 mod theme;
 mod uielement;
 mod zhconv;
+
+// ── 已经搬进 `feihe-core` 的平台无关模块 ────────────────────────────
+//
+// 挂回 crate 根之后，下面所有 `crate::shuangpin::…` 之类的**老路径一字不用改**。
+// 搬家刻意不动调用点：真出了回归，才能确定是搬家本身的问题。
+//
+// 还在 `src/` 里的是下一批：`dictenc`（单测要扫 `src/*.txt` 做全量编码校验）、
+// `dict` / `freq` / `next` / `pin` / `phrase` / `demote` / `custom`（都要数据目录，
+// 等 `config::dir()` 改成可注入之后才能搬）。
+pub use feihe_core::{assist, brief, brief2, calc, correct, fuzzy, number, shuangpin};
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
