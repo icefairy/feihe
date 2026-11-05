@@ -6,6 +6,9 @@ app/build/
 # 本机路径，不进库
 local.properties
 
+# ASR 模型（79 MB）不进库：用 tools/fetch_asr_model.py 拉，SHA256 钉住。
+app/src/main/assets/asr/
+
 # IDE
 .idea/
 *.iml
