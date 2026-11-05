@@ -36,7 +36,7 @@ import com.feihe.ime.keyboard.QwertyLayout
  * - **数字选词**：键盘没有数字行，加一行会挤掉字母键的高度。选词靠点。
  * - **联想浮窗**：有联想，但**不弹独立窗口**（那会压住键盘、还会把候选条顶跳）。
  *   联想词接在候选条末尾，用 `→` 前缀区分，点一下上屏。
- * - **Shift**：没实现就不假装支持。
+ * - **上档锁定**：⇧ 是一次性的（打一个大写就落下），没有双击锁定大小写。
  */
 class FeiheIme : InputMethodService() {
 
@@ -81,6 +81,15 @@ class FeiheIme : InputMethodService() {
 
     /** 中/英态。 */
     private var chinese = true
+
+    /**
+     * 上档（一次性）。
+     *
+     * **一次性是刻意的**：桌面 Shift 按住不放才是大写，手机上没有「按住」，双击锁
+     * 定又容易误触。所以按一下 ⇧ = 下一个字母大写，打完自动落下来。要连打大写，
+     * 现在的办法是连点——知道不爽，见 `docs/后续待办.md` 的「上档锁定」。
+     */
+    private var shifted = false
 
     private var statusText: TextView? = null
     private var statusBar: LinearLayout? = null
@@ -241,8 +250,8 @@ class FeiheIme : InputMethodService() {
             KeyboardView.build(
                 this,
                 if (numeric) NumericLayout.rows else QwertyLayout.rows,
-                ::onKey,
-            ),
+                shifted,
+            ) { onKey(it) },
         )
         refreshStatus()
     }
@@ -260,6 +269,27 @@ class FeiheIme : InputMethodService() {
                 // 一开始打新东西，旧联想就必须消失：留着它等于把「几分钟前的上下文」
                 // 又摆在手指下面，点错了上屏的词完全不搭。
                 suggestions = emptyList()
+                if (shifted) {
+                    shifted = false
+                    KeyboardView.applyShiftState(keyboardHost, false)
+                    if (chinese) {
+                        // 中文态 + 上档 = **临时英文**：先把手上半截拼音处理掉再上屏，
+                        // 否则「nihao」+ ⇧A 会变成组合态里的「nihaoA」。
+                        // 上屏的这个大写字母也不参与联想（上下文已经断了）。
+                        if (candidates.isNotEmpty()) {
+                            commitWord(candidates.first(), thenSuggest = false)
+                        } else {
+                            commitPending()
+                        }
+                        commitText(key.code.uppercase())
+                        forgetContext()
+                        return
+                    }
+                    // 英文态：正常续进组合串，H e l l o 这样一个个打
+                    pending.append(key.code.uppercase())
+                    pushComposing()
+                    return
+                }
                 pending.append(key.code)
                 pushComposing()
             }
@@ -315,6 +345,8 @@ class FeiheIme : InputMethodService() {
 
             KeyKind.MODE -> {
                 chinese = !chinese
+                shifted = false
+                KeyboardView.applyShiftState(keyboardHost, false)
                 // 切英文时把中文候选丢掉：那批候选是按中文码查的，留着只会误导
                 forgetContext()
                 refreshCandidates()
@@ -334,8 +366,11 @@ class FeiheIme : InputMethodService() {
                 forgetContext()
             }
 
-            // Shift 还没实现，先什么都不做——不要假装支持
-            KeyKind.SHIFT -> Unit
+            KeyKind.SHIFT -> {
+                shifted = !shifted
+                // 只改这一颗键的配色，不重建键盘（重建会闪、候选条会抖）
+                KeyboardView.applyShiftState(keyboardHost, shifted)
+            }
         }
     }
 

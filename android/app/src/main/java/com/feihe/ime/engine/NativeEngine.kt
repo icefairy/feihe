@@ -158,6 +158,33 @@ object NativeEngine {
         runCatching { setConfigNative(key, value) }
     }
 
+    // ── 数据备份 ────────────────────────────────────────────────────────
+    //
+    // 打包/解包在 Kotlin（`java.util.zip`），这里只问「哪些文件算用户数据」和
+    // 「导入之后怎么让它生效」。**清单必须来自引擎**：写在 Kotlin 里就是第二份真值，
+    // 引擎新增一个数据文件时备份会静默漏掉它。
+
+    /** 允许备份/导入的数据文件名。导入端拿它当白名单（挡路径穿越和任意大文件）。 */
+    fun dataFiles(): List<String> {
+        if (!ensureLoaded()) return emptyList()
+        val raw = runCatching { dataFilesNative() }.getOrElse { return emptyList() }
+        return if (raw.isEmpty()) emptyList() else raw.split('\n').filter { it.isNotEmpty() }
+    }
+
+    /** 导出包里的 `MANIFEST.txt` 正文（版本 + 时间 + 每个文件的大小）。 */
+    fun manifest(): String =
+        if (ensureLoaded()) runCatching { manifestNative() }.getOrElse { "" } else ""
+
+    /**
+     * 导入之后调：把配置和所有内存表重读一遍。
+     *
+     * 不调的话「导入成功」是假的——第一次按键用的还是旧词频、旧设置。
+     */
+    fun reloadAll() {
+        if (!ensureLoaded()) return
+        runCatching { reloadAllNative() }
+    }
+
     // ── 原生方法 ────────────────────────────────────────────────────────
     //
     // 方法名 + 包名 + 类名拼起来就是 .so 里的符号名：
@@ -175,6 +202,12 @@ object NativeEngine {
     private external fun configNative(): String
 
     private external fun setConfigNative(key: String, value: String)
+
+    private external fun dataFilesNative(): String
+
+    private external fun manifestNative(): String
+
+    private external fun reloadAllNative()
 
     private external fun coreVersionNative(): String
 

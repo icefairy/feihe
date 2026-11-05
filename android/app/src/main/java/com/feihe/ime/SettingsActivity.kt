@@ -1,6 +1,8 @@
 package com.feihe.ime
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.TypedValue
@@ -11,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 import com.feihe.ime.engine.NativeEngine
 
 /**
@@ -114,6 +117,18 @@ class SettingsActivity : Activity() {
                 },
                 switchRow("记住常用词", "常打的词排到前面", cfg?.learn == true) {
                     set("learn", it)
+                },
+            ),
+        )
+
+        list.addView(
+            card(
+                "数据",
+                actionRow("导出备份", "设置、个人词库、词频、自造词、联想打包成 ${Backup.suggestedName()}") {
+                    exportBackup()
+                },
+                actionRow("导入备份", "用备份里的数据覆盖当前数据（导入前会再确认一次）") {
+                    importBackup()
                 },
             ),
         )
@@ -280,6 +295,129 @@ class SettingsActivity : Activity() {
         return row
     }
 
+    /**
+     * 一行「点一下就有事发生」的条目（右侧一个 `›`）。
+     *
+     * 和 [choiceRow] 分开：那个是单选，右边是勾；这个是动作，右边是箭头。两者混用
+     * 会让人以为「导出备份」是个选中状态。
+     */
+    private fun actionRow(label: String, desc: String, onClick: () -> Unit): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14f), dp(10f), dp(14f), dp(10f))
+            // 引擎没就绪时禁用：备份的清单来自引擎，点下去只会弹「引擎未就绪」
+            isEnabled = cfg != null
+            alpha = if (cfg != null) 1f else 0.4f
+            setOnClickListener { if (cfg != null) onClick() }
+        }
+        val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        texts.addView(
+            TextView(this).apply {
+                text = label
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setTextColor(TEXT)
+            },
+        )
+        texts.addView(
+            TextView(this).apply {
+                text = desc
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(SUB)
+            },
+        )
+        row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(
+            TextView(this).apply {
+                text = "›"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTextColor(SUB)
+                setPadding(dp(8f), 0, dp(2f), 0)
+            },
+        )
+        return row
+    }
+
+    // ── 备份：导出 / 导入 ───────────────────────────────────────────────
+    //
+    // 走系统的文件选择器（SAF）而不是自己拼路径：不用申请存储权限，用户还能自己
+    // 决定存到哪（下载目录、SD 卡、网盘 App 的同步目录都行）。代价是只能拿到一个
+    // Uri，读写都通过 `contentResolver`——这也正是 [Backup] 那两个函数的签名。
+
+    @Suppress("DEPRECATION")
+    private fun exportBackup() {
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/zip"
+            putExtra(Intent.EXTRA_TITLE, Backup.suggestedName())
+        }
+        runCatching { startActivityForResult(i, REQ_EXPORT) }
+            .onFailure { toast("这台设备上没有能找到的文件管理器") }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun importBackup() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            // 有的文件管理器把 zip 报成 octet-stream，只写 application/zip 会让备份包
+            // 在选择器里变灰选不中——所以放开 MIME，用扩展名和内容自己判。
+            type = "*/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"),
+            )
+        }
+        runCatching { startActivityForResult(i, REQ_IMPORT) }
+            .onFailure { toast("这台设备上没有能打开文件的应用") }
+    }
+
+    @Deprecated("SAF 的旧回调；没有 androidx.activity 就先用它，行为完全一样")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        when (requestCode) {
+            REQ_EXPORT -> runBusy { Backup.export(this, uri) }
+            REQ_IMPORT -> {
+                // 导入是**破坏性**的（先清后写），必须确认一次再动手。
+                AlertDialog.Builder(this)
+                    .setTitle("导入备份")
+                    .setMessage(
+                        "会用备份里的数据覆盖当前的设置、个人词库、词频、置顶、自造词、联想。\n\n" +
+                            "当前数据不会保留。确定继续吗？",
+                    )
+                    .setPositiveButton("导入") { _, _ -> runBusy { Backup.import(this, uri) } }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        }
+    }
+
+    /**
+     * 干活 + 汇报结果。
+     *
+     * **必须离开主线程**：导出要读几 MB，导入完还要重编译个人词库（百毫秒级），
+     * 在主线程做就是一次肉眼可见的卡顿。线程里只碰 [Backup] 和引擎，UI 一律回主线程改。
+     */
+    private fun runBusy(block: () -> String) {
+        toast("处理中…")
+        Thread {
+            val result = runCatching { block() }
+            runOnUiThread {
+                toast(result.getOrElse { it.message ?: "失败" })
+                if (result.isSuccess) {
+                    // 导入会换掉 config.ini，方案/输入方式可能变了，整页重建一次
+                    cfg = NativeEngine.settings()
+                    setContentView(buildUi())
+                }
+            }
+        }.start()
+    }
+
+    private fun toast(text: String) {
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+    }
+
     private fun textBlock(label: String, desc: String): View {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(
@@ -314,5 +452,9 @@ class SettingsActivity : Activity() {
         val TEXT = 0xFF202124.toInt()
         val SUB = 0xFF5F6368.toInt()
         val ACCENT = 0xFF1A6FD4.toInt()
+
+        /** 文件选择器的请求码。两个值够用就行，别和别的 startActivityForResult 撞。 */
+        const val REQ_EXPORT = 1001
+        const val REQ_IMPORT = 1002
     }
 }

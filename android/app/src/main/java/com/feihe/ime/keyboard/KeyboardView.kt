@@ -21,7 +21,20 @@ object KeyboardView {
     private const val KEY_HEIGHT_DP = 46f
     private const val GAP_DP = 5f
 
-    fun build(ctx: Context, rows: List<List<Key>>, onKey: (Key) -> Unit): View {
+    /**
+     * 上档键的 tag。
+     *
+     * 上档状态变了**不重建整个键盘**：重建会闪一下、候选条也跟着抖，而且用户只是
+     * 按了一下 ⇧。改成按 tag 找到那颗键、就地换配色。
+     */
+    const val SHIFT_TAG = "feihe.shift"
+
+    fun build(
+        ctx: Context,
+        rows: List<List<Key>>,
+        shiftActive: Boolean = false,
+        onKey: (Key) -> Unit,
+    ): View {
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xFFD9DCE1.toInt())
@@ -42,7 +55,7 @@ object KeyboardView {
             ).apply { bottomMargin = dp(ctx, GAP_DP) }
 
             for (key in row) {
-                rowView.addView(makeKey(ctx, key, onKey), keyParams(ctx, key))
+                rowView.addView(makeKey(ctx, key, shiftActive, onKey), keyParams(ctx, key))
             }
             root.addView(rowView, lp)
         }
@@ -59,17 +72,38 @@ object KeyboardView {
         rightMargin = dp(ctx, GAP_DP / 2)
     }
 
-    private fun makeKey(ctx: Context, key: Key, onKey: (Key) -> Unit): View {
+    /**
+     * 上档状态变化时调用：只改 ⇧ 那一颗键的底色和字色。
+     *
+     * 字母键的标签本来就是大写的（手机键盘的通行做法），所以**状态只能靠 ⇧ 自己
+     * 表示**——不染色的用户根本分不清刚才那一下有没有点上。
+     */
+    fun applyShiftState(root: View?, active: Boolean) {
+        val v = root?.findViewWithTag<TextView>(SHIFT_TAG) ?: return
+        v.background = keyBackground(root.context, Key("⇧", KeyKind.SHIFT), active)
+        v.setTextColor(if (active) Color.WHITE else 0xFF333333.toInt())
+    }
+
+    private fun makeKey(ctx: Context, key: Key, shiftActive: Boolean, onKey: (Key) -> Unit): View {
+        val lit = key.kind == KeyKind.SHIFT && shiftActive
         val view = TextView(ctx).apply {
             text = key.label
             gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, if (key.kind == KeyKind.CHAR) 20f else 16f)
-            setTextColor(if (key.kind == KeyKind.CHAR) Color.BLACK else 0xFF333333.toInt())
-            background = keyBackground(ctx, key)
+            // 点亮的 ⇧ 用白字（底色是强调蓝），其余按老规矩黑/深灰
+            setTextColor(
+                when {
+                    lit -> Color.WHITE
+                    key.kind == KeyKind.CHAR -> Color.BLACK
+                    else -> 0xFF333333.toInt()
+                },
+            )
+            background = keyBackground(ctx, key, shiftActive)
             isClickable = true
             contentDescription = accessibilityLabel(key)
             setOnClickListener { onKey(key) }
         }
+        if (key.kind == KeyKind.SHIFT) view.tag = SHIFT_TAG
 
         // 删除键长按连续删。手感和搜狗对齐：先删一个，然后约 50ms 一个。
         // 用 setOnLongClickListener 而不是自己算触摸时长——输入法窗口里
@@ -89,16 +123,18 @@ object KeyboardView {
         return view
     }
 
-    private fun keyBackground(ctx: Context, key: Key): GradientDrawable {
+    private fun keyBackground(ctx: Context, key: Key, shiftActive: Boolean = false): GradientDrawable {
         val radius = dp(ctx, 6f).toFloat()
         return GradientDrawable().apply {
             cornerRadius = radius
             setColor(
-                when (key.kind) {
+                when {
+                    // 上档键点亮：和候选第一个同色的强调蓝，一眼看出「下一下是大写」
+                    key.kind == KeyKind.SHIFT && shiftActive -> 0xFF1A6FD4.toInt()
                     // 数字/标点页上的键和字母一样是「可打的字」，给白底；
                     // 功能键才用灰底，靠颜色就能分出「这排是打字的还是操作的」。
-                    KeyKind.CHAR, KeyKind.TEXT -> Color.WHITE
-                    KeyKind.SPACE -> 0xFFF7F7F8.toInt()
+                    key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT -> Color.WHITE
+                    key.kind == KeyKind.SPACE -> 0xFFF7F7F8.toInt()
                     else -> 0xFFB9BEC6.toInt()
                 }
             )
@@ -110,7 +146,7 @@ object KeyboardView {
     private fun accessibilityLabel(key: Key): String = when (key.kind) {
         KeyKind.CHAR, KeyKind.TEXT -> key.label
         KeyKind.DELETE -> "删除"
-        KeyKind.SHIFT -> "上档"
+        KeyKind.SHIFT -> "上档（下一个字母大写）"
         KeyKind.SPACE -> "空格"
         KeyKind.ENTER -> "换行"
         KeyKind.PUNCT -> key.label

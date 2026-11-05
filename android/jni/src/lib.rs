@@ -268,3 +268,54 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_setConfigNative<'l
         }
     });
 }
+
+// ─────────────────────────────────────────────────────────────
+// 数据备份：清单 / 说明 / 导入后重载
+// ─────────────────────────────────────────────────────────────
+//
+// **打包解包不在这一层，也不在 core。** core 的依赖政策是「只有 tyme4rs」，zip 要么引
+// 库要么手写几百行；而 Kotlin 的 `java.util.zip` 两行就完事。所以边界划在「清单」上：
+// core 说**哪些文件算用户数据**，壳负责把它们塞进/取出一个容器。
+//
+// 这样切的好处：备份的内容只有一份真值，容器格式错了只影响那一次操作，不会让引擎
+// 进入「半新半旧」的状态。
+
+/// `NativeEngine.dataFilesNative()` —— 允许备份的数据文件名，`\n` 分隔。
+///
+/// **导入端必须拿它当白名单**，不能「解压出什么就写什么」：备份包是外部输入，
+/// 里面可能有 `../config.ini` 这种路径，也可能有任意大的文件。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_dataFilesNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    let text = std::panic::catch_unwind(|| feihe_core::backup::DATA_FILES.join("\n"))
+        .unwrap_or_default();
+    make_string(&mut env, &text)
+}
+
+/// `NativeEngine.manifestNative()` —— 导出包里的 `MANIFEST.txt` 正文。
+///
+/// 带版本号和时间：用户半年后翻出这个文件，至少知道是哪台机器、哪个版本导的。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_manifestNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    let text = std::panic::catch_unwind(feihe_core::backup::manifest).unwrap_or_default();
+    make_string(&mut env, &text)
+}
+
+/// `NativeEngine.reloadAllNative()` —— 导入之后把内存态全部重读。
+///
+/// 必须调：`config` / 词频 / 置顶 / 自造词 / 联想 / 降权 / 自定义短语在各自模块里都
+/// 有缓存，不重载的话「导入成功」之后的第一次按键还是旧数据。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_reloadAllNative<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) {
+    // 重载里会读词库、编译 user.bin，耗时在百毫秒量级；panic 不能穿出去（会 abort
+    // 整个输入法进程）。
+    let _ = std::panic::catch_unwind(feihe_core::backup::reload_all);
+}

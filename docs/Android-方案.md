@@ -531,7 +531,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
 | M1 第四步：`hint` / `fancha` / `zhconv` | **已完成** | `hint`（含 `hint.txt`）整体搬走；`fancha` 开 `set_clipboard_reader`（Windows 剪贴板留在 `src/clipboard.rs`）；`zhconv` 开 `set_converter`，NLS 映射留在 `src/nls.rs`。**317 项测试全绿**（core 206 + 壳 111），DLL 4290 KB 不变，`cargo check --target aarch64-linux-android` 通过。`sogou` **明确不搬**，理由见下 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | **能打中文，双拼/全拼双模**：双拼模式打 `nihc`、全拼模式打 `nihao`，都是「你好」；`sanguo`→「三国」。26 键 + 数字/符号页 + 组合串 + 上屏/删除有 21 项 Kotlin 单测。**JNI 8 个入口**（`init` / `lookupInput` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record` / `config`+`setConfig`），`.so` 3736 KB（`base.bin` 2.9 MB + 联想内置表）。**设置页已有三个入口**（状态条齿轮 / 系统设置 / 桌面图标），可改输入方式、双拼方案、繁体、联想、学习。**联想**：上屏后候选条末尾 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：全链路可用，并揪出内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
+| M2 Android 最小可用 | 进行中 | **能打中文，双拼/全拼双模**：双拼模式打 `nihc`、全拼模式打 `nihao`，都是「你好」；`sanguo`→「三国」。26 键 + 数字/符号页 + 上档（⇧ 一次性大写）+ 组合串 + 上屏/删除，共 **26 项 Kotlin 单测**。**JNI 12 个入口**（`init` / `lookupInput` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record` / `config` / `setConfig` / `dataFiles` / `manifest` / `reloadAll`），`.so` 3.6 MiB（3 778 232 字节，含 `base.bin` 2.9 MB + 联想内置表）。**设置页三个入口**（状态条齿轮 / 系统设置 / 桌面图标）：输入方式、双拼方案、繁体、联想、学习、**数据备份（导出/导入 zip）**。**联想**：上屏后候选条末尾 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：全链路可用，并揪出内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
 
 ### 11.1 `sogou` 为什么不搬
 
@@ -576,6 +576,30 @@ Android 的 26 键键盘不一样——用户按的是字母，屏幕上没有�
 
 单测喂的是**假探针**（`resolve_code_with(input, mode, scheme, probe)`），不查真词库：
 `lookup` 的结果进断言这条，`handoff` 里已经记过三次，个人词库一导入当场不成立。
+
+### 11.3 数据备份：清单在 core，容器在壳
+
+用户要「导出一份包含全部自有数据的备份」。边界划在**清单**上：
+
+- `feihe_core::backup::DATA_FILES` 说哪些文件算用户数据（设置、个人词库、词频、置顶、
+  自造词、联想、降权、自定义短语），`manifest()` 生成带版本和时间的说明，
+  `reload_all()` 在导入后把八个模块的内存缓存全部重读。
+- 打包/解包在 Kotlin（`java.util.zip`）：core 的依赖政策只允许 `tyme4rs`，zip 要么引库
+  要么手写几百行 DEFLATE；而 `java.util.zip` 两行就完事。
+
+两个刻意的决定：
+
+1. **`user.bin` 不在清单里。** 它是 `user_dict.txt` 的编译产物，格式随词库版本变。
+   跨版本导入旧 bin，最坏情况是把旧格式当新格式解析、查出一堆乱码词。导入后重编译
+   一次只要百来毫秒。同理 `feihe.log` 也不备份——那是诊断日志。
+2. **导入 = 恢复到备份，不是合并。** 先清掉所有数据文件再写包里的。合并需要一堆
+   「新盖旧还是旧盖新」的规则，而用户说「导入备份」时想要的一定是回到那个时间点。
+   代价是包不完整就等于删数据，所以**整个包先解到内存、校验完才动手写盘**，写盘也
+   先落 `.importing` 临时文件再改名。
+
+还有一个和「不假装支持」相关的取舍：备份包是**外部输入**，导入端只认 `DATA_FILES`
+里的名字（一字不差），`../config.ini` 这类路径天然进不来，单个文件超过 32 MB 直接拒绝
+（挡解压炸弹）。
 
 ---
 

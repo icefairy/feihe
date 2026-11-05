@@ -1,9 +1,10 @@
 //! 飞鹤输入法 · 平台无关的核心
 //!
-//! 这一层的规矩只有一条：**不许出现任何操作系统 API**。没有 `windows`、没有
-//! `std::fs`、没有线程本地存储、没有全局可变状态。同样的代码要能在 Windows 的
-//! TSF 壳里跑，也要能在 Android 的 `InputMethodService` 壳里跑，还要能在测试里
-//! 被反复构造。
+//! 这一层的规矩只有一条：**不许出现任何操作系统 API**。没有 `windows` crate、
+//! 没有注册表、没有剪贴板、没有 TSF/UI 类型、没有线程本地存储。文件 IO 只碰
+//! 数据目录（路径由壳注入），时钟/日志/剪贴板这类能力一律走钩子。
+//! 同样的代码要能在 Windows 的 TSF 壳里跑，也要能在 Android 的
+//! `InputMethodService` 壳里跑，还要能在测试里被反复构造。
 //!
 //! ## 为什么拆出来
 //!
@@ -22,6 +23,7 @@
 //! （`textservice` 拆成 `Session` 纯状态机 + 壳，那是最后一步，也是唯一有风险的一步）。
 
 pub mod assist;
+pub mod backup;
 pub mod brief;
 pub mod brief2;
 pub mod calc;

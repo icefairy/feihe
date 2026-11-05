@@ -312,7 +312,7 @@ fn overlay() -> Arc<Overlay> {
     built
 }
 
-fn reload_overlay() {
+pub(crate) fn reload_overlay() {
     let built = Arc::new(Overlay::load());
     if let Ok(mut g) = OVERLAY.write() {
         *g = Some(built);
