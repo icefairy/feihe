@@ -1,0 +1,31 @@
+[package]
+name = "feihe-android"
+version = "0.3.11"
+edition = "2021"
+publish = false
+
+# 自己是一个独立的 workspace：它只该为 Android 目标编译，混进根 workspace 会让
+# Windows 那边的 `cargo build` 顺手编一个没人用的 JNI dll 出来。
+[workspace]
+
+[lib]
+name = "feihe_android"
+crate-type = ["cdylib"]
+
+[dependencies]
+feihe-core = { path = "../../core" }
+
+# 唯一一个不在根 workspace 依赖策略里的 crate：`jni` 只编进 Android 的 .so，
+# **不进 Windows 的 DLL**，所以安装包体积一分钱没涨。手写 JNI 函数表下标也能做，
+# 但下标写错是一次没有诊断信息的崩溃，而这块偏偏是最没法在本机验证的。
+[dependencies.jni]
+version = "0.21"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"
+# 刻意**不设** `panic = "abort"`：边界上每个 JNI 函数都用 catch_unwind 包着，
+# 一个 Rust panic 只该让这一次调用返回失败，不该把宿主 App 一起带走——输入法崩
+# 掉等于用户正在写的东西没了，这比「候选出不来」严重得多。

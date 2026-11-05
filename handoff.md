@@ -3677,3 +3677,76 @@ pub use feihe_core::{assist, brief, brief2, calc, correct, fuzzy, number, shuang
 - 下一步：`config::dir()` 改成 `OnceLock<PathBuf>` + `init(dir)`，然后搬
   `freq` / `next` / `pin` / `demote` / `custom`，再搬 `dict` + `dictenc`，最后才是
   `textservice` 拆纯状态机（唯一有风险的一步）。
+
+---
+
+## Android M1：`config` 搬进 core（两个钩子），以及 JNI 链路打通
+
+### `config` 为什么卡了两轮
+
+它是 `freq` / `next` / `pin` / `phrase` / `demote` / `custom` 的前置（它们都要
+`config::save()`），但自己挂着两处 Windows 依赖。两处都用**注入**解决，效果是
+`config` 里一行系统调用都不剩：
+
+| 原依赖 | 改成 | 为什么这么拆 |
+|---|---|---|
+| `resolve_dir`（问 DLL 路径、试写、首次迁移） | 壳侧 `src/datadir.rs` + `paths::set_resolver` | 「数据放哪」是壳的事，「怎么写」是 core 的事 |
+| `no_popup()` → `fullscreen::covers_popup` | `config::set_fullscreen_probe` | QUNS 是 Windows API；**没注册时按「不该收」处理**——多弹一个候选窗只是碍眼，该弹不弹像彻底坏了 |
+
+**`DllMain` 只注册、不执行。** `resolve` 会写探针文件、做首次迁移，那是文件 I/O，
+在 loader lock 里做会卡住甚至死锁。所以交进去的是函数指针，真正执行发生在第一次
+要读写数据文件时。
+
+### 测试进程没有 `DllMain`——这条必须补
+
+搬完第一轮测试直接红了 66 条：`paths::dir()` panic。因为单元测试的产物是个 exe，
+`DllMain` 根本不会执行，解析器永远没注册。
+
+修法是加一层壳侧门面 `src/config.rs`：
+
+```rust
+pub use feihe_core::config::*;          // 实现和 16 项单测都在 core
+
+#[cfg(test)]  pub fn dir() -> PathBuf { crate::datadir::legacy_dir() }   // 老行为
+#[cfg(not(test))] pub fn dir() -> PathBuf { feihe_core::paths::dir() }
+```
+
+但光有这一层**不够**：core 里的 `config::load/save` 走的是 core 自己的 `path()`，
+不经过门面。所以 `test_guard()`（所有碰配置的测试都要拿的那把锁）顺便注册解析器，
+一次注册、后面全命中。这把锁成了测试的锚点，这一点写进了注释，别删。
+
+### 两个不能加 `#[cfg(test)]` 的函数
+
+`test_guard` / `set_no_popup_for_test` 原来都是 `#[cfg(test)] pub(crate)`。搬进 core
+之后，**调用方在另一个 crate 里**——core 正常编译时这两个函数不存在，壳的测试就编
+不过，而且报错位置飘到壳里，看起来跟这把锁毫无关系。改成 `#[doc(hidden)] pub`，
+名字带 `for_test` 让人一眼知道不该在产物里调。
+
+### JNI：为什么先搬 `encode_pinyin` 上去
+
+链路上要验的是「`.so` 能编出来、能装进 APK、符号对得上、字符串能来回」。验证这件事
+不需要词库——`nihao → nihc` 一眼能看出对错，纯函数、不依赖状态。拿 `add(a,b)` 验不出
+任何东西，拿它验能顺带证明 `shuangpin` 在 ARM 上行为一致。
+
+三个已经在真机前能验的点（命令见 `docs/Android-方案.md` §12.5）：`.so` 是 ELF64
+AArch64、`llvm-nm -D` 里三个 `Java_` 符号、APK 的 `lib/arm64-v8a/` 里文件在且未压缩。
+
+**每个 JNI 入口都包 `catch_unwind`。** Rust panic 穿过 FFI 边界 = 进程 abort = 用户
+正在写的文档没了。宁可这次调用返回空串。也正因为要 catch，`profile.release` 里
+**不能**设 `panic = "abort"`——设了就没得 catch。
+
+### 链接器的两个 Windows 专属坑
+
+1. `aarch64-linux-android24-clang.cmd` 是批处理包装，会把
+   `-Wl,--version-script=...` 搞坏，报错还是 **GBK 中文**。改用 `clang.exe` +
+   `-Clink-arg=--target=aarch64-linux-android24`。
+2. `rustup target add aarch64-linux-android` 在清华镜像上是 404（那个日期还没同步），
+   只能走官方源，15 分钟。
+
+### 验收
+
+- 308 项（230 + 78）两种词库配置全绿，**一条没丢**（config 的 16 项随迁）。
+- DLL 64 位 4285 KB、32 位 4328 KB——和搬之前一致。
+- `cargo check --target aarch64-linux-android -p feihe-core` 通过（真编，不是看注释）。
+- `libfeihe_android.so` 268 KB；带 78 MB 模型的 APK 80.3 MiB。
+- Kotlin 单测 19 项全绿。

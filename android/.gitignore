@@ -13,3 +13,6 @@ app/src/main/assets/asr/
 .idea/
 *.iml
 .DS_Store
+
+# Rust 引擎的构建产物（cargo 自己的 target 目录，几十 MB）
+jni/target/

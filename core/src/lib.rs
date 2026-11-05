@@ -31,3 +31,9 @@ pub mod fuzzy;
 pub mod number;
 pub mod paths;
 pub mod shuangpin;
+
+/// core 的版本号，跟 `Cargo.toml` 走。
+///
+/// 给壳用：Android 那边要在设置页/日志里显示「引擎版本」，而它跟 APK 的
+/// versionName 不一定是同一个数（APK 可以只换壳不换引擎）。
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

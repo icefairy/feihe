@@ -527,10 +527,11 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | 阶段 | 状态 | 说明 |
 |---|---|---|
 | **M1 第一步：拆出 `feihe-core`** | **已完成** | 8 个零依赖叶子模块（`shuangpin` / `fuzzy` / `correct` / `number` / `calc` / `brief` / `brief2` / `assist`）搬进 `core/`，62 项单测随迁，总数仍是 308；发布模式 DLL 4285 KB（拆分前 4284 KB）。详见 `handoff.md` |
-| M1 第二步：`config::dir()` 路径注入 | 待做 | 做完才能搬 `freq` / `next` / `pin` / `demote` / `custom` |
-| M1 第三步：`dict` + `dictenc` + `hint` | 待做 | `dictenc` 的单测要扫 `src/*.txt`，跟 `dict` 一起处理 |
-| M1 第四步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | 26 键键盘 + 组合串 + 上屏/删除已完成（19 项单测）；**工具链已配好**（JDK 17 + Gradle 8.7 + AGP 8.5.2 + build-tools 34，全部走国内镜像，见 §12）；骨架 IME 已能编出 2.0 MB 的 APK，清单反查通过。下一步：真机装上看能不能弹出并上屏 |
+| **M1 第二步：`config` 搬进 core** | **已完成** | 路径与全屏判断都改成壳注入（`paths::set_resolver` / `config::set_fullscreen_probe`），config 里一行系统调用不剩；308 项（230 + 78）两种配置全绿，DLL 4285/4328 KB 不变 |
+| M1 第三步：`freq` / `next` / `pin` / `phrase` / `demote` / `custom` | 待做 | `config` 已就位，这批只剩搬文件 + 改 `crate::` 路径 |
+| M1 第四步：`dict` + `dictbin` + `dictenc` + `hint` / `fancha` | 待做 | `dictenc` 的单测要扫 `src/*.txt`；`dictbin` 的内存映射有 Windows 专属分支，要开钩子 |
+| M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
+| M2 Android 最小可用 | 进行中 | **JNI 链路已打通**：`cargo build --target aarch64-linux-android` 产 268 KB 的 `libfeihe_android.so`，Gradle 已接成 `preBuild` 的前置任务，APK 里 `lib/arm64-v8a/` 有这个文件（80.3 MiB，含 78 MB 模型）；Kotlin 侧 `NativeEngine` 能拿到引擎版本并把 `nihao` 转成 `nihc`。26 键键盘 + 组合串 + 上屏/删除已有 19 项单测。下一步：真机装上验一遍，然后把词库搬进 core 出真候选 |
 
 ---
 
@@ -596,3 +597,52 @@ cd android
 （未压缩），说明 `androidResources { noCompress += listOf("onnx","bin","fst") }`
 生效了——这一条不做的话，原生层拿不到连续 fd，只能整包解压进内存，79 MB 的模型
 冷启动会翻倍。带模型的 debug APK 是 **80.0 MiB**。
+
+### 12.5 Rust 引擎（JNI）的构建
+
+引擎是 `android/jni`（crate 名 `feihe-android`），依赖 `feihe-core`，产出
+`libfeihe_android.so`。**不**走 AGP 的 `externalNativeBuild`（那是 CMake 的地盘），
+而是在 `app/build.gradle.kts` 里注册一个 `Exec` 任务直接调 cargo，再拷成 jniLibs
+期望的目录形状（`rustJniLibs/arm64-v8a/`），挂到 `preBuild` 前面。
+
+补装的东西：
+
+| 组件 | 版本 | 路径 | 来源 |
+|---|---|---|---|
+| NDK | **r26d（26.3.11579264）** | `D:/soft/asdk/ndk/26.3.11579264` | 腾讯镜像的 `android-ndk-r26d-windows.zip`（635 MB） |
+| Rust 目标 | `aarch64-linux-android` | `rustup target add` | **官方源**（清华镜像上这个日期还没有，404），15 分钟 |
+
+#### 三个坑
+
+1. **链接器不能用 `aarch64-linux-android24-clang.cmd`。** 那是个批处理包装，
+   Windows 下会把 `-Wl,--version-script=...` 这类参数搞坏，报错还是 **GBK 编码的
+   中文**（`此时不应有 --version-script`），从英文 log 里完全看不出是编码问题。
+   改用 `clang.exe` + `RUSTFLAGS=-Clink-arg=--target=aarch64-linux-android24`。
+2. **`jni` crate 是根 workspace「只允许 tyme4rs」的唯一例外。** 它只编进 Android
+   的 `.so`，**不进 Windows 的 DLL**，所以安装包体积一分钱没涨（64 位仍是 4285 KB）。
+   手写 JNI 函数表下标也能做到零依赖，但下标写错是一次没有诊断信息的崩溃，而这块
+   恰恰是本机最验证不了的。
+3. **JNI 符号名 = 包名 + 类名 + 方法名。** Kotlin 侧包装方法叫 `coreVersion()`，
+   原生方法必须叫 `coreVersionNative()`——同名没法共存。改包名/类名/改名都要同步
+   `android/jni/src/lib.rs`，否则运行期 `UnsatisfiedLinkError`，只有装到真机才发现。
+
+#### 怎么验（不需要真机的那一半）
+
+```bash
+# 1. 编出 .so 并看架构
+cd android/jni
+CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=<ndk>/toolchains/llvm/prebuilt/windows-x86_64/bin/clang.exe \
+RUSTFLAGS=-Clink-arg=--target=aarch64-linux-android24 \
+cargo build --release --target aarch64-linux-android
+
+# 2. 符号对不对（三个 Java_ 开头的）
+<ndk>/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-nm.exe -D --defined-only \
+  target/aarch64-linux-android/release/libfeihe_android.so | grep Java_
+
+# 3. APK 里有没有、是不是被压缩了
+python -c "import zipfile;z=zipfile.ZipFile('app/build/outputs/apk/debug/app-debug.apk');\
+print([(i.filename,i.compress_type) for i in z.infolist() if i.filename.startswith('lib/')])"
+```
+
+真机上验只需要看状态条：它现在会显示 `引擎 0.3.11 (aarch64)`。打 `nihao` 时
+应当在同一行看到 `nihao→nihc`——**这是屏幕上第一处真正来自 Rust 的东西**。

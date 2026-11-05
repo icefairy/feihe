@@ -8,6 +8,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.feihe.ime.engine.NativeEngine
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
 import com.feihe.ime.keyboard.KeyboardView
@@ -21,8 +22,9 @@ import com.feihe.ime.keyboard.QwertyLayout
  *
  * ## 为什么先做英文态
  *
- * 中文态的链路是「字母 → 引擎（双拼解码 + 词库）→ 候选 → 选词上屏」，而引擎还没接
- * （`feihe-core` 要交叉编译成 aarch64 的 `.so`，需要 NDK）。
+ * 中文态的链路是「字母 → 引擎（双拼解码 + 词库）→ 候选 → 选词上屏」。引擎
+ * （`feihe-core` 交叉编译出来的 `libfeihe_android.so`）已经接上了，但**词库还没搬
+ * 进 core**，所以现在只接了编码能力：状态条上能看到全拼到双拼的转换结果。
  *
  * 但**键盘、组合串、上屏、删除**这些平台层的东西不需要引擎就能做完、也能验。
  * 所以先把平台层做扎实：引擎接进来时只换「字母怎么变成候选」这一步，
@@ -168,8 +170,18 @@ class FeiheIme : InputMethodService() {
             if (pending.isNotEmpty()) {
                 append(" · ")
                 append(pending)
+                // 把双拼码也显示出来——这是**屏幕上第一处真正来自 Rust 引擎的东西**。
+                // 打 `nihao` 时这里应该出现 `nihc`；如果一直不出现，说明 .so 没加载
+                // 或者符号名对不上（看 logcat 里的 FeiheIme 标签）。
+                val code = if (NativeEngine.isSyllable(pending.toString())) {
+                    NativeEngine.encodePinyin(pending.toString())
+                } else {
+                    ""
+                }
+                if (code.isNotEmpty()) append("→").append(code)
             }
-            append("  （引擎未接入，字母原样上屏）")
+            append("  ·  引擎 ")
+            append(NativeEngine.coreVersion())
         }
     }
 
