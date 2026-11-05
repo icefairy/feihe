@@ -1,0 +1,5 @@
+# gradlew 是 shell 脚本，必须 LF。这台机器的 core.autocrlf 会把它转成 CRLF，
+# 在 Linux/macOS 上直接报 "bad interpreter"。.bat 反过来不能动。
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
