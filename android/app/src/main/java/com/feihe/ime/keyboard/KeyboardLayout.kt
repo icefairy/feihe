@@ -3,11 +3,11 @@ package com.feihe.ime.keyboard
 /**
  * 一个键。
  *
- * `code` 是**送进引擎的东西**，不是显示的字。字母键的 code 是单个小写字母；
- * 功能键没有 code（走 [kind]）。
+ * `code` 是**送进引擎的东西**（字母键）或**直接上屏的字符**（TEXT 键）或**目标页名**
+ * （PAGE 键），不是显示的字。显示的字是 [label]。
  *
  * 为什么显示和 code 要分开：小鹤的 `v` 键既是字母 v（ü），在双拼里又代表 zh；
- * 将来做符号页时 `，` 键的 code 可能是半角 `,`。两者相同是巧合，不能合并成一个字段。
+ * `123` 键显示的是数字，code 却是 `digits`。两者相同是巧合，不能合并成一个字段。
  */
 data class Key(
     val label: String,
@@ -17,14 +17,21 @@ data class Key(
     val weight: Float = 1f,
 )
 
+/** 三张键盘页。切页只换容器里的行，不重建 InputView。 */
+enum class Page {
+    LETTERS,
+    DIGITS,
+    SYMBOLS,
+}
+
 enum class KeyKind {
     /** 字母键：code 是一个小写字母，交给引擎 */
     CHAR,
 
     /**
-     * **直接上屏**的字符（数字、符号）：不进组合串，也不经过引擎。
+     * **直接上屏**的字符（数字、标点、符号）：不进组合串，也不经过引擎。
      *
-     * 为什么和 [PUNCT] 分开：标点要先「把候选上屏再粘标点」，而数字页上的 `1`
+     * 为什么和 [PUNCT] 分开：中文标点要先「把候选上屏再粘标点」，而数字页上的 `1`
      * 通常是单独一个字符（用户要打「3 个」这种），不该把前面半截拼音顶上去。
      * 两者行为不同，就不能共用一个 kind。
      */
@@ -33,12 +40,7 @@ enum class KeyKind {
     /** 删除：短按删一个 char，长按连续删 */
     DELETE,
 
-    /**
-     * 上档（一次性）：按一下点亮，下一个字母大写，打完自动落下。
-     *
-     * 中文态下它等于**临时英文**（直接上屏那个大写字母），英文态下正常续进组合串。
-     * 两种语义不同是必然的：中文态的字母是拼音，大写字母进引擎只会变成乱码。
-     */
+    /** 上档（一次性）：按一下点亮，下一个字母大写，打完自动落下 */
     SHIFT,
 
     SPACE,
@@ -50,8 +52,13 @@ enum class KeyKind {
     /** 中英切换 */
     MODE,
 
-    /** 切键盘页：字母页 ↔ 数字/符号页 */
-    SYMBOL,
+    /**
+     * 换页。code 是 [Page] 的小写名（`letters` / `digits` / `symbols`）。
+     *
+     * 不用「布尔值切两页」是因为有了第三页：符号单独一页之后，`123`/`ABC`/`符`
+     * 三个键要去三个地方，布尔值装不下，硬塞只会变成一堆 if。
+     */
+    PAGE,
 }
 
 /**
@@ -64,9 +71,6 @@ enum class KeyKind {
  *
  * 所以键盘这一层必须是纯 QWERTY。任何「把韵母印到键上」的做法都会让引擎和界面
  * 各存一份映射，改一处忘一处。**键位归键盘，读音归引擎。**
- *
- * 唯一和桌面 26 键不同的是尺寸：手机每格窄得多，所以第四排（功能排）要给空格
- * 留足够宽度，否则误触率会很高。
  */
 object QwertyLayout {
 
@@ -87,10 +91,10 @@ object QwertyLayout {
 
         // 第四排：数字页 / 中英 / 逗号 / 空格 / 句号 / 回车
         //
-        // 「123」放在最左是搜狗/豆包那一排的肌肉记忆；不放的话手机上一个数字都打不出来
-        // ——数字页是 26 键以外**唯一**的数字入口，字母页上没有任何地方能打 `1`。
+        // 「123」放在最左是搜狗/豆包那一排的肌肉记忆；字母页上没有任何地方能打
+        // 数字，这个键是唯一入口。
         listOf(
-            Key("123", KeyKind.SYMBOL, weight = 1f),
+            Key("123", KeyKind.PAGE, "digits", weight = 1f),
             Key("中", KeyKind.MODE, weight = 1f),
             Key("，", KeyKind.PUNCT, "，", weight = 0.85f),
             Key("", KeyKind.SPACE, weight = 3.3f),
@@ -105,35 +109,95 @@ object QwertyLayout {
 }
 
 /**
- * 数字 / 符号页。底行的 `123` 切过来，`ABC` 切回去。
+ * 数字页：**3 列 × 3 行的九宫格（1–9）+ 0/逗号/句号 + 一排功能键**。
  *
- * ## 为什么不是「数字候选条」而是整页
+ * ## 为什么改成三列
  *
- * 数字行压在字母上方会挤掉字母键的高度（每行矮 20%），而数字又不是高频输入。
- * 整页切换是手机输入法的通行做法，代价只是多按一下。
+ * 上一版是每行 5 个键（`1 2 3 4 5` / `6 7 8 9 0`），每个键只有屏宽的 1/5，
+ * 手指按上去经常落偏；而手机上最常见的数字键盘是电话拨号盘那种三列布局，
+ * 键宽接近 1/3，单手按也不容易错。这是这次改动的全部理由——没有新功能。
  *
- * ## 为什么带中文标点
+ * ## 为什么多了一排却不让键盘变高
  *
- * 打数字的场景经常连标点一起（「3.5」「第二，」）。放一页之后用户不需要为了一个
- * 逗号再切回去——**切页有成本，能一次给全就给全**。
+ * 字母页 4 排、数字页 5 排。如果行高都是 46dp，切页时整块键盘会长出 50dp，
+ * 输入框和候选条跟着往上跳一下，很烦。所以数字/符号页用 36dp 的紧凑行高：
+ *
+ * - 字母页：4 × 46 + 3 × 5(缝) + 12(上下 padding) = **211dp**
+ * - 紧凑页：5 × 36 + 4 × 5(缝) + 12(上下 padding) = **212dp**
+ *
+ * 差 1dp，肉眼看不出来，而每个键还比原来宽 2/3。行高由 [KeyboardPages.rowHeightDp] 给。
+ *
+ * ## 为什么要有独立符号页
+ *
+ * 三列 × 五行 = 15 格，装不下「10 个数字 + 5 个中文标点 + 5 个功能键」。
+ * 硬塞就得把某一排做成 6 个小键，等于把刚争取到的键宽又还回去。
+ * 标点单独一页（[SymbolLayout]），数字页只留 `，` `。` 两个最常用的。
  */
 object NumericLayout {
 
-    private fun txt(s: String) = Key(s, KeyKind.TEXT, s)
+    private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f)
 
     val rows: List<List<Key>> = listOf(
-        listOf("1", "2", "3", "4", "5").map(::txt),
-        listOf("6", "7", "8", "9", "0").map(::txt),
-        listOf("，", "。", "？", "！", "：").map(::txt),
-        // 最后一行 4 个键、权重合计 5，和上面三行的 5 × 1 对齐
+        listOf("1", "2", "3").map(::txt),
+        listOf("4", "5", "6").map(::txt),
+        listOf("7", "8", "9").map(::txt),
+        listOf("，", "0", "。").map(::txt),
+        // 功能排：和数字行一样按「总权重 6」分，否则这一排的键宽会和上面跳一格。
+        // `符` 去符号页，`ABC` 回字母页，`123` 在符号页上用来回数字页。
         listOf(
-            Key("ABC", KeyKind.SYMBOL, weight = 1f),
-            Key("", KeyKind.SPACE, weight = 3f),
-            Key("⌫", KeyKind.DELETE, weight = 1f),
+            Key("ABC", KeyKind.PAGE, "letters"),
+            Key("符", KeyKind.PAGE, "symbols"),
+            Key("", KeyKind.SPACE, weight = 2f),
+            Key("↵", KeyKind.ENTER),
+            Key("⌫", KeyKind.DELETE),
         ),
     )
 
     /** 所有直接上屏的字符。测试用：不许有重复，也不许混进字母。 */
     val textCodes: List<String>
         get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
+}
+
+/**
+ * 中文标点 / 常用符号页。形状和数字页完全一样（5 行、每行总权重 6），
+ * 这样两页之间切换时**每一个键的位置都不动**，肌肉记忆能直接复用。
+ */
+object SymbolLayout {
+
+    private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f)
+
+    val rows: List<List<Key>> = listOf(
+        listOf("，", "。", "？").map(::txt),
+        listOf("！", "：", "、").map(::txt),
+        listOf("；", "（", "）").map(::txt),
+        listOf("…", "—", "·").map(::txt),
+        listOf(
+            Key("ABC", KeyKind.PAGE, "letters"),
+            Key("123", KeyKind.PAGE, "digits"),
+            Key("", KeyKind.SPACE, weight = 2f),
+            Key("↵", KeyKind.ENTER),
+            Key("⌫", KeyKind.DELETE),
+        ),
+    )
+
+    val textCodes: List<String>
+        get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
+}
+
+/** 给壳用的一张小表：页 → 行数据 + 行高。避免 FeiheIme 里散落三个 when。 */
+object KeyboardPages {
+    fun rows(page: Page): List<List<Key>> = when (page) {
+        Page.LETTERS -> QwertyLayout.rows
+        Page.DIGITS -> NumericLayout.rows
+        Page.SYMBOLS -> SymbolLayout.rows
+    }
+
+    /** 见 [NumericLayout] 里的高度计算：紧凑页 36dp，总和与字母页 46dp×4 相当。 */
+    fun rowHeightDp(page: Page): Float = if (page == Page.LETTERS) 46f else 36f
+
+    fun label(page: Page): String = when (page) {
+        Page.LETTERS -> "26 键"
+        Page.DIGITS -> "数字"
+        Page.SYMBOLS -> "符号"
+    }
 }

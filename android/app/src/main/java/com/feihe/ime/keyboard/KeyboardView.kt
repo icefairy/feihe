@@ -33,6 +33,7 @@ object KeyboardView {
         ctx: Context,
         rows: List<List<Key>>,
         shiftActive: Boolean = false,
+        rowHeightDp: Float = KEY_HEIGHT_DP,
         onKey: (Key) -> Unit,
     ): View {
         val root = LinearLayout(ctx).apply {
@@ -51,7 +52,7 @@ object KeyboardView {
             }
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(ctx, KEY_HEIGHT_DP),
+                dp(ctx, rowHeightDp),
             ).apply { bottomMargin = dp(ctx, GAP_DP) }
 
             for (key in row) {
@@ -89,7 +90,11 @@ object KeyboardView {
         val view = TextView(ctx).apply {
             text = key.label
             gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, if (key.kind == KeyKind.CHAR) 20f else 16f)
+            // 数字/符号页的键比字母页宽得多，字符也跟着放大一点，不然看着像空的
+            setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                if (key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT) 20f else 16f,
+            )
             // 点亮的 ⇧ 用白字（底色是强调蓝），其余按老规矩黑/深灰
             setTextColor(
                 when {
@@ -151,8 +156,12 @@ object KeyboardView {
         KeyKind.ENTER -> "换行"
         KeyKind.PUNCT -> key.label
         KeyKind.MODE -> "切换中英文"
-        // 按钮上写的是「123」/「ABC」，读屏念数字没有意义，念出「切到哪」才行
-        KeyKind.SYMBOL -> if (key.label == "ABC") "字母键盘" else "数字和符号"
+        // 按钮上写的是「123」/「ABC」/「符」，读屏念这些没意义，念出「切到哪」才行
+        KeyKind.PAGE -> when (key.code) {
+            "letters" -> "字母键盘"
+            "digits" -> "数字键盘"
+            else -> "符号键盘"
+        }
     }
 
     private fun dp(ctx: Context, v: Float): Int =

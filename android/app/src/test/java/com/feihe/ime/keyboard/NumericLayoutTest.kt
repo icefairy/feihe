@@ -6,10 +6,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 数字/符号页的规格锁。
+ * 数字页的规格锁。
  *
  * 这一页最怕的不是「少一个符号」，而是**缺数字**——字母页上没有任何地方能打
  * `0`-`9`，这一页是唯一入口，少一个就是永久打不出来。
+ *
+ * 第二组断言锁的是「3×3」这个形状本身：改成三列就是为了把键宽从 1/5 提到 1/3，
+ * 哪天有人为了塞更多符号又加回 5 列，这里会先红。
  */
 class NumericLayoutTest {
 
@@ -22,13 +25,23 @@ class NumericLayoutTest {
     }
 
     @Test
-    fun `各行权重合计一致`() {
-        // 行内按键按 weight 分宽度。四行合计不一样的话，换行处按键宽度会跳，
-        // 手指按上去的落点和看到的位置对不上——这种错不是崩溃，但用起来很难受。
+    fun `1 到 9 是三行三列的九宫格`() {
+        for ((row, expect) in listOf("123", "456", "789").withIndex()) {
+            val keys = NumericLayout.rows[row]
+            assertEquals("第 ${row + 1} 行必须是 3 个键", 3, keys.size)
+            assertTrue("第 ${row + 1} 行必须全是直接上屏的字符", keys.all { it.kind == KeyKind.TEXT })
+            assertEquals("第 ${row + 1} 行数字顺序不对", expect, keys.joinToString("") { it.code })
+        }
+    }
+
+    @Test
+    fun `五行且各行权重合计一致`() {
+        // 行内按键按 weight 分宽度。各行合计不一样的话，同一个 weight 在不同行
+        // 的物理宽度会变，换行处按键会看着错位——不是崩溃，但用起来很难受。
         val totals = NumericLayout.rows.map { row -> row.sumOf { it.weight.toDouble() } }
-        assertEquals(4, totals.size)
-        for (t in totals) {
-            assertEquals("各行 width 合计要一样，否则键宽会跳", 5.0, t, 0.001)
+        assertEquals(5, totals.size)
+        for ((i, t) in totals.withIndex()) {
+            assertEquals("第 ${i + 1} 行权重合计应是 6", 6.0, t, 0.001)
         }
     }
 
@@ -41,17 +54,18 @@ class NumericLayoutTest {
     }
 
     @Test
-    fun `有切回字母页的键`() {
-        val symbol = NumericLayout.rows.flatten().firstOrNull { it.kind == KeyKind.SYMBOL }
-        assertTrue("数字页必须有切回去的键", symbol != null)
-        assertEquals("ABC", symbol!!.label)
+    fun `有切回字母页和去符号页的键`() {
+        val pages = NumericLayout.rows.flatten().filter { it.kind == KeyKind.PAGE }
+        assertTrue("要有回字母页的 ABC", pages.any { it.label == "ABC" && it.code == "letters" })
+        assertTrue("要有去符号页的「符」", pages.any { it.label == "符" && it.code == "symbols" })
     }
 
     @Test
-    fun `有空格和删除`() {
+    fun `有空格 回车和删除`() {
         val kinds = NumericLayout.rows.flatten().map { it.kind }.toSet()
-        assertTrue("缺空格", KeyKind.SPACE in kinds)
-        assertTrue("缺删除", KeyKind.DELETE in kinds)
+        for (need in listOf(KeyKind.SPACE, KeyKind.ENTER, KeyKind.DELETE)) {
+            assertTrue("缺功能键 $need", need in kinds)
+        }
     }
 
     @Test

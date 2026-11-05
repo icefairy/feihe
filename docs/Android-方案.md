@@ -531,7 +531,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | **M1 第三步：数据层整体搬进 core** | **已完成** | `freq` / `next` / `pin` / `demote` / `custom` / `dict` / `dictbin` / `dictenc` / `phrase` 全部入驻。三处开钩子：`core::log`（日志）、`core::clock`（`GetLocalTime` → 可注入）、`dictbin::map_file` 不再真做内存映射。`base.bin` 改由 `core/build.rs` 生成 |
 | M1 第四步：`hint` / `fancha` / `zhconv` | **已完成** | `hint`（含 `hint.txt`）整体搬走；`fancha` 开 `set_clipboard_reader`（Windows 剪贴板留在 `src/clipboard.rs`）；`zhconv` 开 `set_converter`，NLS 映射留在 `src/nls.rs`。**317 项测试全绿**（core 206 + 壳 111），DLL 4290 KB 不变，`cargo check --target aarch64-linux-android` 通过。`sogou` **明确不搬**，理由见下 |
 | M1 第五步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | **能打中文，双拼/全拼双模**：双拼模式打 `nihc`、全拼模式打 `nihao`，都是「你好」；`sanguo`→「三国」。26 键 + 数字/符号页 + 上档（⇧ 一次性大写）+ 组合串 + 上屏/删除，共 **26 项 Kotlin 单测**。**JNI 12 个入口**（`init` / `lookupInput` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record` / `config` / `setConfig` / `dataFiles` / `manifest` / `reloadAll`），`.so` 3.6 MiB（3 778 232 字节，含 `base.bin` 2.9 MB + 联想内置表）。**设置页三个入口**（状态条齿轮 / 系统设置 / 桌面图标）：输入方式、双拼方案、繁体、联想、学习、**数据备份（导出/导入 zip）**。**长串自动整句**：`vhsjli`→「张三李」、`nihaoshijie`→「你好世界」（分段规则与桌面共用 core 的 `segment`）。**联想**：上屏后候选条末尾 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：全链路可用，并揪出内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
+| M2 Android 最小可用 | 进行中 | **能打中文，双拼/全拼双模**：双拼模式打 `nihc`、全拼模式打 `nihao`，都是「你好」；`sanguo`→「三国」。26 键 + **3×3 九宫格数字页** + 独立符号页 + 上档（⇧ 一次性大写）+ 组合串 + 上屏/删除，共 **33 项 Kotlin 单测**。**JNI 12 个入口**（`init` / `lookupInput` / `encodePhrase` / `isSyllable` / `coreVersion` / `suggest` / `record` / `config` / `setConfig` / `dataFiles` / `manifest` / `reloadAll`），`.so` 3.6 MiB（3 782 008 字节，含 `base.bin` 2.9 MB + 联想内置表）。**设置页三个入口**（状态条齿轮 / 系统设置 / 桌面图标）：输入方式、双拼方案、繁体、联想、学习、**数据备份（导出/导入 zip）**。**长串自动整句**：`vhsjli`→「张三李」、`nihaoshijie`→「你好世界」（分段规则与桌面共用 core 的 `segment`）。**联想**：上屏后候选条末尾 `→词`，点击上屏并续链；标点/空格/回车/删字/切模式都断开上下文。**真机已验证**（realme RMX5080 / Android 16，2026-11-05）：全链路可用，并揪出内置联想表权重被 `MAX_COUNT` 压平导致顺序倒置的 bug（见 `handoff.md`） |
 
 ### 11.1 `sogou` 为什么不搬
 
@@ -624,6 +624,25 @@ DP 于是认为整串就是一个词、`codes.len() >= 2` 不成立、退回逐�
 真词库上验过：`vhsjli` → 张三李、`nihaoshijie`（全拼串）→ 你好世界、
 `wobuzhidao` → 我不知道、`zhonghuarenmingongheguo` → 中华人民共和国、
 `mmap`（编码混英文）→ 整句放弃、什么都不给。耗时 0.1–2 ms，只在「整码查不到」时才跑。
+
+### 11.5 数字页：3×3 九宫格 + 独立符号页
+
+第一版数字页是每行 5 个键（`1 2 3 4 5` / `6 7 8 9 0`），每个键只有屏宽 1/5，
+手指容易按偏。改成电话拨号盘那种三列九宫格后，键宽接近 1/3。
+
+三个随之而来的决定：
+
+1. **多一排但不长高。** 字母页 4 排 × 46dp，紧凑页 5 排 × 36dp：
+   `4×46 + 3×5 + 12 = 211dp` 对 `5×36 + 4×5 + 12 = 212dp`，差 1dp。
+   不然每次切页整块键盘长出 50dp，输入框和候选条都要往上跳一下。
+   行高由 `KeyboardPages.rowHeightDp` 给，单测里钉着这个算式。
+2. **符号单独一页。** 3 列 × 5 行 = 15 格，装不下「10 数字 + 中文标点 + 功能键」，
+   硬塞就得把某排做成 6 个小键，等于把刚争取到的键宽还回去。数字页只留 `，` `。`，
+   其余 12 个标点到「符」页。两页**形状完全相同**（5 行、每行总权重 6），
+   切换时每个键的位置都不动。
+3. **`KeyKind.SYMBOL`（布尔切两页）换成 `KeyKind.PAGE` + `Page` 三态枚举。**
+   三个键（`123` / `ABC` / `符`）要去三个地方，布尔值装不下，硬塞只会变成一堆 if。
+   `key.code` 直接存目标页名，`FeiheIme` 里只有一个 when。
 
 ---
 

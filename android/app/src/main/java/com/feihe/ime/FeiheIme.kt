@@ -14,8 +14,8 @@ import com.feihe.ime.engine.NativeEngine
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
 import com.feihe.ime.keyboard.KeyboardView
-import com.feihe.ime.keyboard.NumericLayout
-import com.feihe.ime.keyboard.QwertyLayout
+import com.feihe.ime.keyboard.KeyboardPages
+import com.feihe.ime.keyboard.Page
 
 /**
  * 飞鹤输入法 · Android 壳（M2 阶段）。
@@ -99,8 +99,8 @@ class FeiheIme : InputMethodService() {
     /** 键盘容器。字母页和数字页在这里换，**不是**重建整个 InputView。 */
     private var keyboardHost: LinearLayout? = null
 
-    /** 当前是不是数字/符号页。 */
-    private var numeric = false
+    /** 当前键盘页。字母 / 数字 / 符号——布尔值装不下三态，别再退回布尔。 */
+    private var page: Page = Page.LETTERS
 
     override fun onCreate() {
         super.onCreate()
@@ -231,7 +231,7 @@ class FeiheIme : InputMethodService() {
             orientation = LinearLayout.VERTICAL
         }
         root.addView(keyboardHost)
-        showKeyboardPage(numeric = false)
+        showPage(Page.LETTERS)
 
         refreshStatus()
         refreshCandidates()
@@ -239,18 +239,22 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
-     * 换键盘页。数字页和字母页共用同一个容器，**不重建 InputView**——
+     * 换键盘页。三页共用同一个容器，**不重建 InputView**——
      * 重建会走一遍 `onCreateInputView`，键盘会闪一下、候选条也会清空。
+     *
+     * 行高按页给（字母页 46dp×4，紧凑页 36dp×5），总高度几乎一致，切页时
+     * 输入框和候选条不会往上跳。理由和数字页的键位一样在 `KeyboardLayout.kt`。
      */
-    private fun showKeyboardPage(numeric: Boolean) {
+    private fun showPage(target: Page) {
         val host = keyboardHost ?: return
-        this.numeric = numeric
+        page = target
         host.removeAllViews()
         host.addView(
             KeyboardView.build(
                 this,
-                if (numeric) NumericLayout.rows else QwertyLayout.rows,
+                KeyboardPages.rows(target),
                 shifted,
+                KeyboardPages.rowHeightDp(target),
             ) { onKey(it) },
         )
         refreshStatus()
@@ -352,7 +356,13 @@ class FeiheIme : InputMethodService() {
                 refreshCandidates()
             }
 
-            KeyKind.SYMBOL -> showKeyboardPage(!numeric)
+            KeyKind.PAGE -> showPage(
+                when (key.code) {
+                    "letters" -> Page.LETTERS
+                    "symbols" -> Page.SYMBOLS
+                    else -> Page.DIGITS
+                },
+            )
 
             KeyKind.TEXT -> {
                 // 和标点同一套：先把手上半截拼音处理掉，再打这个字符。
@@ -528,10 +538,10 @@ class FeiheIme : InputMethodService() {
     private fun refreshStatus() {
         statusText?.text = buildString {
             append(if (chinese) "中" else "英")
-            // 数字页上写输入方式会让人以为还能打拼音，所以这里跟着换。
-            // 平时写「双拼/全拼」而不是「26 键」——键盘长什么样看得见，输入方式是
-            // 看不见的，而它决定了「为什么我打 xian 出了西安」。
-            append(if (numeric) " · 数字" else " · " + modeLabel())
+            // 切了页就写页名（数字页上写「双拼」会让人以为还能打拼音）。
+            // 字母页写「双拼/全拼」而不是「26 键」——键盘长什么样看得见，
+            // 输入方式是看不见的，而它决定了「为什么我打 xian 出了西安」。
+            append(if (page == Page.LETTERS) " · " + modeLabel() else " · " + KeyboardPages.label(page))
             if (pending.isNotEmpty()) {
                 append(" · ")
                 append(pending)

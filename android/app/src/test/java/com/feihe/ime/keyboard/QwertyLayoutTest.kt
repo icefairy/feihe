@@ -64,8 +64,9 @@ class QwertyLayoutTest {
      */
     @Test
     fun `有数字页入口`() {
-        val symbol = QwertyLayout.rows.flatten().firstOrNull { it.kind == KeyKind.SYMBOL }
-        assertTrue("字母页必须有 123 键", symbol != null)
-        assertEquals("123", symbol!!.label)
+        val target = QwertyLayout.rows.flatten().firstOrNull { it.kind == KeyKind.PAGE }
+        assertTrue("字母页必须有 123 键", target != null)
+        assertEquals("123", target!!.label)
+        assertEquals("digits", target.code)
     }
 }
