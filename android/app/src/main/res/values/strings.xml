@@ -3,9 +3,4 @@
     <string name="app_name">飞鹤输入法</string>
     <string name="ime_name">飞鹤输入法</string>
     <string name="subtype_zh">小鹤双拼</string>
-
-    <string name="skeleton_title">飞鹤输入法 · 骨架构建</string>
-    <string name="skeleton_hint">这个键盘只用来验证平台链路：能弹出、能上屏、能删除。\n真正的双拼引擎还没接。</string>
-    <string name="key_hello">你好</string>
-    <string name="key_backspace">删除</string>
 </resources>

@@ -2,34 +2,41 @@ package com.feihe.ime
 
 import android.inputmethodservice.InputMethodService
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.feihe.ime.keyboard.Key
+import com.feihe.ime.keyboard.KeyKind
+import com.feihe.ime.keyboard.KeyboardView
+import com.feihe.ime.keyboard.QwertyLayout
 
 /**
- * 飞鹤输入法 · Android 骨架。
+ * 飞鹤输入法 · Android 壳（M2 阶段）。
  *
- * 这个类**故意**只做四件事：被系统叫起来、画出一个键盘、往输入框塞字、删字。
+ * 现在是一个**能打字的英文态输入法 + 26 键中文键盘**：字母先攒在组合串里
+ * （输入框里能看到下划线），空格 / 标点 / 换行时才上屏。
  *
- * 目的是把平台假设一次验完，而不是先写两个月引擎再发现"候选条弹不出来"：
+ * ## 为什么先做英文态
  *
- * 1. 装得上、系统设置里能看到、能切过来（BIND_INPUT_METHOD + method.xml + subtype）
- * 2. `onCreateInputView` 画出来的东西真的出现在屏幕上（而不是一片空白 / 被导航栏盖住）
- * 3. `currentInputConnection.commitText` 真的进了输入框（不同宿主的 IC 行为不一致，
- *    这是最容易"看起来对但没上屏"的地方）
- * 4. `deleteSurroundingText` 能在各种输入框里正常删字
+ * 中文态的链路是「字母 → 引擎（双拼解码 + 词库）→ 候选 → 选词上屏」，而引擎还没接
+ * （`feihe-core` 要交叉编译成 aarch64 的 `.so`，需要 NDK）。
  *
- * 验证通过之后，`onCreateInputView` 里那块按钮换成真键盘，上屏逻辑换成
- * `feihe-core` 出的候选——那时候才有"引擎"这个词的位置。
+ * 但**键盘、组合串、上屏、删除**这些平台层的东西不需要引擎就能做完、也能验。
+ * 所以先把平台层做扎实：引擎接进来时只换「字母怎么变成候选」这一步，
+ * 那是一个接口的事，不是重写。
  */
 class FeiheIme : InputMethodService() {
 
-    /** 上一次宿主给的输入类型，用来确认 onStartInput 真的被调了（骨架期只记日志）。 */
-    private var lastInputType: Int = 0
+    /** 正在组合的字母（还没上屏）。英文态下它就是要上屏的内容本身。 */
+    private val pending = StringBuilder()
+
+    /** 中/英态。中文态要等引擎接进来才真正生效，现在只影响状态条显示。 */
+    private var chinese = true
+
+    private var statusText: TextView? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -38,104 +45,140 @@ class FeiheIme : InputMethodService() {
 
     override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
-        lastInputType = info?.inputType ?: 0
-        // 密码框这一档以后要拦（不学习、不记忆、不联想）。骨架期先记下来，
+        pending.setLength(0)
+        // 密码框这一档以后要拦（不学习、不记忆、不联想）。骨架期先记日志，
         // 让日志能证明「我们看得到 inputType」——这是所有按输入框分派的前提。
         Log.i(
             TAG,
-            "onStartInput: inputType=0x${lastInputType.toString(16)} " +
+            "onStartInput: inputType=0x${(info?.inputType ?: 0).toString(16)} " +
                 "restarting=$restarting fieldId=${info?.fieldId}"
         )
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        // 真机上「三键导航 vs 手势导航」的高度差会在这里暴露出来：键盘高度由
-        // 系统给的 window 决定，切换导航方式后必须重新量。骨架期先只记一条。
-        Log.i(TAG, "onStartInputView: 键盘视图已显示")
+        refreshStatus()
     }
+
+    /**
+     * 关掉全屏编辑模式。
+     *
+     * 系统默认在「横屏 + 输入框小」时把整块屏幕接管过去给我们画，那时键盘和候选条
+     * 的位置全乱。输入法要的是**贴着屏幕底部的一条**，不是全屏。
+     */
+    override fun onEvaluateFullscreenMode(): Boolean = false
 
     override fun onCreateInputView(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            // 底色用浅灰：一眼能看出「这是我们的视图」而不是宿主自己的键盘。
-            setBackgroundColor(0xFFEDEDED.toInt())
         }
 
-        root.addView(
-            TextView(this).apply {
-                text = getString(R.string.skeleton_title)
-                textSize = 14f
-                setPadding(0, 24, 0, 4)
-            }
-        )
-
-        root.addView(
-            TextView(this).apply {
-                text = getString(R.string.skeleton_hint)
-                textSize = 12f
-                setPadding(24, 0, 24, 16)
-            }
-        )
-
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+        statusText = TextView(this).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            setBackgroundColor(0xFFEDEEF0.toInt())
         }
-
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.key_hello)
-                setOnClickListener { commit("你好") }
-            },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        root.addView(
+            statusText,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
         )
 
-        row.addView(
-            Button(this).apply {
-                text = getString(R.string.key_backspace)
-                setOnClickListener { backspace() }
-            },
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-
-        root.addView(row)
+        root.addView(KeyboardView.build(this, QwertyLayout.rows, ::onKey))
+        refreshStatus()
         return root
     }
 
-    /**
-     * 上屏。
-     *
-     * 注意 `commitText` 的第二个参数是 newCursorPosition，填 1 表示「光标放到
-     * 文字末尾」。填 0 或负数在部分宿主里会把光标丢到奇怪的位置——这是骨架期
-     * 就要固定下来的约定，以后所有上屏都走这一个出口。
-     */
-    private fun commit(text: CharSequence) {
-        val ic = currentInputConnection
-        if (ic == null) {
-            Log.w(TAG, "commit: currentInputConnection 为空（宿主还没给输入连接）")
-            return
+    private fun onKey(key: Key) {
+        when (key.kind) {
+            KeyKind.CHAR -> {
+                pending.append(key.code)
+                pushComposing()
+            }
+
+            KeyKind.DELETE -> {
+                if (pending.isNotEmpty()) {
+                    pending.setLength(pending.length - 1)
+                    pushComposing()
+                } else {
+                    // 组合串空了才删文档里的字。反过来（先删文档）会把用户打了一半的
+                    // 拼音吃掉，这是最容易被骂的行为之一。
+                    currentInputConnection?.deleteSurroundingText(1, 0)
+                }
+            }
+
+            KeyKind.SPACE -> {
+                if (pending.isEmpty()) {
+                    commitText(" ")
+                } else {
+                    // 英文态：空格就是把组合串原样上屏。
+                    // 接了引擎之后这里会变成「选第一个候选」。
+                    commitPending()
+                }
+            }
+
+            KeyKind.PUNCT -> {
+                commitPending()
+                commitText(key.code)
+            }
+
+            KeyKind.ENTER -> {
+                commitPending()
+                commitText("\n")
+            }
+
+            KeyKind.MODE -> {
+                chinese = !chinese
+                refreshStatus()
+            }
+
+            // Shift / 符号页还没实现，先什么都不做——不要假装支持
+            KeyKind.SHIFT, KeyKind.SYMBOL -> Unit
         }
-        ic.commitText(text, 1)
     }
 
-    /**
-     * 删一个字。
-     *
-     * `deleteSurroundingText(1, 0)` 删光标前 1 个 **char**。注意中文里一个汉字是
-     * 1 个 char、emoji 常常是 2 个（代理对），骨架期先按 char 删，后面接引擎时
-     * 再按「一个候选 / 一个音节」的粒度删——那是完全不同的语义。
-     */
-    private fun backspace() {
+    /** 把组合串同步进输入框（带下划线）。空串就是结束组合。 */
+    private fun pushComposing() {
         val ic = currentInputConnection ?: return
-        ic.deleteSurroundingText(1, 0)
+        ic.setComposingText(pending.toString(), 1)
+        refreshStatus()
+    }
+
+    private fun commitPending() {
+        if (pending.isEmpty()) return
+        val ic = currentInputConnection ?: return
+        // commitText 会替换掉正在组合的区域，不需要先 finishComposingText；
+        // 先 finish 再 commit 在部分宿主里会多出一次光标移动。
+        ic.commitText(pending.toString(), 1)
+        pending.setLength(0)
+        refreshStatus()
+    }
+
+    private fun commitText(text: CharSequence) {
+        currentInputConnection?.commitText(text, 1)
+    }
+
+    private fun refreshStatus() {
+        statusText?.text = buildString {
+            append(if (chinese) "中" else "英")
+            append(" · 26 键")
+            if (pending.isNotEmpty()) {
+                append(" · ")
+                append(pending)
+            }
+            append("  （引擎未接入，字母原样上屏）")
+        }
     }
 
     override fun onFinishInput() {
+        pending.setLength(0)
         super.onFinishInput()
-        lastInputType = 0
     }
+
+    private fun dp(v: Float): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
     companion object {
         private const val TAG = "FeiheIme"

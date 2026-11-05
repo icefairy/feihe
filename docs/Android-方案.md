@@ -530,7 +530,7 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 | M1 第二步：`config::dir()` 路径注入 | 待做 | 做完才能搬 `freq` / `next` / `pin` / `demote` / `custom` |
 | M1 第三步：`dict` + `dictenc` + `hint` | 待做 | `dictenc` 的单测要扫 `src/*.txt`，跟 `dict` 一起处理 |
 | M1 第四步：`textservice` → `Session` 纯状态机 | 待做 | **唯一有风险的一步**，动之前先画状态图 |
-| M2 Android 最小可用 | 进行中 | **工具链已配好**（JDK 17 + Gradle 8.7 + AGP 8.5.2 + build-tools 34，全部走国内镜像，见 §12）；骨架 IME 已能编出 2.0 MB 的 APK，清单反查通过。下一步：真机装上看能不能弹出并上屏 |
+| M2 Android 最小可用 | 进行中 | 26 键键盘 + 组合串 + 上屏/删除已完成（19 项单测）；**工具链已配好**（JDK 17 + Gradle 8.7 + AGP 8.5.2 + build-tools 34，全部走国内镜像，见 §12）；骨架 IME 已能编出 2.0 MB 的 APK，清单反查通过。下一步：真机装上看能不能弹出并上屏 |
 
 ---
 
@@ -580,9 +580,13 @@ cd android
 
 ### 12.4 骨架已经验到哪一步
 
-目前 `android/` 里是一个**只出「你好」的输入法**（`FeiheIme.kt`）：能装上、能在系统
-设置里勾选、键盘能弹出、`commitText` 能上屏、`deleteSurroundingText` 能删字。它
-**没有**接 `feihe-core`，也**没有**真键盘——存在的唯一目的是把平台假设一次验完。
+目前 `android/` 里是一个**能打字的英文态输入法 + 26 键中文键盘**：
+键位表在 `keyboard/KeyboardLayout.kt`（纯数据，6 项单测锁住"26 个字母一个不多一个不少"），
+视图在 `keyboard/KeyboardView.kt`（程序化构建，不用 XML 布局），组合串/上屏/删除在
+`FeiheIme.kt`。**中文态要等引擎**（`feihe-core` 交叉编译成 `.so` 需要 NDK）。
+
+关键取舍：**键盘不分小鹤/全拼**。小鹤不改键位，改的是"字母怎么解释成声母韵母"，
+那是引擎的事。任何"把韵母印到键上"的做法都会让界面和引擎各存一份映射。
 
 已从 APK 里反查确认（不是只看编译成功）：
 `BIND_INPUT_METHOD` 权限、`android.view.InputMethod` 意图、`android.view.im`
