@@ -415,17 +415,28 @@ where
     })
 }
 
-/// 按键串 → （实际用的码, 候选）。Android 的 `lookupInputNative` 就是它。
+/// [`lookup_input`] 的结果。`segments` 非空 = 这一条候选是自动拼出来的整句，
+/// 壳可以据此进「逐段选择」态（A1）。
+///
+/// 把"是否整句"显式带出来，而不是让壳去猜「候选是不是只有一条、够不够长」：
+/// 那种启发式会把正常的双字词也误判成整句，而且判断规则会散到 Windows / Android
+/// 两边各写一份。真值只在产生它的地方。
+#[derive(Debug, Default)]
+pub struct LookupResult {
+    /// 实际用的码（状态条显示 `nihao→nihc`）。
+    pub code: String,
+    pub words: Vec<Cow<'static, str>>,
+    /// 非空时，`words[0]` 一定是各段第一名拼成的整句；顺序与 `words[0]` 一致。
+    pub segments: Vec<SegmentChoice>,
+}
+
+/// 按键串 → 码 + 候选（+ 整句时的分段）。Android 的 `lookupInputNative` 就是它。
 ///
 /// 返回码是给状态条用的：打 `nihao` 时显示 `nihao→nihc`，让人看得见引擎在干什么；
 /// 双拼模式下两者相同，就不显示箭头。
-pub fn lookup_input(
-    input: &str,
-    pinyin_mode: bool,
-    limit: usize,
-) -> (String, Vec<Cow<'static, str>>) {
+pub fn lookup_input(input: &str, pinyin_mode: bool, limit: usize) -> LookupResult {
     if input.is_empty() || limit == 0 {
-        return (String::new(), Vec::new());
+        return LookupResult::default();
     }
     match resolve_code_with(input, pinyin_mode, scheme(), any) {
         Some(r) => {
@@ -437,20 +448,27 @@ pub fn lookup_input(
                 // 整码查不到 → 试整句（`vhsjli` → 张三李）。**只在查不到时试**：
                 // 整词优先，否则打 `nihc` 会先看到一堆拼凑的整句。
                 if let Some(sentence) = compose_sentence(&r.code) {
+                    let segs = segment_candidates(&r.code, limit);
                     words.push(Cow::Owned(sentence));
+                    return LookupResult { code: r.code, words, segments: segs };
                 }
             }
-            (r.code, words)
+            LookupResult { code: r.code, words, ..Default::default() }
         }
         None => {
             // 编不出码。全拼模式下这就等于「没有」；双拼模式下更可能是**一长串码**
             // （`vhsjli` 编不出任何拼音），那就交给分段——这正是手机上分词态缺的那块。
             if pinyin_mode {
-                return (String::new(), Vec::new());
+                return LookupResult::default();
             }
             match compose_sentence(input) {
-                Some(sentence) => (input.to_string(), vec![Cow::Owned(sentence)]),
-                None => (String::new(), Vec::new()),
+                Some(sentence) => LookupResult {
+                    code: input.to_string(),
+                    // 长串码的段码就是 input 本身切出来的，直接拿它算分段
+                    segments: segment_candidates(input, limit),
+                    words: vec![Cow::Owned(sentence)],
+                },
+                None => LookupResult::default(),
             }
         }
     }
@@ -537,6 +555,77 @@ pub fn compose_sentence_with(
         out.push_str(&first(s)?);
     }
     Some(out)
+}
+
+/// 这次查询的分段信息（A1）。空 = 普通候选，壳不该进分段态。
+///
+/// 单独开这个入口而不是让壳拿"候选只有一条 / 码够长"去猜：`lookup_input` 内部
+/// 才知道那条候选是不是 `compose_sentence` 拼出来的。猜的后果是打 `nihc` 出「你好」
+/// 这种正常双字词时也会弹出分段 chip，而且判断规则会散到两个壳里各写一份。
+pub fn lookup_segments(input: &str, pinyin_mode: bool, limit: usize) -> Vec<SegmentChoice> {
+    lookup_input(input, pinyin_mode, limit).segments
+}
+
+/// 一段的候选列表，给 Android 的「逐段选择」用（A1）。
+///
+/// 整句上屏（`compose_sentence`）只把每段的第一名拼起来，用户没法改其中某一段。
+/// 这个函数把**每段自己的候选**也交出去，壳就能让用户点某段换词，而分段规则
+/// 仍然是 `segment::plan` 这一份——**绝不在 Kotlin 里重写切分**，否则同一个码
+/// 在桌面和手机切出不同的段，没人查得到原因。
+///
+/// 返回空 Vec = 不进分段态（码太短、切不出两段、或某一段查不到字）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentChoice {
+    /// 这一段的双拼码。给状态条/诊断用，界面不显示。
+    pub code: String,
+    /// 该段候选，按 `lookup` 的顺序（词频 / 一简 / 置顶已排好）。
+    /// 已过滤掉「字数 != 音节数」的条目，和 `first_aligned` 同一把尺子。
+    pub words: Vec<String>,
+}
+
+/// 长串 → 每段的候选。任一段查不到字就整体放弃，理由同 [`compose_sentence_with`]。
+pub fn segment_candidates(code: &str, limit: usize) -> Vec<SegmentChoice> {
+    // ALIGN_SCAN 是「扫多少条才找得到对齐候选」的下界（见上面的推导），
+    // 取候选时至少要看这么多条，否则可能一条对齐的都没剩。
+    let scan = limit.max(ALIGN_SCAN);
+    segment_candidates_with(code, limit, any_aligned, |s| {
+        lookup(s, scan).into_iter().map(|w| w.into_owned()).collect()
+    })
+}
+
+/// [`segment_candidates`] 的纯逻辑版本：词典操作从参数进来。
+///
+/// 和 `compose_sentence_with` 同一个理由：真实现依赖词库内容，而词库内容一律
+/// 不许进断言（个人词库一导入断言当场不成立）。喂假表就能把「怎么分段、对齐、
+/// 截断、缺段怎么办」钉死。
+pub fn segment_candidates_with(
+    code: &str,
+    limit: usize,
+    has: impl Fn(&str) -> bool,
+    candidates: impl Fn(&str) -> Vec<String>,
+) -> Vec<SegmentChoice> {
+    if code.len() < 4 || limit == 0 {
+        return Vec::new();
+    }
+    let segs = crate::segment::plan(code, false, has);
+    if segs.len() < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(segs.len());
+    for s in segs {
+        let want = syllables_of(&s);
+        let words: Vec<String> = candidates(&s)
+            .into_iter()
+            .filter(|w| w.chars().count() == want)
+            .take(limit)
+            .collect();
+        // 任一段没词 → 整句放弃。拼出「面ap」这种半截串比没有候选更糟。
+        if words.is_empty() {
+            return Vec::new();
+        }
+        out.push(SegmentChoice { code: s, words });
+    }
+    out
 }
 
 /// 拼写纠错：整串零候选时的最后一招。
@@ -2456,8 +2545,8 @@ pub(crate) mod tests {
         for s in [Scheme::Xiaohe, Scheme::Ms] {
             set_scheme(s);
             let expect = shuangpin::encode_phrase(s, "shuang").expect("编码失败");
-            let (code, _) = lookup_input("shuang", true, 3);
-            assert_eq!(code, expect, "{s:?} 下全拼模式没按当前方案编码");
+            let r = lookup_input("shuang", true, 3);
+            assert_eq!(r.code, expect, "{s:?} 下全拼模式没按当前方案编码");
         }
         set_scheme(Scheme::Xiaohe);
     }
@@ -2468,8 +2557,28 @@ pub(crate) mod tests {
     fn lookup_input_gives_no_code_for_unencodable_input() {
         let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
-        assert_eq!(lookup_input("", false, 9), (String::new(), Vec::new()));
-        assert_eq!(lookup_input("zzz", true, 9), (String::new(), Vec::new()));
+        let empty = lookup_input("", false, 9);
+        assert!(empty.code.is_empty() && empty.words.is_empty() && empty.segments.is_empty());
+        let bad = lookup_input("zzz", true, 9);
+        assert!(bad.code.is_empty() && bad.words.is_empty() && bad.segments.is_empty());
+    }
+
+    /// `lookup_input` 返回的是 `LookupResult`，`segments` 只在真正拼出整句时非空。
+    /// 这条钉住「普通候选绝不被壳误判成分段态」。
+    #[test]
+    fn lookup_input_reports_segments_only_for_composed_sentences() {
+        let _g = scheme_guard();
+        set_scheme(Scheme::Xiaohe);
+        // 空 / 编不出码的输入不带分段
+        assert!(lookup_segments("", false, 9).is_empty());
+        assert!(lookup_segments("zzz", true, 9).is_empty());
+        // 真词库里有没有 `vhsjli` 不假设：只断言「有整句时 words 与 segments 数量自洽」
+        let r = lookup_input("vhsjli", false, 9);
+        if !r.segments.is_empty() {
+            assert_eq!(1, r.words.len(), "整句只该有一条候选");
+            let joined: String = r.segments.iter().map(|s| s.words[0].as_str()).collect();
+            assert_eq!(r.words[0].as_ref(), joined.as_str(), "各段第一名拼起来必须等于整句");
+        }
     }
 
     // ── 长串自动分词（手机上第一次有「整句」候选） ──────────────────
@@ -2514,6 +2623,98 @@ pub(crate) mod tests {
     fn compose_sentence_needs_two_syllables() {
         assert_eq!(compose_sentence_with("vh", fake_has, fake_first), None);
         assert_eq!(compose_sentence_with("vhs", fake_has, fake_first), None, "奇数长度");
+    }
+
+    // ── 逐段选择（A1）：每段自己的候选 ──────────────────────────────
+    //
+    // 全部喂假表。真词库内容（尤其用户词库）一律不许进断言。
+
+    /// 分段测试专用的 `has`。
+    ///
+    /// **不能用上面那个 `fake_has`**：它把整串 `vhsjli` 也列为「有词」，于是 DP 会
+    /// 认为整串是一个词、切成 1 段，`plan` 随即退回逐音节（3 段）。`compose_sentence`
+    /// 那条测试两种切法都拼出「张三李」所以看不出来，但逐段选择要断言**段的边界**，
+    /// 就必须让 DP 真正走出 `vhsj|li` 两段。
+    fn seg_has(c: &str) -> bool {
+        matches!(c, "vh" | "sj" | "li" | "vhsj")
+    }
+
+    /// 假候选表：每段给多个词，其中夹一条「字数不对齐」的，必须被过滤掉。
+    fn fake_candidates(c: &str) -> Vec<String> {
+        match c {
+            "vh" => vec!["张".into(), "章".into()],
+            "sj" => vec!["三".into()],
+            "li" => vec!["李".into(), "里".into(), "理".into()],
+            // 第一条「张三丰」3 字，对应 2 音节，字数不对齐 → 必须被滤掉
+            "vhsj" => vec!["张三丰".into(), "张三".into(), "张四".into(), "章三".into()],
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn segment_candidates_splits_into_the_same_longest_segments() {
+        let segs = segment_candidates_with("vhsjli", 9, seg_has, fake_candidates);
+        assert_eq!(segs.len(), 2, "和 compose_sentence 必须是同一份分段");
+        assert_eq!(segs[0].code, "vhsj");
+        assert_eq!(segs[1].code, "li");
+    }
+
+    /// 字数 != 音节数的候选不能混进分段 chip——否则「张三丰」这种 3 字词
+    /// 会挂在一个 2 音节的段上，用户一选整句字数就对不上了。
+    #[test]
+    fn segment_candidates_filters_unaligned_words() {
+        let segs = segment_candidates_with("vhsjli", 9, seg_has, fake_candidates);
+        assert_eq!(segs[0].words, vec!["张三", "张四", "章三"]);
+        assert_eq!(segs[1].words, vec!["李", "里", "理"]);
+    }
+
+    /// 默认（每段选第一个）拼出来的整句必须和 compose_sentence 完全一致。
+    /// 这是「逐段选择不改变默认结果」的硬约束：用户什么都没点时，
+    /// 手机和桌面、改功能前和改功能后，上屏的字必须一模一样。
+    #[test]
+    fn default_selection_matches_compose_sentence() {
+        let segs = segment_candidates_with("vhsjli", 9, seg_has, fake_candidates);
+        let joined: String = segs.iter().map(|s| s.words[0].as_str()).collect();
+        // compose_sentence 的 first 闭包给的是「第一名」，这里同样要跳过不对齐的词，
+        // 否则两边比的是两把不同的尺子。
+        let first = |c: &str| {
+            fake_candidates(c)
+                .into_iter()
+                .find(|w| w.chars().count() == syllables_of(c))
+        };
+        let composed = compose_sentence_with("vhsjli", seg_has, first);
+        assert_eq!(composed.as_deref(), Some(joined.as_str()));
+    }
+
+    #[test]
+    fn segment_candidates_respects_limit() {
+        let segs = segment_candidates_with("vhsjli", 2, seg_has, fake_candidates);
+        assert_eq!(segs[0].words, vec!["张三", "张四"]);
+        assert_eq!(segs[1].words, vec!["李", "里"]);
+    }
+
+    /// 任一段查不到词 → 整体放弃（和 compose_sentence_with 同一个约束）。
+    #[test]
+    fn segment_candidates_gives_up_when_a_segment_has_no_aligned_word() {
+        let few = |c: &str| if c == "li" { vec![] } else { fake_candidates(c) };
+        assert!(segment_candidates_with("vhsjli", 9, seg_has, few).is_empty());
+    }
+
+    #[test]
+    fn segment_candidates_needs_at_least_two_segments() {
+        // 码太短 / 奇数长度：连两个音节都凑不出来，谈不上分段。
+        assert!(segment_candidates_with("vh", 9, seg_has, fake_candidates).is_empty());
+        assert!(segment_candidates_with("vhs", 9, seg_has, fake_candidates).is_empty());
+        // DP 无法完整切分时 `plan` 会退回逐音节 —— 仍然是分段态（每段一个字），
+        // 不是「不分段」。这条钉住的是「宁可给单字也不给空候选条」。
+        let none = |_: &str| true;
+        let segs = segment_candidates_with("vhsjli", 9, none, fake_candidates);
+        assert!(segs.len() >= 2);
+    }
+
+    #[test]
+    fn segment_candidates_rejects_zero_limit() {
+        assert!(segment_candidates_with("vhsjli", 0, seg_has, fake_candidates).is_empty());
     }
 
     /// 返回的整句**全部是汉字**（这条不假设具体词，但能挡住「混进段码」的回归）。

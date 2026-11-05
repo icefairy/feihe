@@ -4263,3 +4263,82 @@ mmap                     -> 空（编码混英文，整句放弃）
 `testDebugUnitTest` + `assembleDebug` 通过，Kotlin 单测 26 → **33 项**
 （新增 `SymbolLayoutTest` 6 条、数字页改 7 条含「前三行必须是 123/456/789」）。
 用户已断开设备，键盘实际观感下次连上再看。
+
+## 2026-11-05（夜）Android 后续功能：逐段选择 / 上档锁定 / 数字选词 / 语音面板
+
+用户从待办里点了 2/3/4 一起做。全部按「先写纯函数 + JVM 单测，再接 UI」推进，
+Rust 侧 `cargo test --workspace` 348 项、Android 侧 `testDebugUnitTest` 58 项全绿，
+`assembleDebug` 出包并核对了 APK 内容。**真机未验**（adb WiFi 一直掉线）。
+
+### 三个手势决定（写进代码注释和 `docs/后续待办.md`，避免以后重新论证）
+
+1. **上档锁定 = 长按 ⇧，不是双击。** 键盘里 ⌫ 长按连续删已是既有手势；双击会和
+   「连按两下打两个大写」抢同一个时间窗口，阈值松了误触、紧了按不出来。
+   单击仍是一次性，锁定态标签换 `⇪`。三态迁移全在纯 `ShiftMachine`（`InputAssist.kt`），
+   单测钉住「一次性只影响第一个字母 / 锁定态连打三个全大写」。
+2. **数字选词行 = 不进键盘、只在有候选时出现、设置可关。** 它是候选条下方一个
+   `GONE` 时高度为 0 的独立容器，字母键一 dp 不少，也不常驻。A2 犹豫的「加一行挤掉
+   字母高度」就这样绕开了。下标换算 `NumberSelect.indexOf` 单测钉死 `-1`。
+3. **逐段选择 = 点段换词，不做左右移段。** 候选条画 `[张三][李]` chip，点哪段展开
+   哪段候选，选完自动回 chip 视图，空格/回车/标点整句上屏。没有游标，直接避开
+   「单行候选条左右移段很别扭」。分段规则继续用 `feihe_core::segment::plan`。
+
+### 关键坑：`lookup_input` 必须显式告诉壳「这是不是整句」
+
+逐段选择最容易写错的地方，是让 Kotlin 去猜「候选只有一条 / 码够长 → 是整句」。
+打 `nihc` 出「你好」这种正常双字词就会误弹分段 chip，而且这条判断会散到两个壳里
+各写一份。所以把 `lookup_input` 的返回值从 `(String, Vec)` 换成 `LookupResult`，
+多带一个 `segments: Vec<SegmentChoice>` —— **真值只在产生它的地方**。
+JNI 新增 `segmentCandidatesNative(input, pinyinMode, limit)`，传原始按键串而不是码；
+格式是每段一行、行内 `\t` 分隔（不引 JSON，core 依赖政策只剩 `tyme4rs`）。
+
+`segment_candidates` / `segment_candidates_with` 照 `compose_sentence_with` 的老规矩
+拆成「带假表闭包的纯函数」：真词库内容一律不进断言。有两条硬约束单测：
+- **各段第一名拼起来必须等于 `compose_sentence`**（用户什么都没点时，改功能前后
+  上屏的字一模一样）；
+- **字数 != 音节数的候选要过滤**（否则「张三丰」挂到 2 音节段上，一选整句字数就错）。
+
+写测试时踩了一次：不能直接复用 `compose_sentence` 那组 `fake_has` —— 它把整串
+`vhsjli` 也列为「有词」，DP 会切成 1 段再退回逐音节（3 段）。`compose_sentence` 那条
+测试两种切法都拼出「张三李」所以看不出来，但逐段选择要断言**段的边界**，就得单独
+给一组 `seg_has`。
+
+### 语音面板：用本机已验证的样板，不用镜像里的第三方 AAR
+
+用户提示依赖可以走国内镜像。查下来 aliyun public 确实有
+`com.bihe0832.android:lib-sherpa-onnx:6.25.21`（AAR，含 `com.k2fsa.sherpa.onnx` 类），
+**但不能用**：
+- 它只带 `libsherpa-onnx-jni.so`，而该 `.so` 的 `DT_NEEDED` 里有 `libonnxruntime.so`
+  （在另一个 `lib-onnx` AAR 里），单引一个运行期必挂；
+- `classes.jar` 里**没有 `Vad` / `SpeechSegment` 类**（native 符号倒是有），
+  `OfflineRecognizer` 构造签名还和上游样板不一致（AssetManager 非空、字段也少），
+  那份 Kotlin API 是改过的旧版。
+
+而本机 `/d/codes/xingyu`（星语）里有一套**真机验证过、版本号与上游 Kotlin API 一致**
+的 4 个 arm64 `.so` + `silero_vad.onnx`，正是方案 §4 说的「能用星语的集成样板」。
+JNI 符号名是硬编码 `com/k2fsa/sherpa/onnx/...`，`.so` 和 Kotlin 必须同版本，所以
+直接复用这套、零网络零版本漂移最稳。31 MB 二进制不进库，仿 `fetch_asr_model.py`
+写了 `tools/fetch_sherpa_libs.py`（`--from` 可指向镜像解包目录，SHA256 钉住 5 个文件，
+`--verify` 只校验）。
+
+其它实现要点：
+- 模型走 `newFromAsset`（`OfflineRecognizer(assets, config)`），**不拷 81 MB 到
+  filesDir** —— `noCompress` 已让 `.onnx` STORED，AAssetManager 能拿连续 fd。
+  已核对 APK：`assets/asr/*.onnx` 和 `silero_vad.onnx` 都是 Stored(0%)，5 个 `.so` 都在
+  `lib/arm64-v8a/`，`RECORD_AUDIO` 在 merged manifest 里。debug APK **122,363,620 字节**。
+- **权限在 SettingsActivity 申请，不在 IME 里**：`InputMethodService` 不是 Activity，
+  `requestPermissions` 从输入法进程弹不出来。用户打开「语音输入」开关时申请一次，
+  拒绝了不反复弹；IME 侧只 `checkSelfPermission`，没权限给一句能照做的提示。
+- 按住 🎤 录、松手识别上屏（`OnTouch` 而非 `OnClick`：两态按钮用户分不清在不在录，
+  输入法窗口也没地方放红灯）。VAD 只裁首尾静音、不决定何时结束（方案 §4 禁止固定
+  时长截断），60 秒只是防忘松手的内存上限。`withEngine` 串行化，原生 ptr 不会被
+  两个长按并发 release。
+- 识别器懒加载：81 MB 冷加载在骁龙 665 上约 2.7s，放按键回调里同步初始化等于
+  「按住两秒没反应」。LOADING 状态就是给这几秒看的。
+
+### 第三方代码署名（Apache-2.0）
+
+`android/app/src/main/java/com/k2fsa/sherpa/onnx/` 下 6 个 `.kt` 是 sherpa-onnx 官方
+Android 调用层，来自 `github.com/k2-fsa/sherpa-onnx`，Copyright (c) 2023 Xiaomi
+Corporation，Apache-2.0。为的是让 JNI 符号能对上，**包名/类名/字段名一个都不能改**。
+飞鹤是 MIT；这里按 Apache-2.0 保留版权头并在此署名，未改动逻辑。

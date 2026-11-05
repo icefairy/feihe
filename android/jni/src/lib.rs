@@ -144,14 +144,54 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupInputNative<
             return String::new();
         }
         let n = limit.clamp(1, 60) as usize;
-        let (code, words) = feihe_core::dict::lookup_input(&input, pinyin_mode != 0, n);
-        if code.is_empty() {
+        let r = feihe_core::dict::lookup_input(&input, pinyin_mode != 0, n);
+        if r.code.is_empty() {
             return String::new();
         }
-        let mut out = code;
-        for w in words {
+        let mut out = r.code;
+        for w in r.words {
             out.push('\n');
             out.push_str(w.as_ref());
+        }
+        out
+    })
+    .unwrap_or_default();
+    make_string(&mut env, &text)
+}
+
+/// `NativeEngine.segmentCandidatesNative(input, pinyinMode, limit)` —— 逐段选择（A1）。
+///
+/// 格式：**每段一行**，行内 `\t` 分隔 —— `<段码>\t<候选1>\t<候选2>…`。
+/// 空串 = 不进分段态。
+///
+/// **传的是原始按键串，不是码**：是不是「自动拼出来的整句」只有 `lookup_input` 知道，
+/// 让壳传码再自己判断，等于把这条规则复制到 Kotlin 里（第二份真值）。分段规则本身
+/// 来自 `feihe_core::segment::plan`，和桌面端、和 `compose_sentence` 同一份。
+///
+/// 用 `\t` 而不是 JSON：字段都是词和码，不含制表符，拼串一眼能看穿，也不需要往
+/// core 里塞序列化库（依赖政策只剩 `tyme4rs`）。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_segmentCandidatesNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    input: JString<'local>,
+    pinyin_mode: jboolean,
+    limit: i32,
+) -> jstring {
+    let input = read_string(&mut env, &input);
+    let text = std::panic::catch_unwind(move || {
+        let n = limit.clamp(1, 9) as usize;
+        let segs = feihe_core::dict::lookup_segments(&input, pinyin_mode != 0, n);
+        let mut out = String::new();
+        for (i, seg) in segs.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&seg.code);
+            for w in &seg.words {
+                out.push('\t');
+                out.push_str(w);
+            }
         }
         out
     })

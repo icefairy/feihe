@@ -59,6 +59,15 @@ enum class KeyKind {
      * 三个键要去三个地方，布尔值装不下，硬塞只会变成一堆 if。
      */
     PAGE,
+
+    /**
+     * 数字选词：code 是 `"1"`..`"9"`，点它选第 N 个候选。
+     *
+     * 和 [TEXT] 的区别同 [PUNCT]：TEXT 是"直接上屏这个字符"，SELECT 是"拿这个数字
+     * 当候选下标"。两者行为完全不同，共用一个 kind 就会在数字页上打 `1` 时误选候选。
+     * 这一行只在有候选时出现，详见 [NumberSelectLayout] 和 `docs/后续待办.md` A2。
+     */
+    SELECT,
 }
 
 /**
@@ -182,6 +191,32 @@ object SymbolLayout {
 
     val textCodes: List<String>
         get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
+}
+
+/**
+ * 数字选词行：**只在有候选时出现的一排 `1`–`9`**。
+ *
+ * ## 为什么不把它做成键盘的常驻第五排
+ *
+ * A2 那条待办犹豫的是"加一行会挤掉字母高度"。这里的解法是**不进键盘**：
+ * 它是候选条和键盘之间一个独立的、高度为 0 的容器，[rows] 只在候选非空时才被
+ * 加进去，没候选时整行 `GONE`。所以字母键的高度一 dp 都没少，代价只是组合态期间
+ * 多一行 30dp——而那时用户本来就在看候选条。
+ *
+ * 设置里可以整个关掉（"可隐藏"），关掉后连组合态也不出现。
+ *
+ * 一行最多 9 个键，按 `weight=1` 均分，和字母页 `weightSum` 的规则一致。
+ */
+object NumberSelectLayout {
+    /** 由候选数决定这一行的键。空表表示"这一行不显示"。 */
+    fun rows(candidateCount: Int): List<List<Key>> {
+        val digits = NumberSelect.digits(candidateCount)
+        if (digits.isEmpty()) return emptyList()
+        return listOf(digits.map { Key(it.toString(), KeyKind.SELECT, it.toString()) })
+    }
+
+    /** 比键盘行矮：它只是"候选的快捷入口"，不该和字母键抢视觉重量。 */
+    const val ROW_HEIGHT_DP = 30f
 }
 
 /** 给壳用的一张小表：页 → 行数据 + 行高。避免 FeiheIme 里散落三个 when。 */

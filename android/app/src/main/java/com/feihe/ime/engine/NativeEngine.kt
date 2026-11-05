@@ -94,6 +94,28 @@ object NativeEngine {
         return lines[0] to if (lines.size > 1) lines.subList(1, lines.size) else emptyList()
     }
 
+    /** 一段的候选（逐段选择 A1）。`code` 只给诊断/状态条用，界面显示的是 [words]。 */
+    data class SegmentChoice(val code: String, val words: List<String>)
+
+    /**
+     * 原始按键串 → 每段的候选列表。空列表 = 不进分段态（普通候选，或拼不出整句）。
+     *
+     * 格式是 JNI 那边定的：每段一行，行内 `\t` 分隔，第一格是段码、后面是候选。
+     * **分段规则不在这里**——在 `feihe_core::segment::plan`，和桌面端同一份；
+     * 「这一条是不是整句」也由 core 判定并显式带出来，Kotlin 不猜、不自己切段。
+     */
+    fun segmentCandidates(input: String, pinyinMode: Boolean, limit: Int = 9): List<SegmentChoice> {
+        if (input.isEmpty() || !ensureLoaded()) return emptyList()
+        val raw = runCatching { segmentCandidatesNative(input, pinyinMode, limit) }
+            .getOrElse { return emptyList() }
+        if (raw.isEmpty()) return emptyList()
+        return raw.split('\n').mapNotNull { line ->
+            val parts = line.split('\t')
+            // 至少要有段码 + 一个候选；格式不对的行直接丢掉，别让半截数据进 UI
+            if (parts.size < 2) null else SegmentChoice(parts[0], parts.subList(1, parts.size))
+        }
+    }
+
     /**
      * 上一个上屏词后面可能接的词。空列表 = 没有联想（这也意味着候选条不该为它留位置）。
      *
@@ -194,6 +216,8 @@ object NativeEngine {
     private external fun initNative(dataDir: String, utcOffsetMinutes: Int)
 
     private external fun lookupInputNative(input: String, pinyinMode: Boolean, limit: Int): String
+
+    private external fun segmentCandidatesNative(input: String, pinyinMode: Boolean, limit: Int): String
 
     private external fun suggestNative(prev: String, limit: Int): String
 

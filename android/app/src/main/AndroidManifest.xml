@@ -8,6 +8,10 @@
       android:settingsActivity 是**系统设置的入口**：系统「输入法 → 飞鹤 → 设置」
       读的就是这个属性。不写的话那一层不会显示设置入口，用户只能自己找我们。
     -->
+    <!-- 语音输入：按住麦克风时录音。危险权限，首次使用要在设置页授权。
+         不声明的话 AudioRecord 直接抛 SecurityException，而不是"没声音"。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <application
         android:allowBackup="false"
         android:label="@string/app_name">

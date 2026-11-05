@@ -32,8 +32,9 @@ object KeyboardView {
     fun build(
         ctx: Context,
         rows: List<List<Key>>,
-        shiftActive: Boolean = false,
+        shift: ShiftState = ShiftState.OFF,
         rowHeightDp: Float = KEY_HEIGHT_DP,
+        onLongKey: (Key) -> Unit = {},
         onKey: (Key) -> Unit,
     ): View {
         val root = LinearLayout(ctx).apply {
@@ -56,7 +57,7 @@ object KeyboardView {
             ).apply { bottomMargin = dp(ctx, GAP_DP) }
 
             for (key in row) {
-                rowView.addView(makeKey(ctx, key, shiftActive, onKey), keyParams(ctx, key))
+                rowView.addView(makeKey(ctx, key, shift, onLongKey, onKey), keyParams(ctx, key))
             }
             root.addView(rowView, lp)
         }
@@ -74,21 +75,40 @@ object KeyboardView {
     }
 
     /**
-     * 上档状态变化时调用：只改 ⇧ 那一颗键的底色和字色。
+     * 上档状态变化时调用：只改 ⇧ 那一颗键的底色、字色和**标签**。
      *
      * 字母键的标签本来就是大写的（手机键盘的通行做法），所以**状态只能靠 ⇧ 自己
-     * 表示**——不染色的用户根本分不清刚才那一下有没有点上。
+     * 表示**——不染色的用户根本分不清刚才那一下有没有点上。锁定态再换一个字符
+     * `⇪`，否则「一次性」和「锁定」看起来一模一样，用户不知道为什么打完没落下来。
      */
-    fun applyShiftState(root: View?, active: Boolean) {
+    fun applyShiftState(root: View?, state: ShiftState) {
         val v = root?.findViewWithTag<TextView>(SHIFT_TAG) ?: return
-        v.background = keyBackground(root.context, Key("⇧", KeyKind.SHIFT), active)
-        v.setTextColor(if (active) Color.WHITE else 0xFF333333.toInt())
+        v.text = shiftLabel(state)
+        v.background = keyBackground(root.context, Key("⇧", KeyKind.SHIFT), state)
+        v.setTextColor(if (state != ShiftState.OFF) Color.WHITE else 0xFF333333.toInt())
+        v.contentDescription = shiftAccessibilityLabel(state)
     }
 
-    private fun makeKey(ctx: Context, key: Key, shiftActive: Boolean, onKey: (Key) -> Unit): View {
-        val lit = key.kind == KeyKind.SHIFT && shiftActive
+    /** ⇧ / ⇪：一次性与锁定必须长得不一样。 */
+    private fun shiftLabel(state: ShiftState): String =
+        if (state == ShiftState.LOCKED) "⇪" else "⇧"
+
+    private fun shiftAccessibilityLabel(state: ShiftState): String = when (state) {
+        ShiftState.OFF -> "上档（点一下，下一个字母大写）"
+        ShiftState.ONCE -> "上档已开（下一个字母大写）"
+        ShiftState.LOCKED -> "大写锁定已开（点一下解除）"
+    }
+
+    private fun makeKey(
+        ctx: Context,
+        key: Key,
+        shift: ShiftState,
+        onLongKey: (Key) -> Unit,
+        onKey: (Key) -> Unit,
+    ): View {
+        val lit = key.kind == KeyKind.SHIFT && shift != ShiftState.OFF
         val view = TextView(ctx).apply {
-            text = key.label
+            text = if (key.kind == KeyKind.SHIFT) shiftLabel(shift) else key.label
             gravity = Gravity.CENTER
             // 数字/符号页的键比字母页宽得多，字符也跟着放大一点，不然看着像空的
             setTextSize(
@@ -103,9 +123,9 @@ object KeyboardView {
                     else -> 0xFF333333.toInt()
                 },
             )
-            background = keyBackground(ctx, key, shiftActive)
+            background = keyBackground(ctx, key, shift)
             isClickable = true
-            contentDescription = accessibilityLabel(key)
+            contentDescription = accessibilityLabel(key, shift)
             setOnClickListener { onKey(key) }
         }
         if (key.kind == KeyKind.SHIFT) view.tag = SHIFT_TAG
@@ -125,17 +145,29 @@ object KeyboardView {
                 true
             }
         }
+
+        // 上档长按 = 锁定/解锁。**不用双击**：和「连按两下打两个大写」抢时间窗口，
+        // 阈值松了误触、紧了按不出来；长按是这套键盘已有的手势（⌫ 长按连续删）。
+        if (key.kind == KeyKind.SHIFT) {
+            view.setOnLongClickListener {
+                onLongKey(key)
+                true
+            }
+        }
         return view
     }
 
-    private fun keyBackground(ctx: Context, key: Key, shiftActive: Boolean = false): GradientDrawable {
+    private fun keyBackground(ctx: Context, key: Key, shift: ShiftState = ShiftState.OFF): GradientDrawable {
         val radius = dp(ctx, 6f).toFloat()
         return GradientDrawable().apply {
             cornerRadius = radius
             setColor(
                 when {
                     // 上档键点亮：和候选第一个同色的强调蓝，一眼看出「下一下是大写」
-                    key.kind == KeyKind.SHIFT && shiftActive -> 0xFF1A6FD4.toInt()
+                    key.kind == KeyKind.SHIFT && shift != ShiftState.OFF -> 0xFF1A6FD4.toInt()
+                    // 数字选词行：淡蓝底，和"能打出字"的白底键区分开——它选的是候选，
+                    // 不是往组合串里加字符。
+                    key.kind == KeyKind.SELECT -> 0xFFE8F0FE.toInt()
                     // 数字/标点页上的键和字母一样是「可打的字」，给白底；
                     // 功能键才用灰底，靠颜色就能分出「这排是打字的还是操作的」。
                     key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT -> Color.WHITE
@@ -148,14 +180,15 @@ object KeyboardView {
         }
     }
 
-    private fun accessibilityLabel(key: Key): String = when (key.kind) {
+    private fun accessibilityLabel(key: Key, shift: ShiftState = ShiftState.OFF): String = when (key.kind) {
         KeyKind.CHAR, KeyKind.TEXT -> key.label
         KeyKind.DELETE -> "删除"
-        KeyKind.SHIFT -> "上档（下一个字母大写）"
+        KeyKind.SHIFT -> shiftAccessibilityLabel(shift)
         KeyKind.SPACE -> "空格"
         KeyKind.ENTER -> "换行"
         KeyKind.PUNCT -> key.label
         KeyKind.MODE -> "切换中英文"
+        KeyKind.SELECT -> "选第 ${key.code} 个候选"
         // 按钮上写的是「123」/「ABC」/「符」，读屏念这些没意义，念出「切到哪」才行
         KeyKind.PAGE -> when (key.code) {
             "letters" -> "字母键盘"

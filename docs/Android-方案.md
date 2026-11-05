@@ -434,7 +434,7 @@ transducer 的解码路径；paraformer 是 CIF + 注意力解码，没有这个
 | **M1** | crate 拆分：`feihe-core` + `feihe-win`，`textservice.rs` 拆成 `session.rs`（纯状态机）+ 壳 | **2–3 周** | Windows 端 313 项单测全绿 + 真机逐字对比一致 |
 | **M2** | Android 最小可用：IME 骨架 + 26 键键盘 + 候选条 + 双拼输入 + 上屏 + 读配置 | **3–4 周** | 能装、能打字、能选词、能标点 |
 | **M3** | 功能补齐：联想 / 短语 / 置顶 / 降权 / 简繁 / 模糊音 / 纠错 / 快捷输入 | **2–3 周** | 与 Windows 端功能对齐（除 Windows 专属项） |
-| **M4** | 语音：sherpa-onnx 集成 + 79 MB 模型打进 assets（`noCompress`）+ 句末标点 + 语音面板 | **2 周** | 装完立刻能说话上屏，全程不联网；句末有句号 |
+| **M4** | 语音：sherpa-onnx 集成 + 79 MB 模型打进 assets（`noCompress`）+ 句末标点 + 语音面板 | **✅ 2026-11-05** | 代码完成：按住 🎤 / silero VAD / paraformer `newFromAsset` / 句末标点 / 设置页开关与权限。APK 已核对 5 个 `.so` + 3 个 assets 齐全、`.onnx` STORED。**交付判据仍差真机验证**（adb WiFi 掉线），见 `handoff.md` |
 | **M5** | 设置页、皮肤、剪贴板、长按符号、手感打磨 | 持续 | — |
 
 **合计约 10–14 周**（单人、全职）。其中 M1 是唯一有"改坏现有产品"风险的阶段。

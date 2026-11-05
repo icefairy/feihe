@@ -3,7 +3,7 @@
 Windows TSF（Text Services Framework）中文输入法。Rust + windows-rs 实现 COM 组件。
 
 **当前版本 0.3.11** ｜ 安装包 1.83 MB ｜ 装完约 7.9 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 313 项单元测试 ｜ 安装需要管理员（注册写 HKLM）
+不联网、不弹窗、无账号、密码框不接管 ｜ 348 项 Rust 单测 + 58 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > 数据全部和 DLL 放在**安装目录**里（默认 `%LOCALAPPDATA%\Feihe`）：`config.ini`、
 > `freq.txt`、`phrases.txt`、`pinned.txt`、`demoted.txt`、`custom.txt`、`next.txt`。**压缩一份安装目录就是完整备份**，
@@ -931,13 +931,24 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想，共 313 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选，共 348 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
-# 308 = feihe（TSF 壳）246 项 + feihe-core（平台无关）62 项。两个包都会跑，
-# 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 62 项会被静默跳过。
+# 348 = feihe（TSF 壳）111 项 + feihe-core（平台无关）237 项。两个包都会跑，
+# 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 237 项会被静默跳过。
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
 python tools/smoke_com.py
+
+# Android 侧 58 项 JVM 单测（键盘布局 / 上档状态机 / 数字选词 / 逐段选择 / 句末标点 / PCM 换算）
+cd android && ./gradlew testDebugUnitTest
+```
+
+**原生库要先补齐才能打 Android 包**（31 MB，不进版本库，和 79 MB 的 ASR 模型一个待遇）：
+
+```bash
+python tools/fetch_asr_model.py       # 79 MB paraformer 模型
+python tools/fetch_sherpa_libs.py     # 4 个 arm64 .so + silero_vad.onnx
+python tools/fetch_sherpa_libs.py --verify
 ```
 
 冒烟测试覆盖：`DllCanUnloadNow` 初始 S_OK、类厂可创建、文本服务对象可实例化、

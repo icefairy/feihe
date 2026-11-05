@@ -121,6 +121,33 @@ class SettingsActivity : Activity() {
             ),
         )
 
+        // 键盘 / 语音：这两项是手机壳自己的呈现方式，开关存在 SharedPreferences
+        // 而不是引擎的 config.ini（桌面端没有对应概念）。引擎没加载也能改，
+        // 所以走 alwaysEnabled。
+        list.addView(
+            card(
+                "键盘与语音",
+                switchRow(
+                    "数字选词行",
+                    "有候选时显示 1–9，点数字选词（关掉后不占键盘高度）",
+                    UiPrefs.showNumberRow(this),
+                    alwaysEnabled = true,
+                ) { UiPrefs.setShowNumberRow(this, it) },
+                switchRow(
+                    "语音输入",
+                    "按住状态条上的麦克风说话；关闭后不申请录音权限",
+                    UiPrefs.voiceEnabled(this),
+                    alwaysEnabled = true,
+                ) { on ->
+                    UiPrefs.setVoiceEnabled(this, on)
+                    // 权限只在这里申请：InputMethodService 不是 Activity，
+                    // 从输入法进程弹系统授权框会被拒。打开设置页时顺手要一次。
+                    if (on) requestMicPermissionIfNeeded()
+                },
+                actionRow("语音模型", "模型状态、隐私说明见下方") { showVoiceInfo() },
+            ),
+        )
+
         list.addView(
             card(
                 "数据",
@@ -171,6 +198,8 @@ class SettingsActivity : Activity() {
         label: String,
         desc: String,
         checked: Boolean,
+        // 纯界面开关不依赖引擎：引擎没加载时用户也应该能关掉数字选词行。
+        alwaysEnabled: Boolean = false,
         onToggle: (Boolean) -> Unit,
     ): View {
         val row = LinearLayout(this).apply {
@@ -185,7 +214,7 @@ class SettingsActivity : Activity() {
         row.addView(
             Switch(this).apply {
                 isChecked = checked
-                isEnabled = cfg != null
+                isEnabled = cfg != null || alwaysEnabled
                 // 先 setChecked 再挂监听：反过来的话上面那行会触发一次「刚改成这个值」，
                 // 每次进设置页都白写一遍配置。
                 setOnCheckedChangeListener { _, v -> onToggle(v) }
@@ -416,6 +445,35 @@ class SettingsActivity : Activity() {
 
     private fun toast(text: String) {
         Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * 语音模型状态 + 隐私说明。
+     *
+     * 隐私这条必须写在设置页里而不是只在 README：用户有权在授权麦克风之前就知道
+     * "录音不出本机"。模型是离线 paraformer（见 `docs/Android-方案.md` §4），
+     * 没有任何联网上传路径。
+     */
+    private fun requestMicPermissionIfNeeded() {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return
+        // 只在用户主动打开语音时申请一次；拒绝了也不反复弹，设置页有说明。
+        requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
+    }
+
+    private fun showVoiceInfo() {
+        val model = assets.list("asr")?.joinToString(", ") ?: "（缺失）"
+        AlertDialog.Builder(this)
+            .setTitle("语音模型")
+            .setMessage(
+                "内置模型文件：$model\n\n" +
+                    "识别全程在本机离线完成，录音不会上传、不会保存，也不经过任何网络请求。" +
+                    "关闭「语音输入」后本输入法不再申请录音权限。\n\n" +
+                    "当前版本只在句末补一个句号，中间标点不猜（猜错比不猜更烦人）。"
+            )
+            .setPositiveButton("知道了", null)
+            .show()
     }
 
     private fun textBlock(label: String, desc: String): View {

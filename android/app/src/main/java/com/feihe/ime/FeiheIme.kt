@@ -1,21 +1,30 @@
 package com.feihe.ime
 
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.widget.Toast
 import android.view.inputmethod.EditorInfo
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.feihe.ime.engine.NativeEngine
+import com.feihe.ime.segment.SegmentState
+import com.feihe.ime.voice.VoiceRecorder
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
 import com.feihe.ime.keyboard.KeyboardView
 import com.feihe.ime.keyboard.KeyboardPages
+import com.feihe.ime.keyboard.NumberSelect
+import com.feihe.ime.keyboard.NumberSelectLayout
 import com.feihe.ime.keyboard.Page
+import com.feihe.ime.keyboard.ShiftMachine
+import com.feihe.ime.keyboard.ShiftState
 
 /**
  * 飞鹤输入法 · Android 壳（M2 阶段）。
@@ -83,18 +92,40 @@ class FeiheIme : InputMethodService() {
     private var chinese = true
 
     /**
-     * 上档（一次性）。
+     * 逐段选择态。`null` = 普通候选条。见 A1 和 `SegmentState`。
      *
-     * **一次性是刻意的**：桌面 Shift 按住不放才是大写，手机上没有「按住」，双击锁
-     * 定又容易误触。所以按一下 ⇧ = 下一个字母大写，打完自动落下来。要连打大写，
-     * 现在的办法是连点——知道不爽，见 `docs/后续待办.md` 的「上档锁定」。
+     * 只有「整码查不到、引擎给了自动整句」时才非 null —— 那时单个候选是一整句，
+     * 用户本来没法改其中某一段，正是分段态要解决的。
      */
-    private var shifted = false
+    private var segmentState: SegmentState? = null
+
+    private val segmentActive: Boolean get() = segmentState != null
+
+    /**
+     * 上档三态：关 / 一次性 / 锁定。
+     *
+     * **单击 ⇧ = 一次性**（打完一个字母自动落下），**长按 ⇧ = 锁定**（连续大写，
+     * 再点一下解除）。不用双击：键盘里 ⌫ 长按已是既有手势，双击会和「连按两下打两个
+     * 大写」抢时间窗口。状态迁移全在 [ShiftMachine] 里，那边有 JVM 单测盯着。
+     */
+    private var shiftState = ShiftState.OFF
+
+    /** 「数字选词行」开关。设置页可关；关掉后这行连组合态都不出现。 */
+    private var showNumberRow = true
 
     private var statusText: TextView? = null
+    private var micButton: TextView? = null
     private var statusBar: LinearLayout? = null
+    private var voice: VoiceRecorder? = null
+    private var voiceEnabled = true
     private var candidateBar: LinearLayout? = null
     private var candidateScroll: HorizontalScrollView? = null
+
+    /**
+     * 数字选词行的容器。**和键盘分开**：它是候选条下方一个可以 `GONE` 的独立容器，
+     * 没候选时高度为 0，字母键一 dp 不少。见 [NumberSelectLayout]。
+     */
+    private var numberRowHost: LinearLayout? = null
 
     /** 键盘容器。字母页和数字页在这里换，**不是**重建整个 InputView。 */
     private var keyboardHost: LinearLayout? = null
@@ -108,6 +139,17 @@ class FeiheIme : InputMethodService() {
         // 应用私有目录（不是缓存目录——缓存会被系统清掉）。
         NativeEngine.init(filesDir.absolutePath)
         readInputMode()
+        voice = VoiceRecorder(
+            this,
+            onState = { s -> onVoiceState(s) },
+            onResult = { text ->
+                // 识别结果直接上屏。先把组合态收掉，否则会和半截拼音拼在一起。
+                clearComposing()
+                commitText(text)
+                forgetContext()
+            },
+        )
+        readUiPrefs()
         Log.i(TAG, "onCreate: 引擎 ${NativeEngine.coreVersion()}，${modeLabel()}")
     }
 
@@ -120,6 +162,19 @@ class FeiheIme : InputMethodService() {
      */
     private fun readInputMode() {
         pinyinMode = NativeEngine.settings()?.pinyin ?: pinyinMode
+    }
+
+    /**
+     * 界面开关单独放 SharedPreferences，**不进 core 的 config.ini**。
+     *
+     * `config.ini` 是 Windows / Android 共享的引擎配置（输入方式、词频、联想……），
+     * 而「要不要显示数字选词行」纯粹是手机上的一排按钮，桌面端没有对应概念，
+     * 塞进去只会让两边各多一个永远用不到的字段。见 `UiPrefs`。
+     */
+    private fun readUiPrefs() {
+        showNumberRow = UiPrefs.showNumberRow(this)
+        voiceEnabled = UiPrefs.voiceEnabled(this)
+        micButton?.visibility = if (voiceEnabled) View.VISIBLE else View.GONE
     }
 
     private fun modeLabel(): String = if (pinyinMode) "全拼" else "双拼"
@@ -140,8 +195,10 @@ class FeiheIme : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        // 用户可能刚从设置页切了输入方式/方案回来，这里重读一次
+        // 用户可能刚从设置页切了输入方式/方案/界面开关回来，这里重读一次
         readInputMode()
+        readUiPrefs()
+        refreshCandidates()
         refreshStatus()
     }
 
@@ -155,6 +212,8 @@ class FeiheIme : InputMethodService() {
     override fun onWindowShown() {
         super.onWindowShown()
         readInputMode()
+        readUiPrefs()
+        refreshCandidates()
         refreshStatus()
     }
 
@@ -190,6 +249,32 @@ class FeiheIme : InputMethodService() {
             setOnClickListener { openSettings() }
         }
 
+        // 麦克风：按住说话、松手识别。**用 OnTouch 而不是 OnClick**：两态按钮用户
+        // 分不清现在是录还是没录，而输入法窗口没地方放录音红灯。
+        micButton = TextView(this).apply {
+            text = "🎤"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            gravity = Gravity.CENTER
+            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            contentDescription = "按住说话"
+            visibility = if (voiceEnabled) View.VISIBLE else View.GONE
+            setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.isPressed = true
+                        voice?.start()
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.isPressed = false
+                        voice?.stop()
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+
         statusBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -198,6 +283,7 @@ class FeiheIme : InputMethodService() {
                 statusText,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
             )
+            addView(micButton)
             addView(gear)
         }
         root.addView(
@@ -227,6 +313,20 @@ class FeiheIme : InputMethodService() {
             ),
         )
 
+        // 数字选词行：夹在候选条和键盘之间。没候选时整行 GONE（高度 0），
+        // 所以它不占字母键的高度——这是 A2「不挤掉字母高度」的落点。
+        numberRowHost = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        root.addView(
+            numberRowHost,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
         keyboardHost = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -248,13 +348,17 @@ class FeiheIme : InputMethodService() {
     private fun showPage(target: Page) {
         val host = keyboardHost ?: return
         page = target
+        // 换页时把上档一起清掉：数字/符号页没有"大写"的概念，留着锁定态
+        // 回到字母页会让用户莫名其妙打出一串大写。
+        shiftState = ShiftState.OFF
         host.removeAllViews()
         host.addView(
             KeyboardView.build(
                 this,
                 KeyboardPages.rows(target),
-                shifted,
+                shiftState,
                 KeyboardPages.rowHeightDp(target),
+                onLongKey = { onLongKey(it) },
             ) { onKey(it) },
         )
         refreshStatus()
@@ -267,15 +371,36 @@ class FeiheIme : InputMethodService() {
         runCatching { startActivity(i) }
     }
 
+    /** 语音状态 → 状态条提示。权限/模型缺失给一句能照做的话，不静默失败。 */
+    private fun onVoiceState(s: VoiceRecorder.State) {
+        micButton?.text = if (s == VoiceRecorder.State.RECORDING ||
+            s == VoiceRecorder.State.RECOGNIZING ||
+            s == VoiceRecorder.State.LOADING
+        ) "🔴" else "🎤"
+        when (s) {
+            VoiceRecorder.State.LOADING -> refreshStatus("正在加载语音模型…")
+            VoiceRecorder.State.RECORDING -> refreshStatus("正在录音，松手上屏")
+            VoiceRecorder.State.RECOGNIZING -> refreshStatus("正在识别…")
+            VoiceRecorder.State.NO_PERMISSION -> {
+                refreshStatus("需要麦克风权限，请在设置里开启语音输入")
+                Toast.makeText(this, "请先授权麦克风权限", Toast.LENGTH_SHORT).show()
+            }
+            VoiceRecorder.State.NO_MODEL -> refreshStatus("语音模型缺失")
+            VoiceRecorder.State.FAILED -> refreshStatus("语音识别失败")
+            VoiceRecorder.State.IDLE -> refreshStatus()
+        }
+    }
+
     private fun onKey(key: Key) {
         when (key.kind) {
             KeyKind.CHAR -> {
                 // 一开始打新东西，旧联想就必须消失：留着它等于把「几分钟前的上下文」
                 // 又摆在手指下面，点错了上屏的词完全不搭。
                 suggestions = emptyList()
-                if (shifted) {
-                    shifted = false
-                    KeyboardView.applyShiftState(keyboardHost, false)
+                if (ShiftMachine.upper(shiftState)) {
+                    // 一次性打完就落下；锁定态保持。状态迁移在 ShiftMachine 里（有单测）。
+                    shiftState = ShiftMachine.afterChar(shiftState)
+                    KeyboardView.applyShiftState(keyboardHost, shiftState)
                     if (chinese) {
                         // 中文态 + 上档 = **临时英文**：先把手上半截拼音处理掉再上屏，
                         // 否则「nihao」+ ⇧A 会变成组合态里的「nihaoA」。
@@ -299,7 +424,13 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.DELETE -> {
-                if (pending.isNotEmpty()) {
+                // 展开某段时，退格先收起该段（和「返回」一个意思），别直接删拼音。
+                // chip 视图下则照常删一个字母——用户还在编辑那串码。
+                val expanded = segmentState
+                if (expanded != null && expanded.focus >= 0) {
+                    segmentState = expanded.back()
+                    renderCandidates()
+                } else if (pending.isNotEmpty()) {
                     pending.setLength(pending.length - 1)
                     pushComposing()
                 } else {
@@ -312,6 +443,9 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.SPACE -> {
+                // 分段态：空格 = 整句上屏（chip 视图末尾写了「↵上屏」提示）。
+                // 必须放在最前面，否则会落到「选第一个候选」把整句当成第一条候选。
+                if (commitSegmentIfActive()) return
                 if (pending.isEmpty()) {
                     commitText(" ")
                     // 空格断开上下文：下一个词和上一个词之间没有直接关系
@@ -332,28 +466,41 @@ class FeiheIme : InputMethodService() {
                 // 拼音和标点混在一起的串。
                 // `thenSuggest = false`：标点之后不联想（「你好，」后面接什么都对，
                 // 联想只会给出噪音），Windows 端也是这么定的。
-                if (chinese && candidates.isNotEmpty()) {
-                    commitWord(candidates.first(), thenSuggest = false)
-                } else {
-                    commitPending()
+                if (!commitSegmentIfActive()) {
+                    if (chinese && candidates.isNotEmpty()) {
+                        commitWord(candidates.first(), thenSuggest = false)
+                    } else {
+                        commitPending()
+                    }
                 }
                 commitText(key.code)
                 forgetContext()
             }
 
             KeyKind.ENTER -> {
-                commitPending()
+                if (!commitSegmentIfActive()) commitPending()
                 commitText("\n")
                 forgetContext()
             }
 
             KeyKind.MODE -> {
                 chinese = !chinese
-                shifted = false
-                KeyboardView.applyShiftState(keyboardHost, false)
+                shiftState = ShiftState.OFF
+                KeyboardView.applyShiftState(keyboardHost, shiftState)
                 // 切英文时把中文候选丢掉：那批候选是按中文码查的，留着只会误导
                 forgetContext()
                 refreshCandidates()
+            }
+
+            KeyKind.SELECT -> {
+                // 分段态下数字行是隐藏的，这里再挡一道：万一残影被点到，
+                // 也不能拿"第 N 个候选"去解释一个分段 chip 的下标。
+                if (segmentActive) return
+                // 数字选词：code 是 "1".."9"，越界（候选没那么多）直接忽略。
+                // 下标换算在 NumberSelect.indexOf 里，那边钉死了 -1。
+                val digit = key.code.toIntOrNull() ?: return
+                val index = NumberSelect.indexOf(digit, candidates.size) ?: return
+                commitWord(candidates[index])
             }
 
             KeyKind.PAGE -> showPage(
@@ -365,23 +512,32 @@ class FeiheIme : InputMethodService() {
             )
 
             KeyKind.TEXT -> {
-                // 和标点同一套：先把手上半截拼音处理掉，再打这个字符。
+                // 和标点同一套：先把手上半截拼音（或分段整句）处理掉，再打这个字符。
                 // 不这么做的话「nihao」+「1」会变成「nihao1」还在组合态里。
-                if (chinese && candidates.isNotEmpty()) {
-                    commitWord(candidates.first(), thenSuggest = false)
-                } else {
-                    commitPending()
+                if (!commitSegmentIfActive()) {
+                    if (chinese && candidates.isNotEmpty()) {
+                        commitWord(candidates.first(), thenSuggest = false)
+                    } else {
+                        commitPending()
+                    }
                 }
                 commitText(key.code)
                 forgetContext()
             }
 
             KeyKind.SHIFT -> {
-                shifted = !shifted
-                // 只改这一颗键的配色，不重建键盘（重建会闪、候选条会抖）
-                KeyboardView.applyShiftState(keyboardHost, shifted)
+                shiftState = ShiftMachine.onTap(shiftState)
+                // 只改这一颗键的配色/标签，不重建键盘（重建会闪、候选条会抖）
+                KeyboardView.applyShiftState(keyboardHost, shiftState)
             }
         }
+    }
+
+    /** 长按回调。目前只有 ⇧ 用：切锁定态。⌫ 的连删在 KeyboardView 内部消化了。 */
+    private fun onLongKey(key: Key) {
+        if (key.kind != KeyKind.SHIFT) return
+        shiftState = ShiftMachine.onLongPress(shiftState)
+        KeyboardView.applyShiftState(keyboardHost, shiftState)
     }
 
     /** 把组合串同步进输入框（带下划线），然后刷新候选。 */
@@ -411,12 +567,46 @@ class FeiheIme : InputMethodService() {
             code = c
             candidates = words
         }
+        refreshSegmentMode()
         renderCandidates()
+    }
+
+    /**
+     * 要不要进「逐段选择」态。
+     *
+     * 判据**完全来自引擎**：`segmentCandidates` 返回空就是普通候选。这里加的
+     * `candidates.size == 1 && code.length >= 4` 只是省一次 JNI 的短路条件（整句
+     * 按定义只有一条候选），不是第二份判断规则——真值仍在 `lookup_input.segments`。
+     */
+    private fun refreshSegmentMode() {
+        segmentState = if (chinese && candidates.size == 1 && code.length >= 4) {
+            val segs = NativeEngine.segmentCandidates(pending.toString(), pinyinMode, 9)
+            if (segs.isEmpty()) {
+                null
+            } else {
+                SegmentState(segs.map { it.words }).takeIf { it.active }
+            }
+        } else {
+            null
+        }
+    }
+
+    /** 分段态下按了收尾键（空格/回车/标点/字符）：先把整句上屏。 */
+    private fun commitSegmentIfActive(): Boolean {
+        val state = segmentState ?: return false
+        commitWord(state.sentence(), thenSuggest = false)
+        return true
     }
 
     private fun renderCandidates() {
         val bar = candidateBar ?: return
         bar.removeAllViews()
+        renderNumberRow()
+        val seg = segmentState
+        if (seg != null) {
+            renderSegmentBar(bar, seg)
+            return
+        }
         for ((i, word) in candidates.withIndex()) {
             val item = TextView(this).apply {
                 text = word
@@ -457,6 +647,110 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
+     * 画分段 chip（A1）。
+     *
+     * 两种视图：
+     * - **chip 视图**：一排 `[张三][李]`，点哪段就展开哪段。已展开过的段用蓝字标出
+     *   （用户改过的地方得看得出来）。末尾一个「↵上屏」提示，说明空格能整句上屏。
+     * - **展开视图**：`‹返回` + 该段候选，点一个就换掉并回到 chip 视图。
+     *
+     * 没有左右移段、没有游标——手机上单行候选条放不下那套交互（见 SegmentState）。
+     */
+    private fun renderSegmentBar(bar: LinearLayout, state: SegmentState) {
+        if (state.focus >= 0) {
+            bar.addView(
+                TextView(this).apply {
+                    text = "‹ 返回"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                    setTextColor(0xFF5F6368.toInt())
+                    setPadding(dp(10f), 0, dp(14f), 0)
+                    setOnClickListener {
+                        segmentState = state.back()
+                        renderCandidates()
+                    }
+                },
+            )
+            for ((i, word) in state.focusedWords().withIndex()) {
+                bar.addView(
+                    TextView(this).apply {
+                        text = word
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                        setPadding(dp(12f), 0, dp(12f), 0)
+                        setTextColor(
+                            if (i == state.selected[state.focus]) 0xFF1A6FD4.toInt()
+                            else 0xFF202124.toInt()
+                        )
+                        setOnClickListener {
+                            segmentState = state.choose(i)
+                            renderCandidates()
+                        }
+                    },
+                )
+            }
+            return
+        }
+
+        for (i in state.segments.indices) {
+            val changed = state.selected[i] != 0
+            bar.addView(
+                TextView(this).apply {
+                    text = state.wordAt(i)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                    setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
+                    setTextColor(if (changed) 0xFF1A6FD4.toInt() else 0xFF202124.toInt())
+                    // 分段之间画一道竖线，否则「张三李」三个 chip 会看成一个词
+                    background = GradientDrawable().apply {
+                        setStroke(dp(1f), 0xFFD9DCE1.toInt())
+                        cornerRadius = dp(4f).toFloat()
+                    }
+                    setOnClickListener {
+                        segmentState = state.open(i)
+                        renderCandidates()
+                    }
+                },
+            )
+        }
+        bar.addView(
+            TextView(this).apply {
+                text = "  ↵上屏"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(0xFF9AA0A8.toInt())
+                setPadding(dp(10f), 0, dp(10f), 0)
+            },
+        )
+    }
+
+    /**
+     * 画数字选词行。
+     *
+     * 候选变化、上屏、清组合都会走到 `renderCandidates()`，所以这一行跟着一起刷新，
+     * 不需要额外的失效逻辑。**没候选 / 设置里关了 / 正在逐段选择** 时整行 `GONE`，
+     * 高度归零，字母键一 dp 不少。
+     */
+    private fun renderNumberRow() {
+        val host = numberRowHost ?: return
+        host.removeAllViews()
+        val rows = if (showNumberRow && !segmentActive) {
+            NumberSelectLayout.rows(candidates.size)
+        } else {
+            emptyList()
+        }
+        if (rows.isEmpty()) {
+            host.visibility = View.GONE
+            return
+        }
+        host.visibility = View.VISIBLE
+        host.addView(
+            KeyboardView.build(
+                this,
+                rows,
+                ShiftState.OFF,
+                NumberSelectLayout.ROW_HEIGHT_DP,
+            ) { onKey(it) },
+        )
+    }
+
+    /**
      * 上屏一个候选词，结束这次组合。
      *
      * `thenSuggest = false` 只有一个调用点：标点键在粘标点之前的那次上屏。
@@ -479,6 +773,8 @@ class FeiheIme : InputMethodService() {
         pending.setLength(0)
         code = ""
         candidates = emptyList()
+        // 整句上屏后组合结束，分段态必须一起收掉，否则候选条会留着一排旧 chip
+        segmentState = null
         suggestions = if (thenSuggest && chinese) {
             NativeEngine.suggest(word, SUGGEST_LIMIT)
         } else {
@@ -500,6 +796,7 @@ class FeiheIme : InputMethodService() {
         pending.setLength(0)
         code = ""
         candidates = emptyList()
+        segmentState = null
         suggestions = NativeEngine.suggest(word, SUGGEST_LIMIT)
         renderCandidates()
         refreshStatus()
@@ -519,6 +816,7 @@ class FeiheIme : InputMethodService() {
         code = ""
         candidates = emptyList()
         suggestions = emptyList()
+        segmentState = null
         renderCandidates()
         refreshStatus()
     }
@@ -535,7 +833,12 @@ class FeiheIme : InputMethodService() {
         currentInputConnection?.commitText(text, 1)
     }
 
-    private fun refreshStatus() {
+    /** 覆盖状态条文案（语音过程用）。传 null / 不传就恢复常规状态。 */
+    private fun refreshStatus(override: String? = null) {
+        if (override != null) {
+            statusText?.text = override
+            return
+        }
         statusText?.text = buildString {
             append(if (chinese) "中" else "英")
             // 切了页就写页名（数字页上写「双拼」会让人以为还能打拼音）。
@@ -550,6 +853,11 @@ class FeiheIme : InputMethodService() {
                 if (code.isNotEmpty() && code != pending.toString()) {
                     append("→").append(code)
                 }
+            }
+            // 分段态给一句提示，否则用户不知道候选条上一排方块是什么、怎么退出。
+            val seg = segmentState
+            if (seg != null) {
+                append(if (seg.focus >= 0) "  ·  选这一段的字" else "  ·  点词改某一段")
             }
             if (!NativeEngine.available) {
                 append("  ·  引擎未加载")
