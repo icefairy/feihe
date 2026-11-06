@@ -33,6 +33,7 @@ pub mod correct;
 pub mod custom;
 pub mod demote;
 pub mod dict;
+pub mod dictcats;
 pub mod dictbin;
 pub mod dictenc;
 pub mod fancha;

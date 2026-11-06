@@ -20,6 +20,9 @@ mod dictenc;
 #[allow(dead_code)]
 #[path = "src/nextbin.rs"]
 mod nextbin;
+#[allow(dead_code)]
+#[path = "src/dictcats.rs"]
+mod dictcats;
 
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -163,9 +166,27 @@ fn gen_dict_bin(manifest: &std::path::Path, out: &std::path::Path) {
     generated.sort();
     sources.extend(generated.into_iter().map(|n| format!("../src/{n}")));
 
+    // **玄学分类单独成包**，不进 `base.bin`。
+    //
+    // 这些词的读音对外人没有意义（`庚` `戊` `值符` `旺相休囚死`），混在通用词库里
+    // 唯一的效果是把单键 / 短码的重码变多。抽成独立的 `xuanxue.bin` 之后，
+    // 运行期由 `config::xuanxue()` 一个开关决定扫不扫——不开就一个字节的查询成本都
+    // 没有（`dictbin::xuanxue()` 在开关关着时**压根不碰**那份数据）。
+    //
+    // 为什么用一个包而不是十来个分类包：这摊词一共 700 来条、彼此高度相关
+    // （干支 + 易经 + 奇门 + 六壬 + 六爻 + 神煞是同一批用户），拆细只会让设置窗里
+    // 多出几个没人看得懂的勾选框。词库里的其余分类（中医、IT、地名…）留在通用
+    // 词库里——它们是「偶尔能打到就好」，不是「要么全要要么全不要」。
+    // 清单在 `src/dictcats.rs`，和 `dict.rs` 的测试共用同一份：漏登记的后果是
+    // 「词生成出来了但开关打开也打不出来」，而且没有任何报错。
+    let (xuan_sources, general_sources): (Vec<String>, Vec<String>) = sources
+        .into_iter()
+        .partition(|f| dictcats::is_xuanxue(f.rsplit('/').next().unwrap_or(f)));
+
+    // 通用词库（base.bin）
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for f in sources {
+    for f in &general_sources {
         println!("cargo:rerun-if-changed={f}");
         let Ok(text) = std::fs::read_to_string(manifest.join(f)) else {
             continue;
@@ -187,5 +208,31 @@ fn gen_dict_bin(manifest: &std::path::Path, out: &std::path::Path) {
         built.bytes.len() / 1024,
         built.xh,
         built.ms
+    );
+
+    // 玄学词库（xuanxue.bin）
+    //
+    // 去重集合**单独一份**：玄学词和通用词库里的词允许重叠（`节` `气` 这类既是
+    // 天干地支相关、又是常用字），运行期查询时同名候选由 `collect` 的 `seen` 兜着，
+    // 不会重复出现。共用集合反而会让先生成的通用词把玄学词「吃掉」，开关打开也
+    // 查不到东西。
+    //
+    // 排序也要**按通用词库的顺序**：`rank_key` 的第二部分就是词库原始行号（≈ 词频），
+    // 所以把玄学词按文件顺序排好，等于让它们落在通用词之后、同码时排在后面。
+    let mut x_entries: Vec<(String, String)> = Vec::new();
+    let mut x_seen = std::collections::HashSet::new();
+    for f in &xuan_sources {
+        println!("cargo:rerun-if-changed={f}");
+        let Ok(text) = std::fs::read_to_string(manifest.join(f)) else {
+            continue;
+        };
+        dictenc::push_entries(&text, &mut x_seen, &mut x_entries);
+    }
+    let xbuilt = dictenc::build(&x_entries);
+    std::fs::write(out.join("xuanxue.bin"), &xbuilt.bytes).expect("写 xuanxue.bin 失败");
+    println!(
+        "cargo:warning=xuanxue.bin: {} 条, {} KB（默认不启用，见 config::xuanxue）",
+        xbuilt.count,
+        xbuilt.bytes.len() / 1024
     );
 }

@@ -155,6 +155,8 @@ object NativeEngine {
         val traditional: Boolean,
         val suggest: Boolean,
         val learn: Boolean,
+        /** 玄学分类词库（干支、易经、奇门、六壬、六爻、神煞），默认关。 */
+        val xuanxue: Boolean,
     )
 
     fun settings(): Settings? {
@@ -174,6 +176,7 @@ object NativeEngine {
             traditional = map["traditional"] == "1",
             suggest = map["suggest"] == "1",
             learn = map["learn"] == "1",
+            xuanxue = map["xuanxue"] == "1",
         )
     }
 

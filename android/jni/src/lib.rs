@@ -237,11 +237,12 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_configNative<'loca
             Scheme::Ms => "ms",
         };
         format!(
-            "scheme={scheme};pinyin={};traditional={};suggest={};learn={}",
+            "scheme={scheme};pinyin={};traditional={};suggest={};learn={};xuanxue={}",
             u8::from(c.pinyin_mode),
             u8::from(c.traditional),
             u8::from(c.suggest),
             u8::from(c.learn),
+            u8::from(c.xuanxue),
         )
     })
     .unwrap_or_default();
@@ -278,6 +279,9 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_setConfigNative<'l
             "traditional" => feihe_core::config::update(|c| c.traditional = on),
             "suggest" => feihe_core::config::update(|c| c.suggest = on),
             "learn" => feihe_core::config::update(|c| c.learn = on),
+            // 走 `set_xuanxue` 而不是 `update`：它要同时刷新原子镜像，
+            // 而查词热路径读的是镜像（见 `config::xuanxue()`）。
+            "xuanxue" => feihe_core::config::set_xuanxue(on),
             _ => {}
         }
     });

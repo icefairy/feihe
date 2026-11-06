@@ -86,6 +86,9 @@ const ID_HANZI_TRAD: i32 = 172;
 /// 打开 `custom.txt`（自定义短语）。
 const ID_CUSTOM: i32 = 190;
 
+/// 玄学分类词库开关（干支/易经/奇门……，默认关）。
+const ID_XUANXUE: i32 = 191;
+
 /// 模糊音九条规则的复选框，ID 连续：`ID_FUZZY_FIRST + 序号`，序号就是
 /// `fuzzy::NAMES` 的下标。加减规则时只改那张表，不用再回到这里加常量。
 const ID_FUZZY_FIRST: i32 = 181;
@@ -322,6 +325,7 @@ unsafe fn sync(h: HWND) {
     set_checked(h, ID_POPUP_ALWAYS, cfg.popup == PopupMode::Always);
     set_checked(h, ID_POPUP_NEVER, cfg.popup == PopupMode::Never);
     set_checked(h, ID_READING, cfg.reading);
+    set_checked(h, ID_XUANXUE, cfg.xuanxue);
     set_checked(h, ID_ASSIST_DIRECT, cfg.assist_direct);
     for (i, name) in crate::fuzzy::NAMES.iter().enumerate() {
         set_checked(h, ID_FUZZY_FIRST + i as i32, cfg.fuzzy.is_on(name));
@@ -522,6 +526,10 @@ unsafe fn on_command(h: HWND, id: i32) {
         ID_READING => {
             let on = checked(GetDlgItem(Some(h), ID_READING).unwrap_or_default());
             config::set_reading(on);
+        }
+        ID_XUANXUE => {
+            let on = checked(GetDlgItem(Some(h), ID_XUANXUE).unwrap_or_default());
+            config::set_xuanxue(on);
         }
         ID_ROWS => {
             let sel = GetDlgItem(Some(h), ID_ROWS)
@@ -1069,6 +1077,20 @@ unsafe fn build(h: HWND) {
         y - 2,
         420,
         ID_READING,
+    );
+    y += 26;
+
+    // 玄学词库：和“读音提示”同一类——都是“候选里多不多出这批字”。
+    //
+    // 开关而不是分类列表：这摊词只有一类用户（算命、中医爱好者），
+    // 拆成十来个勾选框只会让普通用户不知道该不该勾。
+    check(
+        h,
+        "启用玄学词库（干支、易经、奇门、六壬、六爻、神煞）",
+        16,
+        y - 2,
+        420,
+        ID_XUANXUE,
     );
     y += 26;
 

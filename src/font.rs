@@ -11,6 +11,7 @@ use windows::Win32::Graphics::Gdi::*;
 
 static FONT: AtomicIsize = AtomicIsize::new(0);
 static SMALL: AtomicIsize = AtomicIsize::new(0);
+static EMOJI: AtomicIsize = AtomicIsize::new(0);
 
 /// 惰性创建并缓存 UI 字体。返回的句柄由本模块持有，调用方**不要** DeleteObject。
 pub fn ui() -> HGDIOBJ {
@@ -81,9 +82,49 @@ pub fn small() -> HGDIOBJ {
     f
 }
 
+/// emoji 字体。
+///
+/// 颜色 emoji 需要 DirectWrite 的 COLR 表支持，GDI 只能画出单色轮廓。
+/// 单色也能认出是哪个表情，而为一个 45 格的面板引入
+/// 几百行 DirectWrite 排版代码不划算——这是有意的取舍。
+///
+/// 16px：比主字号大一档，让字形在 36px 的格子里留出呼吸空间；
+/// 再大就会溢到格子边。找不到「Segoe UI Emoji」时 GDI 自动回退到系统字体。
+pub fn emoji() -> HGDIOBJ {
+    let raw = EMOJI.load(Ordering::Acquire);
+    if raw != 0 {
+        return HGDIOBJ(raw as *mut core::ffi::c_void);
+    }
+    let f = unsafe {
+        CreateFontW(
+            -16,
+            0,
+            0,
+            0,
+            FW_NORMAL.0 as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY,
+            DEFAULT_PITCH.0 as u32,
+            w!("Segoe UI Emoji"),
+        )
+    };
+    let f = if f.is_invalid() {
+        unsafe { HGDIOBJ(GetStockObject(DEFAULT_GUI_FONT).0) }
+    } else {
+        HGDIOBJ(f.0)
+    };
+    EMOJI.store(f.0 as isize, Ordering::Release);
+    f
+}
+
 /// 进程退出前释放字体句柄（DLL 卸载时调用，避免 GDI 句柄泄漏）
 pub fn destroy() {
-    for slot in [&FONT, &SMALL] {
+    for slot in [&FONT, &SMALL, &EMOJI] {
         let raw = slot.swap(0, Ordering::AcqRel);
         if raw != 0 {
             unsafe {

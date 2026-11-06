@@ -58,7 +58,7 @@ class SymbolLayoutTest {
         val gap = 5f
         val padding = 12f
         val letters = 4 * KeyboardPages.rowHeightDp(Page.LETTERS) + 3 * gap + padding
-        for (p in listOf(Page.DIGITS, Page.SYMBOLS)) {
+        for (p in listOf(Page.DIGITS, Page.SYMBOLS, Page.EMOJI)) {
             val h = 5 * KeyboardPages.rowHeightDp(p) + 4 * gap + padding
             assertTrue(
                 "${p} 页高 $h 与字母页 $letters 差太多，切页会跳",
@@ -68,7 +68,7 @@ class SymbolLayoutTest {
     }
 
     @Test
-    fun `三页的行数据和页名都能取到`() {
+    fun `每一页的行数据和页名都能取到`() {
         for (p in Page.entries) {
             assertTrue("${p} 没有行数据", KeyboardPages.rows(p).isNotEmpty())
             assertTrue("${p} 没有页名", KeyboardPages.label(p).isNotEmpty())
@@ -76,5 +76,6 @@ class SymbolLayoutTest {
         assertEquals(QwertyLayout.rows, KeyboardPages.rows(Page.LETTERS))
         assertEquals(NumericLayout.rows, KeyboardPages.rows(Page.DIGITS))
         assertEquals(SymbolLayout.rows, KeyboardPages.rows(Page.SYMBOLS))
+        assertEquals(EmojiLayout.rows, KeyboardPages.rows(Page.EMOJI))
     }
 }

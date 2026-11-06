@@ -48,6 +48,11 @@ const S_FLAT_IDX: usize = 12;
 
 static RAW: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/base.bin"));
 
+/// 玄学分类词库。默认不启用，但**必须编进 DLL**：
+/// 它才几十 KB，用户勾一下开关就该立刻生效；
+/// 而它落在 .rdata 里，本来就是按需换页的。
+static RAW_XUANXUE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/xuanxue.bin"));
+
 /// 查哪一套索引
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Idx {
@@ -242,6 +247,16 @@ pub fn get() -> &'static Bin {
     use std::sync::OnceLock;
     static B: OnceLock<Bin> = OnceLock::new();
     B.get_or_init(|| Bin::try_new(RAW).unwrap_or_else(|| Bin::empty(RAW)))
+}
+
+/// 玄学分类词库。**开关关着时调用方根本不会走到这里**，但真走到了也要安全：
+/// 数据编不进去（旧构建产物）时返回 `None`，查询方当作「没有这个分类」。
+///
+/// 格式和 `base.bin` 完全一致（同一个 `dictenc` 编码器），所以查法通吃。
+pub fn xuanxue() -> Option<&'static Bin> {
+    use std::sync::OnceLock;
+    static B: OnceLock<Option<Bin>> = OnceLock::new();
+    B.get_or_init(|| Bin::try_new(RAW_XUANXUE)).as_ref()
 }
 
 /// 把磁盘上的 FHDB 文件映射进地址空间。

@@ -1456,40 +1456,77 @@ fn collect(
         UserSrc::None => {}
     }
 
-    // 2) 静态词库
+    // 2) 静态词库。**两份**：通用的、以及开关打开时的玄学分类。
+    //
+    // 归并时核心词库自己收满 limit 条就够：`top_by_rank` 已经按码长排过，
+    // 前 limit 条命中就是码长最短的 limit 条，后面的插不进候选。
+    //
+    // 玄学库放在通用库**之后**扫：`seen` 因此优先给通用词，同一个字在两边都有时
+    // 不会重复出现。开关关着时连 `dictbin::xuanxue()` 都不去取（它是
+    // `Option`，而不是一个空的 `Bin`）——那才是“一个字节查询成本都不付”。
+    let mut taken = 0usize;
     let bin = dictbin::get();
-    {
-        let (ps, pe) = bin.prefix_range(which, prefix);
-        // 归并时核心词库自己收满 limit 条就够：`top_by_rank` 已经按码长排过，
-        // 前 limit 条命中就是码长最短的 limit 条，后面的插不进候选。
-        let mut taken = 0usize;
-        for p in top_by_rank(ps..pe, scan, |p| bin.rank_key(which, p)) {
-            let code_len = bin.rank_key(which, p).0;
-            if code_len > cap {
-                break;
-            }
-            let w = bin.word_at(which, p);
-            if !pass(w) || !seen.insert(w) {
-                continue;
-            }
-            put_candidate(
-                &mut out,
-                &mut lens,
-                Cow::Borrowed(w),
-                code_len.min(u8::MAX as usize) as u8,
-                limit,
-                filtered, // 带辅助码：按码长插进用户词库那一段里
+    let done = scan_static(
+        bin, which, prefix, cap, scan, limit, filtered, &pass, &mut seen, &mut out, &mut lens,
+        &mut taken,
+    );
+    if !done && crate::config::xuanxue() {
+        if let Some(xb) = dictbin::xuanxue() {
+            scan_static(
+                xb, which, prefix, cap, scan, limit, filtered, &pass, &mut seen, &mut out, &mut lens,
+                &mut taken,
             );
-            taken += 1;
-            if filtered && taken >= limit {
-                break;
-            }
-            if !filtered && out.len() >= limit {
-                return (out, lens);
-            }
         }
     }
     (out, lens)
+}
+
+/// 扫一份静态词库，把命中的候选按码长归并进 `out`。
+///
+/// 返回 `true` 表示“候选已经收满，不用再扫下一份词库”。抽成函数是因为
+/// 通用库和玄学库是**同一套查法**，写两遍就会出现“玄学库漏了辅助码筛选”这类差异。
+#[allow(clippy::too_many_arguments)]
+fn scan_static(
+    b: &dictbin::Bin,
+    which: dictbin::Idx,
+    prefix: &str,
+    cap: usize,
+    scan: usize,
+    limit: usize,
+    filtered: bool,
+    pass: &impl Fn(&str) -> bool,
+    seen: &mut std::collections::HashSet<&str>,
+    out: &mut Vec<Cow<'static, str>>,
+    lens: &mut Vec<u8>,
+    taken: &mut usize,
+) -> bool {
+    let (ps, pe) = b.prefix_range(which, prefix);
+    for p in top_by_rank(ps..pe, scan, |p| b.rank_key(which, p)) {
+        let code_len = b.rank_key(which, p).0;
+        if code_len > cap {
+            break;
+        }
+        let w = b.word_at(which, p);
+        if !pass(w) || !seen.insert(w) {
+            continue;
+        }
+        put_candidate(
+            out,
+            lens,
+            Cow::Borrowed(w),
+            code_len.min(u8::MAX as usize) as u8,
+            limit,
+            filtered, // 带辅助码：按码长插进用户词库那一段里
+        );
+        *taken += 1;
+        if filtered && *taken >= limit {
+            break;
+        }
+        if !filtered && out.len() >= limit {
+            return true;
+        }
+    }
+    false
 }
 
 /// 词库概况：(总条目, 用户词库条目, 当前方案)
@@ -1642,9 +1679,6 @@ fn repo_src() -> std::path::PathBuf {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-
 
 
     /// **自造词不再无条件置顶：它和词库候选一起按学习次数排。**
@@ -1823,9 +1857,14 @@ pub(crate) mod tests {
             .filter(|n| n.starts_with("extra_") && n != "extra_dict.txt" && n.ends_with(".txt"))
             .collect();
         files.sort();
+        // 玄学分类的词不在默认查询路径上（`config::xuanxue()` 默认 false），
+        // 不开开关就直接判“查不到”。这里按 `dictcats` 的同一份清单分流，
+        // 开着验玄学词、关着验通用词，两边都得能查回本词。
         assert!(files.len() >= 10, "分类词表只找到 {} 份", files.len());
         for name in files {
             let text = std::fs::read_to_string(repo_src().join(&name)).unwrap_or_default();
+            let xuan = crate::dictcats::is_xuanxue(&name);
+            crate::config::set_xuanxue(xuan);
             for line in text.lines() {
                 let Some((w, py)) = line.split_once('\t') else { continue };
                 let Some(code) = shuangpin::encode_pinyin(Scheme::Xiaohe, py) else {
@@ -1838,7 +1877,7 @@ pub(crate) mod tests {
                 // 测试也跟着学坏，两边一起把字弄丢。
                 let r = lookup(&code, usize::MAX);
                 if !r.iter().any(|x| &**x == w) {
-                    bad.push(format!("{w} 查不到 code={code} py={py}"));
+                    bad.push(format!("{w} 查不到 code={code} py={py} xuan={xuan}"));
                 }
             }
         }
@@ -1849,6 +1888,29 @@ pub(crate) mod tests {
             bad.len(),
             &bad[..bad.len().min(20)]
         );
+        crate::config::set_xuanxue(false);
+    }
+
+    /// 玄学词库的开关**真的**在管查询。
+    ///
+    /// 三种情形都要钉：关着查不到、开着查得到、关回去又查不到。只验「开着能查到」
+    /// 是不够的——那样「忘了判开关」的实现也能过，而那正是默认关的意义所在。
+    ///
+    /// 词选「甲子」（jia zi → jxzi）：干支是玄学库的头一批，且这张表里它排第一，
+    /// 不会因为同码候选太多被挤到看不到的地方。
+    #[test]
+    fn xuanxue_switch_gates_the_extra_dict() {
+        let _g = scheme_guard();
+        set_scheme(Scheme::Xiaohe);
+        let code = shuangpin::encode_pinyin(Scheme::Xiaohe, "jia zi").expect("甲子的拼音编不出码");
+        let hit = |code: &str| lookup(code, usize::MAX).iter().any(|w| &**w == "甲子");
+
+        config::set_xuanxue(false);
+        assert!(!hit(&code), "关着的时候不该出现玄学词");
+        config::set_xuanxue(true);
+        assert!(hit(&code), "打开开关后「甲子」必须能打到");
+        config::set_xuanxue(false);
+        assert!(!hit(&code), "关回去要立刻消失，不能留缓存");
     }
 
     #[test]

@@ -56,6 +56,31 @@ const ROW_H: i32 = 28;
 /// 候选词和它后面那串读音小字之间的缝
 const HINT_GAP: i32 = 5;
 
+/// 单个候选（含后面的读音小字）的**宽度上限**。
+///
+/// 8 字词是本工程的常态上限（「依法追究刑事责任」），13px 雅黑下一个 8 字词约 110px，
+/// 加上序号和读音小字接近 150px；9 个这样的候选横排就是 1400px 往上，比很多
+/// 笔记本的整块屏幕还宽。超宽时窗口会被夹到屏幕左边，右边那一截直接
+/// 看不见——**看得见但点不到**比不显示更糟。
+///
+/// 所以这里先按 240px 一刀切：超过就截断加省略号，把「打不下」这件事
+/// 变得可见。
+const MAX_ITEM_W: i32 = 240;
+
+/// 窗口与屏幕左右边缘之间至少留出的距离。
+///
+/// 贴边会盖住滚动条，而且看起来像「窗口卡在屏幕外了」。左右各留 8px 之后，
+/// 即使窗口宽度顶到上限，也还能看出这是一块浮在桌面上的窗。
+const SCREEN_MARGIN: i32 = 8;
+
+/// 窗口允许的最大宽度：屏幕宽减去两侧留白，且不小于一个字的宽度。
+///
+/// 抽成函数是为了让 layout 和 show 用同一个数——两处各算一次的话，
+/// 迟早会出现「布局按 800 排、显示按 900 夹」这种半截候选。
+fn max_window_w() -> i32 {
+    unsafe { (GetSystemMetrics(SM_CXSCREEN) - 2 * SCREEN_MARGIN).max(160) }
+}
+
 /// 一页最多几个候选（数字键 1-9）
 pub const PAGE_SIZE: usize = 9;
 
@@ -89,6 +114,17 @@ struct CandState {
     y: i32,
     /// 每一行里每一项的横向命中区（相对客户区），由 `layout()` 算出
     spans: Vec<Vec<(i32, i32)>>,
+    /// 每一行里每一项**实际画出来的字**（超宽时是截断过的，见 [MAX_ITEM_W]）。
+    ///
+    /// 必须存下来而不是绘制时重算：重算要再量一遍字宽，而绘制是每次重绘都走的
+    /// 热路径；更要紧的是「量出来多少宽」和「画了什么」得是同一份数据，
+    /// 否则会出现截断后的字和命中区对不上。
+    texts: Vec<Vec<String>>,
+    /// 每一行里每一项要画的读音小字（超宽被砍掉时为 None）。
+    ///
+    /// 和 [texts] 一样必须存：读音是跟着「这串字画多宽」走的，重算一次就可能
+    /// 因为字体度量变化而和命中区错开半像素。
+    hints: Vec<Vec<Option<&'static str>>>,
     /// 按下时命中的项（全表下标），抬起时比对
     pressed: Option<usize>,
 }
@@ -102,6 +138,8 @@ static STATE: Mutex<CandState> = Mutex::new(CandState {
     x: 0,
     y: 0,
     spans: Vec::new(),
+    texts: Vec::new(),
+    hints: Vec::new(),
     pressed: None,
 });
 
@@ -266,6 +304,84 @@ unsafe fn measure(hdc: HDC, text: &str, hint: Option<&str>) -> (i32, i32) {
         }
     };
     (size.cx, hw)
+}
+
+/// 截断后的尾巴。用单个省略号而不是 `...`：中文全角字体里
+/// 三个点占三个字宽，而省略号只占一个，在 240px 的预算里那 20px 能多显示一个字。
+const ELLIPSIS: &str = "…";
+
+/// 一个候选**实际要画的东西**。
+///
+/// 预先算好存起来，而不是绘制时现算：绘制每次重绘都走（按键、鼠标移动都会重绘），
+/// 而且「排布时量的宽度」必须就是「画出来的东西的宽度」，否则命中区会和眼睛看到的
+/// 对不上——那是输入法里最难查的一类 bug。
+#[derive(Clone, Debug, PartialEq)]
+struct DrawnItem {
+    /// 主文字，含 `1.` 序号；超宽时已截断并加了省略号。
+    text: String,
+    /// 读音小字。截断过的项**不标读音**：那时字都显示不全，
+    /// 再挤一小字读音只会更乱。
+    hint: Option<&'static str>,
+}
+
+/// 单行里每一项的宽度预算。
+///
+/// 窗口最宽 `window_w`，这一行有 `n` 项，除了两侧留白和 `n-1` 道缝，
+/// 剩下的平分。**不能只截断超长的那一项**：9 个候选里只有一个
+/// 8 字词时，只截它仍然会把窗口撞出屏幕（其余八项也各占一截）。
+fn item_budget(window_w: i32, n: usize) -> i32 {
+    let n = n.max(1) as i32;
+    ((window_w - 2 * PAD - (n - 1) * GAP) / n).max(40)
+}
+
+/// 把一个候选装进 `cap` 宽度里，顺序是「先丢读音、再截字」。
+///
+/// `measure(text, small)` 由调用方提供：真机上是 GDI 量字，测试里是一把假尺子。
+/// 这是故意抽成纯函数的：「截在哪一个字上」要能单测，而真机上截错一个字
+/// 看不出来、也没人会为它报 bug。
+fn fit_item(
+    index: usize,
+    word: &str,
+    cap: i32,
+    hint: Option<&'static str>,
+    measure: &dyn Fn(&str, bool) -> i32,
+) -> DrawnItem {
+    let prefix = format!("{}.", index + 1);
+    let body = crate::zhconv::apply(word);
+
+    let total = |b: &str, h: Option<&str>| {
+        let main = measure(&format!("{prefix}{b}"), false);
+        main + match h {
+            Some(h) => HINT_GAP + measure(h, true),
+            None => 0,
+        }
+    };
+
+    // 1) 完整显示（带读音）能放下 —— 绝大多数候选走这一条。
+    if total(&body, hint) <= cap {
+        return DrawnItem {
+            text: format!("{prefix}{body}"),
+            hint,
+        };
+    }
+    // 2) 放不下就先丢读音：它是注解，字才是内容。
+    if total(&body, None) <= cap {
+        return DrawnItem {
+            text: format!("{prefix}{body}"),
+            hint: None,
+        };
+    }
+    // 3) 还放不下才截字。从少一个字开始试，直到加上省略号能放下。
+    let chars: Vec<char> = body.chars().collect();
+    let mut keep = chars.len().saturating_sub(1);
+    loop {
+        let cand: String = chars[..keep].iter().collect();
+        let text = format!("{prefix}{cand}{ELLIPSIS}");
+        if keep == 0 || measure(&text, false) <= cap {
+            return DrawnItem { text, hint: None };
+        }
+        keep -= 1;
+    }
 }
 
 /// 命中的**全表下标**（`(top + 行) * PAGE_SIZE + 列`）。
@@ -472,11 +588,19 @@ unsafe fn paint_content(hdc: HDC, rc: &RECT) {
         let row_bottom = row_top + ROW_H;
         let ty = row_top + (ROW_H - font_height(hdc)) / 2;
 
+        // 画什么、占多宽，全部取自 layout 预先算好的结果（st.texts / st.hints）。
+        // 这里**不能**重新 label(i, word) ——那样超宽截断就白做了，
+        // 而且量出来的宽度会和 layout 里的命中区对不上。
         let mut x = PAD;
-        for (i, word) in items.iter().enumerate() {
-            let text = label(i, word);
+        for i in 0..items.len() {
+            let text = st
+                .texts
+                .get(r)
+                .and_then(|row| row.get(i))
+                .cloned()
+                .unwrap_or_else(|| label(i, &items[i]));
+            let hint = st.hints.get(r).and_then(|row| row.get(i)).copied().flatten();
             let wide: Vec<u16> = text.encode_utf16().collect();
-            let hint = hint_of(word);
 
             let mut size = SIZE::default();
             let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
@@ -542,34 +666,82 @@ pub fn refresh_theme() {
 /// 绘制（`paint`）和命中判定（`hit`）都依赖这里的几何：paint 按同样的
 /// `size.cx + GAP` 递增，高亮框左右各放宽 4px，所以命中区也用 ±4。
 /// 多行时宽度取**最宽那一行**——每行各自按自己的内容排，行内不错位。
-unsafe fn layout(items: &[String], top: usize, rows: usize) -> (i32, Vec<Vec<(i32, i32)>>) {
+struct Layout {
+    /// 窗口宽度（已夹到屏幕能装下的上限）
+    w: i32,
+    spans: Vec<Vec<(i32, i32)>>,
+    /// 每项实际要画的字（超宽时是截断过的）
+    texts: Vec<Vec<String>>,
+    /// 每项要画的读音小字（超宽被砍掉时为 None）
+    hints: Vec<Vec<Option<&'static str>>>,
+}
+
+unsafe fn layout(items: &[String], top: usize, rows: usize) -> Layout {
     let hdc = GetDC(None);
     if hdc.is_invalid() {
-        return (320, Vec::new());
+        return Layout {
+            w: 320,
+            spans: Vec::new(),
+            texts: Vec::new(),
+            hints: Vec::new(),
+        };
     }
     SelectObject(hdc, crate::font::ui());
 
+    let window_w = max_window_w();
     let mut width = 0;
     let mut spans = Vec::with_capacity(rows);
+    let mut texts = Vec::with_capacity(rows);
+    let mut hints = Vec::with_capacity(rows);
     for r in 0..rows {
         let list = page_slice(items, top + r);
         if list.is_empty() {
             break;
         }
+        // 每一项的宽度预算按「这一行有几项」均分。见 item_budget 的注释：
+        // 只截超长那一项是不够的。
+        let cap = item_budget(window_w, list.len()).min(MAX_ITEM_W);
         let mut x = PAD;
         let mut row = Vec::with_capacity(list.len());
+        let mut row_texts = Vec::with_capacity(list.len());
+        let mut row_hints = Vec::with_capacity(list.len());
         for (i, word) in list.iter().enumerate() {
-            let text = label(i, word);
-            let (mw, hw) = measure(hdc, &text, hint_of(word));
+            let drawn = fit_item(i, word, cap, hint_of(word), &|t: &str, small: bool| {
+                measure_plain(hdc, t, small)
+            });
+            let (mw, hw) = measure(hdc, &drawn.text, drawn.hint);
             let total = mw + if hw > 0 { HINT_GAP + hw } else { 0 };
             row.push((x - 4, x + total + 4));
+            row_texts.push(drawn.text);
+            row_hints.push(drawn.hint);
             x += total + GAP;
         }
         width = width.max(x - GAP + PAD);
         spans.push(row);
+        texts.push(row_texts);
+        hints.push(row_hints);
     }
     let _ = ReleaseDC(None, hdc);
-    (width.max(80), spans)
+    Layout {
+        w: width.max(80).min(window_w),
+        spans,
+        texts,
+        hints,
+    }
+}
+
+/// 只量一段文字，不考虑读音。给 [fit_item] 当尺子用。
+unsafe fn measure_plain(hdc: HDC, text: &str, small: bool) -> i32 {
+    let old = SelectObject(hdc, if small {
+        crate::font::small()
+    } else {
+        crate::font::ui()
+    });
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    let mut size = SIZE::default();
+    let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
+    SelectObject(hdc, old);
+    size.cx
 }
 
 /// 翻页时最多摊开几行、从哪一页开始。
@@ -667,20 +839,28 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
             st.x = x;
             st.y = y;
             st.pressed = None;
-            // `layout` 只量字宽、不回调任何东西，可以持锁跑
-            let (w, spans) = layout(&st.items, top, rows);
+            // layout 只量字宽、不回调任何东西，可以持锁跑
+            let lay = layout(&st.items, top, rows);
             // 候选不够一屏时行数会被截短，窗口高度要跟着缩，否则下半截是空白
-            st.rows = spans.len().max(1);
-            st.spans = spans;
-            (w, height_of(st.rows))
+            st.rows = lay.spans.len().max(1);
+            st.spans = lay.spans;
+            st.texts = lay.texts;
+            st.hints = lay.hints;
+            (lay.w, height_of(st.rows))
         };
 
         // 贴光标下方 6px，并夹在屏幕内
+        //
+        // w 已经在 layout 里被 max_window_w() 夹过一次，所以这里的
+        // px + w > sw 一般只会在「光标靠右」时成立。但保留这个夹子
+        // 仍然必要——屏幕可能在弹窗的瞬间被拔掉（RDP、投屏）。
         let sw = GetSystemMetrics(SM_CXSCREEN);
         let mut px = x;
         let mut py = y + 6;
         if px + w > sw {
             px = (sw - w).max(0);
+        } else if px < 0 {
+            px = 0;
         }
         if py + h > sh {
             // 下方放不下就翻到光标上方
@@ -824,6 +1004,8 @@ mod tests {
             x: 0,
             y: 0,
             spans: vec![vec![(6, 30), (30, 54)]],
+            texts: Vec::new(),
+            hints: Vec::new(),
             pressed: None,
         };
         assert_eq!(hit(&st, 5, 15), None, "左边留白不该命中");
@@ -856,6 +1038,8 @@ mod tests {
                 vec![(6, 30), (30, 54)],
                 vec![(6, 30), (30, 54)],
             ],
+            texts: Vec::new(),
+            hints: Vec::new(),
             pressed: None,
         };
         assert_eq!(hit(&st, 10, 15), Some(0), "第 1 行第 1 项 = 全表 0");
@@ -911,8 +1095,9 @@ mod tests {
             st.rows = ROWS;
         }
         let items: Vec<String> = words.iter().map(|s| s.to_string()).collect();
-        let (w, spans) = unsafe { layout(&items, 0, ROWS) };
-        assert!(w > 100 && spans.len() == ROWS);
+        let lay = unsafe { layout(&items, 0, ROWS) };
+        let w = lay.w;
+        assert!(w > 100 && lay.spans.len() == ROWS);
 
         let h = height_of(ROWS);
         unsafe {
@@ -972,5 +1157,83 @@ mod tests {
             std::fs::write(path, &out).expect("写截图失败");
             println!("截图：{path}（{w}x{h}）");
         }
+    }
+
+    // ---- 超宽保护 （纯逻辑，不碰 GDI） ----
+
+    /// 假尺子：中文字算 13px、ASCII 算 7px、小字号打六折。
+    ///
+    /// 真机上的实际宽度取决于字体、DPI、渲染引擎，断言里写死一个数
+    /// 只会在换个屏幕后变成假失败。这里只关心——`fit_item` 在给定尺子下行为对不对。
+    fn ruler(text: &str, small: bool) -> i32 {
+        let base: i32 = text
+            .chars()
+            .map(|c| if (c as u32) < 128 { 7 } else { 13 })
+            .sum();
+        if small {
+            base * 6 / 10
+        } else {
+            base
+        }
+    }
+
+    /// 一行剩多少宽度给每一项：去两侧留白、去 n-1 道缝后平分。
+    #[test]
+    fn item_budget_splits_row_evenly() {
+        // 窗口 900，9 项：两侧留白 + 8 道缝后平分
+        let b = item_budget(900, 9);
+        assert!(b > 0 && b < 200, "预算要是一个合理的小数，得到 {b}");
+        // 项数少就宽松：同一个窗口下 3 项比 9 项宽
+        assert!(item_budget(900, 3) > item_budget(900, 9));
+        // 项数给 0 也不能除零
+        assert!(item_budget(900, 0) >= 40);
+        // 窗口极窄时不会算出负数预算
+        assert_eq!(item_budget(10, 9), 40);
+    }
+
+    /// 放得下的候选一字不动（连读音一起保留）。
+    #[test]
+    fn fit_item_keeps_short_word_intact() {
+        let d = fit_item(0, "重庆", 240, Some("chong'qing"), &ruler);
+        assert_eq!(d.text, "1.重庆");
+        assert_eq!(d.hint, Some("chong'qing"), "放得下就不该扛读音");
+    }
+
+    /// 只有读音挤不下时，先丢读音，不截字。
+    #[test]
+    fn fit_item_drops_hint_before_chars() {
+        // "1.重庆" = 7+13+13 = 33；读音 "x"*20 = 140 * 0.6 = 84；加缝 5 ≈ 122。
+        // 预算 60：字本身 33 放得下，带读音就不行。
+        let d = fit_item(0, "重庆", 60, Some("xxxxxxxxxxxxxxxxxxxx"), &ruler);
+        assert_eq!(d.text, "1.重庆", "字要保留");
+        assert_eq!(d.hint, None, "读音是注解，先舍它");
+    }
+
+    /// 字本身就超宽时才截字，且尾巴是一个省略号。
+    #[test]
+    fn fit_item_truncates_long_word_with_ellipsis() {
+        let word = "依法追究刑事责任"; // 8 字
+        // 预算只够放 3 个字 + 序号 + 省略号：7 + 3*13 + 13 = 59
+        let d = fit_item(0, word, 62, None, &ruler);
+        assert!(d.text.ends_with('…'), "截断必须有省略号：{}", d.text);
+        assert!(d.hint.is_none(), "截断了就别再挤读音");
+        assert!(ruler(&d.text, false) <= 62, "截完必须真的放得下");
+        // 截断后仍能看出是哪个词的开头
+        assert!(d.text.starts_with("1.依法"));
+    }
+
+    /// 预算极窄时不能死循环、也不能返回空串。
+    #[test]
+    fn fit_item_survives_impossible_budget() {
+        let d = fit_item(0, "重庆", 1, Some("chong'qing"), &ruler);
+        assert!(!d.text.is_empty(), "再窄也得画点东西出来");
+        assert_eq!(d.hint, None);
+    }
+
+    /// 序号要跟着全局位置走，不能每页都从 1 开始。
+    #[test]
+    fn fit_item_numbers_by_position() {
+        let d = fit_item(8, "重庆", 240, None, &ruler);
+        assert_eq!(d.text, "9.重庆");
     }
 }

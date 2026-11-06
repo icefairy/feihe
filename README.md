@@ -1411,6 +1411,12 @@ rime-ice 是「书面语料」词表，缺一批日常真的会打的词：电�
 | `src/extra_liuren.txt` | 大六壬（四课三传、十二天将、六十课体） | 103 |
 | `src/extra_liuyao.txt` | 六爻纳甲（装卦、六亲六神、用神、卦变） | 45 |
 
+> 表里最后六份（干支 / 易经 / 神煞 / 奇门 / 六壬 / 六爻）**不进 `base.bin`**，
+> 由 `core/build.rs` 单独编成 `xuanxue.bin`，运行时看 `config::xuanxue()` 这一个
+> 开关扫不扫（默认关）。清单在 `core/src/dictcats.rs`，`build.rs` 和 `dict.rs` 的
+> 测试共用同一份——漏登记的后果是「开关打开也打不出来」，且没有任何报错。
+> 前六份（常用词 / IT / 地名 / 药品 / 中药 / 中成药）留在通用词库里。
+
 一条新词要过四道关才进得去：词库（`dict.txt` + `extra_dict.txt`）里没有、只含汉字、
 长度在分类范围内、拼音能编出双拼码。拼音用 pypinyin 的词级判断（`银行`→`yin hang`），
 生僻字和地名古音它也会错，所以 `tools/pinyin_overrides.txt` 钉了 60 多条人工校正，

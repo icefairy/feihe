@@ -185,6 +185,19 @@ pub struct Config {
     /// 这里只存「初值」：`Activate` 时读出来初始化 `insert`，之后进程内的切换照旧
     /// 只改进程内缓存，不会因为别处改了配置就打断正在打的字。
     pub chinese: bool,
+    /// 玄学词库（干支 / 易经 / 奇门 / 六壬 / 六爻 / 神煞）是否参与候选。
+    ///
+    /// 这是一个**可选装的分类词库**：它不进 `base.bin`，由 `build.rs` 单独编成
+    /// `xuanxue.bin`，运行时按这个开关决定扫不扫。
+    ///
+    /// 为什么默认**关**：`庚` `戊` `值符` 这类字的读音对普通人没有意义，
+    /// 开着只会让单键/短码的重码变多（`gj` 下多出一串天干）。对需要的人是刚需，
+    /// 所以做成一个勾选框而不是删掉。
+    ///
+    /// 为什么只做**一个**分类而不是十几个：词库一共才 700 来条，按「中医 / IT /
+    /// 地名」逐项分包，用户要在设置里面对十来个看不懂的勾选框，而其中九个他永远
+    /// 不会碰。真正小众且自成一体的只有术数这一摊，其余留在通用词库里正好。
+    pub xuanxue: bool,
 }
 
 impl Config {
@@ -217,6 +230,8 @@ impl Config {
         candidate_rows: 5,
         // 默认中文：中文输入法装完就该能直接打中文。
         chinese: true,
+        // 默认关：玄学词库对多数人是噪音（ 下多一串天干），需要的人自己勾。
+        xuanxue: false,
     };
 }
 
@@ -326,6 +341,20 @@ static READING: AtomicBool = AtomicBool::new(true);
 /// 候选窗行数的原子镜像：`candidate::show` 每次按键都要问一次。
 static ROWS: AtomicU8 = AtomicU8::new(5);
 
+/// **玄学词库开关的原子镜像。**  每次按键都问一遍，
+/// 走 Mutex 不划算（和  /  同一个理由）。
+static XUANXUE: AtomicBool = AtomicBool::new(false);
+
+/// 玄学分类词库是否参与候选。
+pub fn xuanxue() -> bool {
+    XUANXUE.load(Ordering::Acquire)
+}
+
+pub fn set_xuanxue(on: bool) {
+    XUANXUE.store(on, Ordering::Release);
+    update(|c| c.xuanxue = on);
+}
+
 /// 翻页时一次摊开几行（1 = 单行）
 pub fn candidate_rows() -> usize {
     ROWS.load(Ordering::Acquire) as usize
@@ -352,6 +381,7 @@ fn sync_mirrors(cfg: &Config) {
     POPUP_MODE.store(cfg.popup.bits(), Ordering::Release);
     READING.store(cfg.reading, Ordering::Release);
     ROWS.store(clamp_rows(cfg.candidate_rows) as u8, Ordering::Release);
+    XUANXUE.store(cfg.xuanxue, Ordering::Release);
 }
 
 pub fn set_pinyin_mode(on: bool) {
@@ -375,7 +405,7 @@ fn path() -> PathBuf {
 /// 之前只有 v1→v2 时，代码是 `if ver < CONFIG_VER { 强改 fullwidth }`，看起来没问题；
 /// 一旦把 CONFIG_VER 提到 3，v2 用户的 `fullwidth=0`（明确关掉全角标点）就会被
 /// 再「迁移」一次、强行改回 true。所以下面按 `ver < 2` 精确判阶段。
-const CONFIG_VER: u32 = 11;
+const CONFIG_VER: u32 = 12;
 
 /// 从磁盘读配置到内存。文件不存在就用默认值。
 pub fn load() -> Config {
@@ -427,6 +457,11 @@ pub fn load() -> Config {
     if ver < 10 {
         cfg.chinese = true;
     }
+
+    // v11 → v12：新增 `xuanxue`（玄学分类词库）。缺省 false = 和以前「没有这个
+    // 开关、那些词混在通用词库里」不同：老用户升级后「庚」「值符」这类词会**少掉**。
+    // 这是刻意的——它们只在打术数的人那里有用，混在通用词库里只添重码；需要的人
+    // 一次勾选就全回来。
 
     // v10 → v11：新增 `suggest`（上屏后联想）。缺省 true，不需要迁移动作——
     // 它只是「上屏后多一个候选窗」，不改变任何既有按键的行为；不想要的人在
@@ -484,6 +519,7 @@ fn parse(text: &str) -> (Config, u32) {
             "fuzzy" => cfg.fuzzy = crate::fuzzy::Rules::from_key(v),
             "candidate_rows" => cfg.candidate_rows = v.parse().map_or(5, clamp_rows),
             "chinese" => cfg.chinese = parse_bool(v),
+            "xuanxue" => cfg.xuanxue = parse_bool(v),
             // v5 及更早的键名。`no_popup=1` 是用户勾过的 → 保持「一律不弹」；
             // `0` 是默认值 → 升级到自动检测（见 `load` 里的 v5→v6 说明）。
             "no_popup" | "uileless" => {
@@ -603,7 +639,8 @@ fn render(cfg: &Config) -> String {
          assist_direct={}\n\
          fuzzy={}\n\
          candidate_rows={}\n\
-         chinese={}\n",
+         chinese={}\n\
+         xuanxue={}\n",
         cfg.scheme.key(),
         cfg.assist_mode.key(),
         cfg.fullwidth as u8,
@@ -620,7 +657,8 @@ fn render(cfg: &Config) -> String {
         cfg.assist_direct as u8,
         cfg.fuzzy.to_key(),
         clamp_rows(cfg.candidate_rows),
-        cfg.chinese as u8
+        cfg.chinese as u8,
+        cfg.xuanxue as u8
     )
 }
 

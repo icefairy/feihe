@@ -17,11 +17,12 @@ data class Key(
     val weight: Float = 1f,
 )
 
-/** 三张键盘页。切页只换容器里的行，不重建 InputView。 */
+/** 键盘页。切页只换容器里的行，不重建 InputView。 */
 enum class Page {
     LETTERS,
     DIGITS,
     SYMBOLS,
+    EMOJI,
 }
 
 enum class KeyKind {
@@ -142,6 +143,37 @@ object QwertyLayout {
  * 硬塞就得把某一排做成 6 个小键，等于把刚争取到的键宽又还回去。
  * 标点单独一页（[SymbolLayout]），数字页只留 `，` `。` 两个最常用的。
  */
+/**
+ * 紧凑页（数字 / 符号 / 表情）共用的底部功能排。
+ *
+ * ## 为什么单独抽出来
+ *
+ * 这一排原来写了两份（数字页一份、符号页一份），加表情页时变成三份。三份一样的东西
+ * 抄三遍，改空格键的宽度就得改三处，漏一处就是「切到表情页空格忽然变窄」。
+ *
+ * ## 为什么权重是 0.8 / 2 / 0.8 而不是全 1
+ *
+ * 行内按键按 `weight / 行权重合计` 分宽度，各行合计相同、键宽才对得齐。正文行
+ * （3 列 × 2）合计 6，所以这一排也必须合计 6：五个功能键各 0.8（4）+ 空格 2 = 6。
+ *
+ * 空格给 2（占三分之一宽）是刻意的：它是这一排里唯一会被「盲按」的键，
+ * 太窄会频繁点到 ⌫。
+ */
+private fun compactFunctionRow(nav: List<Key>): List<Key> {
+    require(nav.size == 3) { "紧凑页的功能排要放 3 个换页键，实际 ${nav.size} 个" }
+    return nav + listOf(
+        Key("", KeyKind.SPACE, weight = 2f),
+        Key("↵", KeyKind.ENTER, weight = 0.8f),
+        Key("⌫", KeyKind.DELETE, weight = 0.8f),
+    )
+}
+
+/** 三个换页键的公共定义（权重统一 0.8，见 [compactFunctionRow]） */
+private val NAV_LETTERS = Key("ABC", KeyKind.PAGE, "letters", weight = 0.8f)
+private val NAV_DIGITS = Key("123", KeyKind.PAGE, "digits", weight = 0.8f)
+private val NAV_SYMBOLS = Key("符", KeyKind.PAGE, "symbols", weight = 0.8f)
+private val NAV_EMOJI = Key("😊", KeyKind.PAGE, "emoji", weight = 0.8f)
+
 object NumericLayout {
 
     private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f)
@@ -153,13 +185,7 @@ object NumericLayout {
         listOf("，", "0", "。").map(::txt),
         // 功能排：和数字行一样按「总权重 6」分，否则这一排的键宽会和上面跳一格。
         // `符` 去符号页，`ABC` 回字母页，`123` 在符号页上用来回数字页。
-        listOf(
-            Key("ABC", KeyKind.PAGE, "letters"),
-            Key("符", KeyKind.PAGE, "symbols"),
-            Key("", KeyKind.SPACE, weight = 2f),
-            Key("↵", KeyKind.ENTER),
-            Key("⌫", KeyKind.DELETE),
-        ),
+        compactFunctionRow(listOf(NAV_LETTERS, NAV_SYMBOLS, NAV_EMOJI)),
     )
 
     /** 所有直接上屏的字符。测试用：不许有重复，也不许混进字母。 */
@@ -180,13 +206,59 @@ object SymbolLayout {
         listOf("！", "：", "、").map(::txt),
         listOf("；", "（", "）").map(::txt),
         listOf("…", "—", "·").map(::txt),
-        listOf(
-            Key("ABC", KeyKind.PAGE, "letters"),
-            Key("123", KeyKind.PAGE, "digits"),
-            Key("", KeyKind.SPACE, weight = 2f),
-            Key("↵", KeyKind.ENTER),
-            Key("⌫", KeyKind.DELETE),
-        ),
+        compactFunctionRow(listOf(NAV_LETTERS, NAV_DIGITS, NAV_EMOJI)),
+    )
+
+    val textCodes: List<String>
+        get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
+}
+
+/**
+ * 表情页。
+ *
+ * ## 为什么复用 [KeyKind.TEXT] 而不是新加一个 EMOJI kind
+ *
+ * emoji 在本项目里**就是一个普通字符**：不经过引擎、不进组合串、直接 commitText。
+ * 这正是 TEXT 的语义。新加一个 kind 只会让 onKey 里多一个和 TEXT 完全一样的分支。
+ *
+ * ## 为什么只有 28 个、不做表情分类/翻页
+ *
+ * 手机自带的 emoji 键盘（长按地球键切出来的那个）有全套 + 搜索 + 最近使用，做得
+ * 比这好得多，且不占我们的包体。这一页的定位是**常用表情的快捷入口**——
+ * 用户要打 😂 不该先切出去。所以刻意控制在一屏内，不做滚动、不做分组。
+ * 想加表情就往数据里加，加满一屏为止。
+ *
+ * ## 为什么底部功能排和数字/符号页一模一样
+ *
+ * 三页共用 5 行 × 36dp（见 [NumericLayout] 里的高度计算），换页时键盘高度不变；
+ * 底部 ABC / 123 / 符 / 空格 / ↵ / ⌫ 位置固定，肌肉记忆直接复用。
+ *
+ * ## 为什么是 7 列（数字/符号页只有 3 列）
+ *
+ * 列数跟着内容走：数字页 3 列是为了把键撑宽、防误触，表情却是**越多越好选**，
+ * 一屏塞得下就不该翻页。7 列 × 4 行 = 28 个，键宽仍够手指点。行列不同不影响
+ * 高度——高度只由「行数 × 行高」决定，所以切页时键盘不会跳。
+ *
+ * 不变的是**每行的权重合计**（都是 6），这才是「各行键宽看着一样」的真正约束。
+ */
+object EmojiLayout {
+
+    /**
+     * 每个表情键的权重。
+     *
+     * 一行 7 个键，而各行的**权重合计必须和别的页一样是 6**——否则同一个 weight
+     * 在表情页和数字页的物理宽度不同，切页时手指会落偏。6 / 7 正好让七个键铺满一行。
+     */
+    private const val KEY_WEIGHT = 6f / 7f
+
+    private fun e(s: String) = Key(s, KeyKind.TEXT, s, weight = KEY_WEIGHT)
+
+    val rows: List<List<Key>> = listOf(
+        listOf("😀", "😄", "😂", "🤣", "😊", "😍", "🤔").map(::e),
+        listOf("😅", "😭", "😡", "😴", "👍", "👌", "👏").map(::e),
+        listOf("🙏", "💪", "🤝", "❤️", "💔", "🎉", "🔥").map(::e),
+        listOf("✨", "⭐", "✅", "❌", "❓", "❗", "💯").map(::e),
+        compactFunctionRow(listOf(NAV_LETTERS, NAV_DIGITS, NAV_SYMBOLS)),
     )
 
     val textCodes: List<String>
@@ -225,6 +297,7 @@ object KeyboardPages {
         Page.LETTERS -> QwertyLayout.rows
         Page.DIGITS -> NumericLayout.rows
         Page.SYMBOLS -> SymbolLayout.rows
+        Page.EMOJI -> EmojiLayout.rows
     }
 
     /** 见 [NumericLayout] 里的高度计算：紧凑页 36dp，总和与字母页 46dp×4 相当。 */
@@ -234,5 +307,6 @@ object KeyboardPages {
         Page.LETTERS -> "26 键"
         Page.DIGITS -> "数字"
         Page.SYMBOLS -> "符号"
+        Page.EMOJI -> "表情"
     }
 }
