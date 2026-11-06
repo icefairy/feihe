@@ -106,6 +106,11 @@ impl Imported {
 // 纯解析（不碰文件，方便单测）
 // ─────────────────────────────────────────────────────────────
 
+/// 是不是「纯小写 ASCII 字母」的音节（`ai` / `zhang`）。`.scel` 的音节表就是这个形状。
+fn is_ascii_syllable(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase())
+}
+
 fn is_all_cjk(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| (CJK_MIN..=CJK_MAX).contains(&(c as u32)))
 }
@@ -189,12 +194,180 @@ fn extract_bin_loose(data: &[u8]) -> Vec<String> {
 /// 各版本头字段数略有差异，所以从几个候选起点里挑「解析出词最多」的那个——
 /// 这也是脚本当初的做法，实测比自己猜版本号可靠。
 fn extract_scel(data: &[u8]) -> Vec<String> {
+    // 新格式**没有** `SougouPY` magic（2026-11 的搜狗导出直接以 `DCS` 风格头开始），
+    // 所以先试新解析器，再退回老格式。以前这里先判 magic，导致真文件在第一步就
+    // 返回空——那正是「导入没反应」的直接原因。
+    if let Some(w) = parse_scel_modern(data) {
+        return w;
+    }
     if !data.starts_with(b"SougouPY") {
         return Vec::new();
     }
+    parse_scel_legacy(data)
+}
 
-    // 头部：magic 之后是 4 个以 0x0A 结尾的字段（不含末尾 0x00）。各版本字段数
-    // 略有差异，所以四个候选起点都试一遍，取「解析出词最多」的那个——比猜版本号可靠。
+/// 现代搜狗 `.scel`（实测样本：`中国风景名胜.scel`，53 KB，2026-11 的导出格式）。
+///
+/// **实测出来的布局**（不是猜的，按字节对着 `15508`「中国风景名胜」这个词库解出来的）：
+///
+/// ```text
+/// 0      : u32 = 4
+/// 4      : u16 len + UTF-16  "DCS\x01\x01..."（风格名）
+/// ...    : u16 len + UTF-16  拼音方案名 "11508"（和编号同一段里）
+/// ...    : 一大段 0 填充
+/// S      : 音节表 —— 连续 [u16 序号][u16 字节长][ascii]，412 条（ai / an / ang … zuo）
+/// S+end  : u16=1, [u16 字节长 + 索引...]   ← 一小段「示例索引」，跳过
+/// 词条区 : 每条 = [u16 词字节长][词 UTF-16]
+///                  [u16=1][u16 拼音字节长][u16 拼音索引...]      ← 拼音 A（高 2 位是标记）
+///                  [u16 id][5×u16][u16=1][u16 拼音字节长][索引...] ← 拼音 B / 词频等
+/// ```
+///
+/// 拼音索引的低 14 位是音节表下标 **+1**（0 = 空）。
+///
+/// 老格式见 `parse_scel_legacy`——它要求文件以 `SougouPY` 开头，而现在的搜狗
+/// 客户端不写那个 magic 了，所以老解析器在真文件上一个词都读不出来。
+fn parse_scel_modern(data: &[u8]) -> Option<Vec<String>> {
+        let mut syl: Vec<String> = Vec::new();
+    let syl_start = find_syllable_table(data, 2)?;
+    let mut p = syl_start;
+    while p + 4 <= data.len() {
+        let Some(ln) = u16_at(data, p + 2) else { break };
+        let ln = ln as usize;
+        if ln == 0 || ln > 16 || p + 4 + ln > data.len() {
+            break;
+        }
+            let Some(s) = utf16_at(data, p + 4, ln) else { break };
+        if !is_ascii_syllable(&s) {
+            break;
+        }
+        syl.push(s);
+        p += 4 + ln;
+    }
+    if syl.len() < 100 {
+        return None; // 不像音节表，退回老解析器
+    }
+
+
+    // 词条区：逐 2 字节找「像记录」的位置，命中了就按结构前进，没命中就跳 2。
+    // 记录之间夹杂的块（示例索引、分段表）都靠这条规则跳过——**绝不整包放弃**。
+    let mut words = Vec::new();
+    let mut q = p;
+    let mut misses = 0usize;
+    while q + 6 <= data.len() {
+        match parse_scel_record(data, q, syl.len()) {
+            Some((w, next)) => {
+                words.push((w, q));
+                q = next;
+                misses = 0;
+            }
+            None => {
+                q += 2;
+                misses += 1;
+                if words.is_empty() && misses > 20_000 {
+                    return None;
+                }
+            }
+        }
+    }
+    if words.is_empty() {
+        return None;
+    }
+    Some(words.into_iter().map(|(w, _)| w).collect())
+}
+
+/// 解析一条现代格式的词条。返回 `(词, 下一条的起点)`。
+///
+/// 实测（`中国风景名胜.scel`）词条的最小形态是：
+///
+/// ```text
+/// [u16 词字节长][词 UTF-16]         ← 词语本体
+/// [u16 id][5×u16][u16=1][u16 字节长][u16 拼音索引...]   ← 尾巴 12+4+N 字节
+/// ```
+///
+/// 我们只取「词」。拼音索引的合法性用来判断「这个位置真的是一条记录」，
+/// 否则按 2 字节扫的时候会到处命中假记录。
+fn parse_scel_record(data: &[u8], q: usize, syl_count: usize) -> Option<(String, usize)> {
+    let wl = u16_at(data, q)? as usize;
+    if wl < 4 || wl > 128 || wl % 2 != 0 || q + 2 + wl > data.len() {
+        return None;
+    }
+    let w = utf16_at(data, q + 2, wl)?;
+    if !is_all_cjk(&w) {
+        return None;
+    }
+    let body_end = q + 2 + wl;
+
+    let pinyin_ok = |at: usize| -> Option<usize> {
+        // 期望 [u16=1][u16 字节长][索引...]
+        if u16_at(data, at)? != 1 {
+            return None;
+        }
+        let ln = u16_at(data, at + 2)? as usize;
+        if ln < 2 || ln > 64 || ln % 2 != 0 || at + 4 + ln > data.len() {
+            return None;
+        }
+        for k in 0..ln / 2 {
+            let v = u16_at(data, at + 4 + k * 2)? & 0x3FFF;
+            let i = v as usize;
+            if i < 1 || i > syl_count {
+                return None;
+            }
+        }
+        Some(at + 4 + ln)
+    };
+
+    // 形态 A：紧跟 12 字节尾巴头（id + 5×u16），再是拼音段
+    if body_end + 10 <= data.len() {
+        if let Some(next) = pinyin_ok(body_end + 12) {
+            return Some((w, next));
+        }
+    }
+    // 形态 B：拼音段紧跟在词后面（老式记录，`[词][拼音]`）
+    if let Some(next) = pinyin_ok(body_end) {
+        return Some((w, next));
+    }
+    None
+}
+
+/// 找音节表起点：`[u16 序号][u16 字节长][小写 ascii]` 连着出现 ≥ `min` 次。
+///
+/// 从文件头逐 2 字节扫（不能跳，因为头部长度随版本变），找到第一个「能连读很多条」
+/// 的位置就认定是音节表。样本停在 412 条。
+fn find_syllable_table(data: &[u8], min: usize) -> Option<usize> {
+    let mut best: Option<(usize, usize)> = None;
+    let mut p = 4usize;
+    while p + 4 < data.len() {
+        let mut q = p;
+        let mut n = 0usize;
+        while q + 4 < data.len() && n < 500 {
+            let Some(idx) = u16_at(data, q) else { break };
+            let Some(ln) = u16_at(data, q + 2) else { break };
+            let ln = ln as usize;
+            if idx == 0 || ln < 2 || ln > 16 || q + 4 + ln > data.len() {
+                break;
+            }
+            match utf16_at(data, q + 4, ln) {
+                Some(s) if is_ascii_syllable(&s) => {}
+                _ => break,
+            }
+            n += 1;
+            q += 4 + ln;
+        }
+        if n >= min && best.map(|(_, b)| n > b).unwrap_or(true) {
+            best = Some((p, n));
+        }
+        p += 2;
+    }
+    best.map(|(p, _)| p)
+}
+
+
+/// 老格式（`SougouPY` 开头、4 个 `\0\n` 结尾的头字段、词条区
+/// `[u16 拼音字符数][拼音][u16 词字符数][词]`）。
+///
+/// 保留它是因为早期导出工具产出的 `.scel` 是这个格式，而现在的搜狗客户端
+/// 已经不写这种了（见 `parse_scel_modern`）。
+fn parse_scel_legacy(data: &[u8]) -> Vec<String> {
     let mut base = 9usize;
     let mut heads = vec![base];
     for _ in 0..4 {
@@ -205,15 +378,6 @@ fn extract_scel(data: &[u8]) -> Vec<String> {
         heads.push(base);
     }
 
-    // 游标对齐（2026-11-07 修）。
-    //
-    // 老写法是「严格按记录走，一遇不合法就 `break`」：只要有一个记录解析失败，
-    // **后面整个文件都不要了**。实测在搜狗现在的 .scel 上会解析出 0 条——因为
-    // 词条区和列表区之间有一段格式不认识的数据，第一次 `break` 就把剩下的全丢。
-    //
-    // 现在改成：解析成功就前进一条；失败就**跳过 2 字节重试**。搜狗自己的解析器
-    // 也是这个思路。代价是理论上可能误判出半截词，但那类东西注不出音，会在
-    // `Encoder::encode` 那步被丢掉。
     let parse = |start: usize| -> Vec<String> {
         let mut out = Vec::new();
         let mut p = start;
@@ -246,7 +410,6 @@ fn extract_scel(data: &[u8]) -> Vec<String> {
                     out.push(w);
                     p = next;
                 }
-                // 这条记录不合法：跳 2 字节再对齐（UTF-16 的边界）
                 None => p += 2,
             }
         }
@@ -259,7 +422,6 @@ fn extract_scel(data: &[u8]) -> Vec<String> {
         if got.len() > best.len() {
             best = got;
         }
-        // 已经解析出足够多的词，不必再试更靠后的起点
         if best.len() > 16 {
             break;
         }
@@ -535,6 +697,41 @@ mod tests {
     ///
     /// 现场（2026-11-06）：Android 上导入一个文件后界面什么都没显示，用户无从判断
     /// 是导入失败、文件没选上、还是导入了零条。这个测试锁住那个分支。
+    /// **真实样本**：`D:\down\中国风景名胜.scel`（53 KB，搜狗现在的导出格式）。
+    ///
+    /// 之前这个文件解析出 0 条——它既不是老格式（没有 `SougouPY` magic），
+    /// 也不符合我们原来猜的词条布局。2026-11-07 按字节对着解出来之后钉了这个测试：
+    /// 结构一变，这里立刻红。
+    #[test]
+    fn real_scel_sample_parses() {
+        let path = std::path::Path::new("D:/down/中国风景名胜.scel");
+        if !path.exists() {
+            return; // 别的机器上没有这个样本，跳过
+        }
+        let data = std::fs::read(path).unwrap();
+        let words = parse_scel_modern(&data).unwrap_or_default();
+        assert!(words.len() > 500, "解析出 {} 条，比样本应有的少多了", words.len());
+        // 抽查几条样本里确实有的词（名录类词库，前后都有）
+        for want in ["天安门", "阿育王塔", "安济桥", "醉白池"] {
+            assert!(words.iter().any(|w| w == want), "样本里应该有「{want}」");
+        }
+        assert!(words.iter().all(|w| w.chars().count() >= 2), "不该有单字词");
+        // 音节表要解对，否则注音全是错的
+        let (text, stat) = encode_one(
+            &Job { label: "t.scel".into(), data, kind: Kind::Scel, prio: 1 },
+            MAX_LEN,
+        );
+        assert!(stat.encoded > 100, "能注音 {} 条", stat.encoded);
+        // 抽查一条：解析出来的词必须注得出音，而且拼音是「小写字母 + 空格」
+        let line = text.lines().find(|l| l.starts_with("安济桥")).unwrap_or("");
+        assert!(!line.is_empty(), "安济桥 应该注得出音");
+        let py = line.split_once('\t').map(|(_, p)| p).unwrap_or("");
+        assert!(
+            !py.is_empty() && py.chars().all(|c| c.is_ascii_lowercase() || c == ' '),
+            "拼音格式不对：{line:?}"
+        );
+    }
+
     #[test]
     fn empty_result_summary_says_why() {
         let job = Job {

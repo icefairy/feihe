@@ -30,6 +30,7 @@ fn kind_of(path: &Path) -> Result<sogou::Kind, String> {
     })
 }
 
+
 /// 一个词库文件 → 并进个人词库。
 ///
 /// 返回的 [Imported] 里 `added` 是**真正新增**的条数，`encoded` 是解析并注音成功的条数。
