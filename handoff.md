@@ -34,7 +34,7 @@
 | 学习类 | `freq.rs` / `phrase.rs` / `pin.rs` | 动态词频（`freq.txt`）、自造词（`phrases.txt`，存全拼）、置顶（`pinned.txt`，存码） |
 | 一级简码 | `brief.rs` | 26 键一简字 + 26 条次选；首选占 0 号位、次选占 1 号位，`d;` 取次选 |
 | 二级简码 | `brief2.rs` + `brief2.txt` | 370 条两键词（声声码），首选压单字、次选排其后；只小鹤方案生效 |
-| 快捷输入 | `quick.rs` + `tyme4rs` | `/` 引导 9 个命令（含 `/fc` 反查）；农历 / 干支 / 节气全交给 Tyme |
+| 快捷输入 | `core/src/quick.rs` + `tyme4rs` | 命令表在 core，桌面壳 `src/quick.rs` 只是 703 字节 `pub use` 门面；`/` 引导 9 个命令（含 `/fc` 反查）；农历 / 干支 / 节气全交给 Tyme；Android 共用同一份 |
 | 弹窗策略 / UILess | `config::popup` / `fullscreen.rs` / `uielement.rs` | 前者是用户三态（自动检测 / 始终弹 / 始终不弹，不弹时候选塞组合串），中间是自动检测，后者是宿主驱动（宿主自绘），三码事 |
 | Shift | `textservice` + `insert::CHINESE` | 单击切中英；`Shift+字母` 直接上屏大写 |
 | 回车 | `textservice::raw_text` | 两态同义：上屏你敲的字母，只有手动确认过的段留汉字 |
@@ -4795,3 +4795,76 @@ Android 全部用 `dp` / `sp`（`resources.displayMetrics.density`），系统�
 
 **顺手校了一笔旧账**：README 的「和搜狗比」表里安装包还写着 1.99 MB、装完 8.6 MB
 （那是 0.3.12 的数），0.3.13 词库翻倍后一直没改。这次一并改成 2.53 / 12.6 MB。
+
+## 2026-11-07 快捷输入搬进 core + Android 接线 + 个人词库导入导出
+
+这一批是把 `quick.rs` 从桌面壳搬进 `feihe-core`，让两端用**同一份命令表**，
+然后把 Android 侧的 JNI / Kotlin / InputMethod 接上，并补了个人词库的单独
+导入导出。
+
+### 1. 为什么搬而不是复制
+
+手机上打不出 `/' + 'rq` 是用户直接反馈的痛点。复制一份到 Kotlin 会立刻分叉：
+日期格式改一处、两端忘一处，一年后就是两套行为。搬进 core 后桌面壳只剩：
+
+```rust
+// src/quick.rs（703 字节）
+pub use feihe_core::quick::{candidates, code_ok, commands, EXPR_KEY, PREFIX};
+```
+
+于是 `textservice.rs` / `settings.rs` 里 `quick::` 的调用点**一行没改**。
+
+三个 API 替换（core 不许有系统调用）：
+
+| 原来 | 现在 | 说明 |
+|---|---|---|
+| `GetLocalTime` | `core::clock` | 同一份本地时间拆分 |
+| `CoCreateGuid` | 时间派生模拟 v4 | 不引 `uuid` crate，够用即可（不用来当安全标识） |
+| `fancha` / `ampc` | `core::fancha` / `ampm` | 拼写顺带修正 |
+
+**`EXPR_KEY` 必须一起 re-export**。首版漏了，壳侧编译直接
+`error[E0425]: cannot find value EXPR_KEY in module quick`——门面少导一个
+名字，报错在几百行外的调用点，不好定位。
+
+### 2. Android 侧：快捷输入是独立状态位
+
+`FeiheIme.kt` 里加了 `quickMode` / `quickWords`，**不靠 `pending` 是否以 `/' + '` 开头现判**。
+理由：引导符来自引擎（`quick::PREFIX`），壳里硬写一个 `/' + '` 就是两处真相；
+而 `pending` 在候选为空、切模式、联想中断时都可能被清，跟着它走会闪。
+
+- 进：中文态 + `pending` 为空 + 按 `/' + '`。
+- 退：退格删到只剩 `/' + '` 再按一次退格 / 回车 / 切中英。
+- 候选走 `quickWords`，`renderNumberRow()` 跟着换，**不查词库、不学词、不联想**。
+  日期时间每次都不一样，学了就是往联想表里灌垃圾。
+
+JNI 三个入口单独一个文件 `android/jni/src/quick_extra.rs`
+（`quickPrefixNative` / `quickCandidatesNative` / `quickCodeOkNative`），
+`lib.rs` 已经 340 行，子模块只 `use super::{make_string, read_string};`。
+
+### 3. 个人词库：单独一张卡片，走临时文件
+
+整包备份解决「换手机」，但「把搜狗词库导进来」「把手机上的词带走」更常见，
+塞进 zip 里说不通。设置页新增「个人词库」卡片：当前来源 + 导入 / 导出 / 编译。
+
+- 格式就是 `user_dict.txt` 那套纯文本（词 + Tab + 全拼），记事本能开。
+- SAF 给 `Uri`，引擎要路径：Kotlin 侧 `dictTransfer(uri, import)` 负责
+  「Uri ⇄ cacheDir 临时文件」，用完就删。**不给 core 传流**——那要么一次 JNI
+  回调，要么在 core 里开个只给 Android 的口子，都比一次拷贝更危险。
+- 导出先写临时文件，成功了才搬过去，失败不留空文件。
+- `CompileOutcome::NoSource` **不算失败**：给「先导入一份」的人话，不抛 ERR。
+  匹配时注意枚举是 `Compiled { count, bytes }` / `NoSource { existing }`。
+
+### 4. 体积
+
+这一批**没涨体积**：`quick.rs` 从壳搬到 core，命令表一份没多；`tyme4rs` 早就在
+（农历/干支/节气）。Android `.so` 没实测（本机 JDK 是 1.8 + libjdwp.dll 缺失，
+Gradle 跑不起来），下次在能跑 Gradle 的机器上编一次补数字。
+
+### 验证
+
+- `cargo test --workspace`：壳 **112 passed / 3 ignored**，core **272 passed / 5 ignored**。
+- `cargo check --target aarch64-linux-android -p feihe-jni` 通过，零 error / 零 warning
+  （`quick_extra.rs` / `dict_extra.rs` 都无 `jboolean` 等未使用警告）。
+- Android Kotlin 侧**未做编译验证**（本机无可用 JDK 17），改动集中在
+  `NativeEngine.kt` / `FeiheIme.kt` / `SettingsActivity.kt` / `Backup.kt`。
+

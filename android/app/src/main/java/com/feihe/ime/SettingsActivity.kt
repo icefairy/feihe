@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
@@ -15,6 +16,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import com.feihe.ime.engine.NativeEngine
+import java.io.File
 
 /**
  * 设置页。
@@ -177,6 +179,36 @@ class SettingsActivity : Activity() {
                 },
             ),
         )
+
+        // 个人词库单独一个卡片，不和整包备份混在一起：常来这一页的人有一半
+        // 就是想「把搜狗词库导进来」或者「把手机上的词带走」，塞在备份里
+        // 意味着他要先理解 zip 是什么。
+        val dictBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        dictBox.addView(
+            TextView(this).apply {
+                // 引擎没加载时给空串，而不是「未导入」——这两件事必须分清
+                text = "当前：" + NativeEngine.dictSource()
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(SUB)
+                setPadding(dp(14f), dp(2f), dp(14f), dp(6f))
+            },
+        )
+        dictBox.addView(
+            actionRow(
+                "导入词库",
+                "文本格式，每行「词 + Tab + 全拼」；搜狗导出和电脑端导出都是这个格式",
+            ) { dictImport() },
+        )
+        dictBox.addView(
+            actionRow("导出词库", "把全部词库导出成文本，可带回电脑端用") { dictExport() },
+        )
+        dictBox.addView(
+            actionRow(
+                "编译个人词库",
+                "把导入的文本编译成 user.bin，让查询走映射而不是文本回退",
+            ) { runBusy { NativeEngine.dictCompile() } },
+        )
+        list.addView(card("个人词库", dictBox))
 
         val scroll = ScrollView(this).apply { addView(list) }
         root.addView(
@@ -445,6 +477,73 @@ class SettingsActivity : Activity() {
             .onFailure { toast("这台设备上没有能打开文件的应用") }
     }
 
+    // 个人词库：导入 / 导出
+    //
+    // 引擎那边只认文件路径（dict::export_to / import_from），但 SAF 给的是 Uri。
+    // 所以这里负责「Uri 与临时文件」这一小段：先落到 cacheDir 里的一个临时文件，
+    // 把路径交给引擎，完事就删。为什么不像 [Backup] 那样直接把流递给引擎：
+    // core 的依赖政策只有 tyme4rs，不接受「Java 回调的流」这种东西，而为了它
+    // 多写一层 shim，比一次临时文件拷贝更没有把握。
+
+    private fun dictExport() {
+        val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            // 纯文本：导出来是能用记事本打开、能直接拷到电脑上用的东西，
+            // 不是只有本 App 认识的二进制。
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TITLE, "feihe-dict-" + Backup.stamp() + ".txt")
+        }
+        runCatching { startActivityForResult(i, REQ_DICT_EXPORT) }
+            .onFailure { toast("这台设备上没有能找到的文件管理器") }
+    }
+
+    private fun dictImport() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            // 同样放开 MIME：txt 常被报成 octet-stream，写死 text/plain 会变灰
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/plain", "application/octet-stream"))
+        }
+        runCatching { startActivityForResult(i, REQ_DICT_IMPORT) }
+            .onFailure { toast("这台设备上没有能打开文件的应用") }
+    }
+
+    /** Uri 与临时文件互转，然后交给引擎。返回给用户看的那句话由引擎给。 */
+    private fun dictTransfer(uri: Uri, import: Boolean) {
+        val tmp = File(cacheDir, if (import) "dict-in.txt" else "dict-out.txt")
+        runBusy {
+            try {
+                if (import) {
+                    // 只读、带缓冲：一份词库文本通常在几百 KB 到几 MB。
+                    val input = contentResolver.openInputStream(uri)
+                    if (input == null) {
+                        "ERR 打不开这个文件"
+                    } else {
+                        input.use { src -> tmp.outputStream().use { src.copyTo(it) } }
+                        NativeEngine.dictImport(tmp.absolutePath)
+                    }
+                } else {
+                    val r = NativeEngine.dictExport(tmp.absolutePath)
+                    // 引擎写完了才把内容搬到用户选的位置；导出失败就什么都不动，
+                    // 免得在用户的下载目录里留下一个空文件。
+                    if (r.startsWith("OK")) {
+                        val out = contentResolver.openOutputStream(uri)
+                        if (out == null) {
+                            "ERR 写不进这个位置"
+                        } else {
+                            out.use { dst -> tmp.inputStream().use { it.copyTo(dst) } }
+                            r
+                        }
+                    } else {
+                        r
+                    }
+                }
+            } finally {
+                tmp.delete()
+            }
+        }
+    }
+
     @Deprecated("SAF 的旧回调；没有 androidx.activity 就先用它，行为完全一样")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -452,6 +551,8 @@ class SettingsActivity : Activity() {
         val uri = data?.data ?: return
         when (requestCode) {
             REQ_EXPORT -> runBusy { Backup.export(this, uri) }
+            REQ_DICT_EXPORT -> dictTransfer(uri, import = false)
+            REQ_DICT_IMPORT -> dictTransfer(uri, import = true)
             REQ_IMPORT -> {
                 // 导入是**破坏性**的（先清后写），必须确认一次再动手。
                 AlertDialog.Builder(this)
@@ -566,5 +667,7 @@ class SettingsActivity : Activity() {
         /** 文件选择器的请求码。两个值够用就行，别和别的 startActivityForResult 撞。 */
         const val REQ_EXPORT = 1001
         const val REQ_IMPORT = 1002
+        const val REQ_DICT_EXPORT = 1003
+        const val REQ_DICT_IMPORT = 1004
     }
 }

@@ -213,6 +213,65 @@ object NativeEngine {
         runCatching { reloadAllNative() }
     }
 
+    // ── 快捷输入（`/rq` `/sj` …） ───────────────────────────────────────
+    //
+    // 这一摊的逻辑全在 feihe-core 的 `quick` 模块里，Windows 端用的是同一份。
+    // Kotlin 这里只做三件事：问引导符、按码取候选、问「这串码还合不合法」。
+
+    /**
+     * 快捷输入的引导符（目前是 `/`）。
+     *
+     * **不要自己写死**：引导符是引擎的语法，壳里再写一份，哪天引擎改了，
+     * Android 就会静默地不再支持快捷输入。
+     */
+    fun quickPrefix(): String =
+        if (ensureLoaded()) runCatching { quickPrefixNative() }.getOrElse { "" } else ""
+
+    /**
+     * `/` 后面的码 → 候选（按显示顺序）。`key` 不含引导符。
+     *
+     * `key` 为空 = 只打了 `/`，返回全部命令的当前值预览（「`/rq` 今天日期」）。
+     */
+    fun quickCandidates(key: String, limit: Int = 9): List<String> {
+        if (!ensureLoaded()) return emptyList()
+        val raw = runCatching { quickCandidatesNative(key, limit) }.getOrElse { return emptyList() }
+        return if (raw.isEmpty()) emptyList() else raw.split('\n')
+    }
+
+    /**
+     * 这串码是不是**至少还能往下打**。
+     *
+     * 必须支持中间态（`/uuid` 会经过 `u`、`uu`），否则用户看到的是「打一半字消失」。
+     * 键盘用它决定这一下按键吃不吃进组合串。
+     */
+    fun quickCodeOk(key: String): Boolean =
+        if (ensureLoaded()) runCatching { quickCodeOkNative(key) }.getOrElse { false } else false
+
+    // ── 个人词库（导入 / 导出 / 编译） ──────────────────────────────────
+    //
+    // 格式两端同一份（`词<TAB>全拼`），所以「电脑上导出的词库」直接能导进手机。
+    // 文件选择器给路径，这里只调引擎；返回串是 `"OK …"` 或 `"ERR …"`，
+    // 由界面把后半截显示出来——出错时什么都不说是最让人抓狂的。
+
+    /** 导出全部词库到 [path]。返回给用户看的一句话。 */
+    fun dictExport(path: String): String =
+        if (ensureLoaded()) runCatching { dictExportNative(path) }.getOrElse { "ERR 引擎未就绪" }
+        else "ERR 引擎未就绪"
+
+    /** 把 [path] 这份词库并进个人词库（追加，不覆盖）。 */
+    fun dictImport(path: String): String =
+        if (ensureLoaded()) runCatching { dictImportNative(path) }.getOrElse { "ERR 引擎未就绪" }
+        else "ERR 引擎未就绪"
+
+    /** 把 `user_dict.txt` 编译成 `user.bin`。 */
+    fun dictCompile(): String =
+        if (ensureLoaded()) runCatching { dictCompileNative() }.getOrElse { "ERR 引擎未就绪" }
+        else "ERR 引擎未就绪"
+
+    /** 个人词库当前实际生效的来源（`user.bin 已启用` / `文本回退` / `未导入`）。 */
+    fun dictSource(): String =
+        if (ensureLoaded()) runCatching { dictSourceNative() }.getOrElse { "" } else ""
+
     // ── 原生方法 ────────────────────────────────────────────────────────
     //
     // 方法名 + 包名 + 类名拼起来就是 .so 里的符号名：
@@ -243,4 +302,18 @@ object NativeEngine {
     private external fun encodePhraseNative(pinyin: String): String
 
     private external fun isSyllableNative(text: String): Boolean
+
+    private external fun quickPrefixNative(): String
+
+    private external fun quickCandidatesNative(key: String, limit: Int): String
+
+    private external fun quickCodeOkNative(key: String): Boolean
+
+    private external fun dictExportNative(path: String): String
+
+    private external fun dictImportNative(path: String): String
+
+    private external fun dictCompileNative(): String
+
+    private external fun dictSourceNative(): String
 }

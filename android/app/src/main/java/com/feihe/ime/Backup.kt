@@ -47,8 +47,10 @@ object Backup {
     private const val MAX_ENTRY_BYTES = 32L * 1024 * 1024
 
     /** 建议文件名：`feihe_bak_20261105.zip`。按日期取，同一天导两次由系统自动加 (1)。 */
-    fun suggestedName(): String =
-        "feihe_bak_" + SimpleDateFormat("yyyyMMdd", Locale.US).format(Date()) + ".zip"
+    fun suggestedName(): String = "feihe_bak_" + stamp() + ".zip"
+
+    /** 日期戳 `20261105`。词库导出也用同一份，省得两处各写一遍格式化。 */
+    fun stamp(): String = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
 
     /**
      * 导出到 `uri`，返回一句人话摘要（给 Toast 用）。

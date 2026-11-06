@@ -24,6 +24,9 @@ dependencies = [
 [[package]]
 name = "feihe-core"
 version = "0.3.15"
+dependencies = [
+ "tyme4rs",
+]
 
 [[package]]
 name = "lazy_static"

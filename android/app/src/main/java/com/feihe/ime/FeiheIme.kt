@@ -109,6 +109,21 @@ class FeiheIme : InputMethodService() {
      */
     private var pendingSegments: List<NativeEngine.SegmentChoice> = emptyList()
 
+    /**
+     * 快捷输入态：这一串是 `/rq` 这种命令码，不是拼音。
+     *
+     * 为什么要有独立的状态位，而不是靠「`pending` 以 `/` 开头」现判：引导符来自
+     * 引擎（[NativeEngine.quickPrefix]），万一它哪天变了，靠硬编码 `/` 的判断会
+     * 静默失效；而且快捷输入的候选**不参与联想、不进词库学习**，语义和拼音完全
+     * 不同，混在一处改起来就是一串 if。
+     *
+     * 只在「中文态 + 组合串为空」时按 `/` 进入；退出方式见 DELETE/SPACE/PUNCT 分支。
+     */
+    private var quickMode = false
+
+    /** 快捷输入的候选（`/rq` → 「2024-06-01」）。点一个就上屏，空格选第一个。 */
+    private var quickWords: List<String> = emptyList()
+
     private val segmentActive: Boolean get() = segmentState != null
 
     /**
@@ -467,16 +482,36 @@ class FeiheIme : InputMethodService() {
                     pushComposing()
                     return
                 }
+                // 快捷输入的引导符 `/`：只在「中文态 + 手上没有别的组合串」时进入。
+                // 别的字母还在组合中（`nihao` 打到一半）时按 `/`，应当照旧上屏拼音
+                // 再打斜杠，否则会凭空把用户打了一半的拼音吞掉。
+                if (chinese && pending.isEmpty() && key.code == NativeEngine.quickPrefix()) {
+                    quickMode = true
+                    quickWords = emptyList()
+                    pushComposing()
+                    return
+                }
                 pending.append(key.code)
                 pushComposing()
             }
 
             KeyKind.DELETE -> {
+                // 快捷输入态：退格删码；删到只剩引导符时再按一下，整个退出。
+                // 不能在这里「删完就直接退出」——`/uui` 删回 `/` 时用户还想重打，
+                // 突然退出会和「打一半字消失」一样莫名其妙。
+                if (quickMode) {
+                    if (pending.length > 1) {
+                        pending.setLength(pending.length - 1)
+                        pushComposing()
+                    } else {
+                        quickMode = false
+                        quickWords = emptyList()
+                        pushComposing()
+                    }
                 // 展开某段时，退格先收起该段（和「返回」一个意思），别直接删拼音。
                 // chip 视图下则照常删一个字母——用户还在编辑那串码。
-                val expanded = segmentState
-                if (expanded != null && expanded.focus >= 0) {
-                    segmentState = expanded.back()
+                } else if (segmentState != null && segmentState!!.focus >= 0) {
+                    segmentState = segmentState!!.back()
                     renderCandidates()
                 } else if (pending.isNotEmpty()) {
                     pending.setLength(pending.length - 1)
@@ -491,6 +526,13 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.SPACE -> {
+                // 快捷输入态：空格 = 选第一个结果（和拼音选词同一个肌肉记忆）。
+                // 还没选出任何结果（只打了 `/` 或者码还没成命令）时，把码原样上屏——
+                // 用户想打「/」这个字符本身也走这条路，比弹一句「无效命令」友好。
+                if (quickMode) {
+                    if (quickWords.isNotEmpty()) commitQuick(quickWords.first()) else commitPending()
+                    return
+                }
                 // 分段态：空格 = 整句上屏（chip 视图末尾写了「↵上屏」提示）。
                 // 必须放在最前面，否则会落到「选第一个候选」把整句当成第一条候选。
                 if (commitSegmentIfActive()) return
@@ -510,6 +552,14 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.PUNCT -> {
+                // 快捷输入态：和拼音同一个次序——先把命令结果上屏，再粘标点。
+                // 这样「/rq，」得到「2024-06-01，」，而不是「/rq」+「，」。
+                if (quickMode) {
+                    if (quickWords.isNotEmpty()) commitQuick(quickWords.first()) else commitPending()
+                    commitText(key.code)
+                    forgetContext()
+                    return
+                }
                 // 有候选就先上屏第一个，再粘标点——否则会出现「nihc，」这种
                 // 拼音和标点混在一起的串。
                 // `thenSuggest = false`：标点之后不联想（「你好，」后面接什么都对，
@@ -526,6 +576,7 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.ENTER -> {
+                if (quickMode) quickMode = false
                 if (!commitSegmentIfActive()) commitPending()
                 commitText("\n")
                 forgetContext()
@@ -537,6 +588,11 @@ class FeiheIme : InputMethodService() {
                 KeyboardView.applyShiftState(keyboardHost, shiftState)
                 // 切英文时把中文候选丢掉：那批候选是按中文码查的，留着只会误导
                 forgetContext()
+                // 快捷输入只在中文态存在；切到英文时手上那截 `/rq` 不能留在组合态里
+                if (quickMode) {
+                    quickMode = false
+                    quickWords = emptyList()
+                }
                 refreshCandidates()
             }
 
@@ -547,6 +603,11 @@ class FeiheIme : InputMethodService() {
                 // 数字选词：code 是 "1".."9"，越界（候选没那么多）直接忽略。
                 // 下标换算在 NumberSelect.indexOf 里，那边钉死了 -1。
                 val digit = key.code.toIntOrNull() ?: return
+                if (quickMode) {
+                    val index = NumberSelect.indexOf(digit, quickWords.size) ?: return
+                    commitQuick(quickWords[index])
+                    return
+                }
                 val index = NumberSelect.indexOf(digit, candidates.size) ?: return
                 commitWord(candidates[index])
             }
@@ -561,6 +622,12 @@ class FeiheIme : InputMethodService() {
             )
 
             KeyKind.TEXT -> {
+                if (quickMode) {
+                    if (quickWords.isNotEmpty()) commitQuick(quickWords.first()) else commitPending()
+                    commitText(key.code)
+                    forgetContext()
+                    return
+                }
                 // 和标点同一套：先把手上半截拼音（或分段整句）处理掉，再打这个字符。
                 // 不这么做的话「nihao」+「1」会变成「nihao1」还在组合态里。
                 if (!commitSegmentIfActive()) {
@@ -608,6 +675,21 @@ class FeiheIme : InputMethodService() {
      * 字母**——用户还在打。
      */
     private fun refreshCandidates() {
+        if (quickMode) {
+            // 快捷输入和拼音是两套查询。**这里绝不能再查词库**：`/rq` 会被当成
+            // 双拼码，然后候选条上冒出一排毫不相干的字，用户根本没机会看到日期。
+            code = ""
+            candidates = emptyList()
+            pendingSegments = emptyList()
+            segmentState = null
+            // 只打了 `/` 时 key 是空串，引擎返回全部命令的当前值——正好当预览。
+            quickWords = NativeEngine.quickCandidates(
+                pending.toString().removePrefix(NativeEngine.quickPrefix()),
+                CandidateBarPolicy.candidateSlots(candidateLimit, false),
+            )
+            renderCandidates()
+            return
+        }
         if (!chinese || pending.isEmpty()) {
             code = ""
             candidates = emptyList()
@@ -650,6 +732,17 @@ class FeiheIme : InputMethodService() {
     private fun renderCandidates() {
         val bar = candidateBar ?: return
         renderNumberRow()
+        if (quickMode) {
+            // 快捷结果同样是「点一下就上屏」，复用候选项的画法；但**不显示联想**
+            // ——`/rq` 出来的日期后面接什么都对，联想只会把结果挤到看不见。
+            val total = quickWords.size
+            while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
+            while (bar.childCount < total) bar.addView(TextView(this))
+            quickWords.forEachIndexed { idx, word ->
+                bindCandidateView(bar.getChildAt(idx) as TextView, word, idx == 0)
+            }
+            return
+        }
         val seg = segmentState
         if (seg != null) {
             // 分段态的 chip 带选中底色、还有「‹ 返回」这种特殊项，画法不同且低频，
@@ -794,14 +887,17 @@ class FeiheIme : InputMethodService() {
      */
     private fun renderNumberRow() {
         val host = numberRowHost ?: return
+        // 快捷输入态下数字行要跟着 quickWords 走：只打一个「/」后面排着十几条命令，
+        // 没有数字行就只能用手指一条条点，这是 Windows 端不必忍受的事。
+        val shown = if (quickMode) quickWords.size else candidates.size
         val rows = if (showNumberRow && !segmentActive) {
-            NumberSelectLayout.rows(candidates.size)
+            NumberSelectLayout.rows(shown)
         } else {
             emptyList()
         }
         // 内容只由「显示开关 + 候选个数」决定，没变就不重建。打一个词要按五六个键，
         // 候选个数常常不变，这里省掉的是每次按键 10 来个 View + 9 个 GradientDrawable。
-        val key = if (rows.isEmpty()) 0 else candidates.size + 1
+        val key = if (rows.isEmpty()) 0 else shown + 1
         if (key == numberRowKey) return
         numberRowKey = key
         host.removeAllViews()
@@ -874,6 +970,31 @@ class FeiheIme : InputMethodService() {
         refreshStatus()
     }
 
+    /**
+     * 上屏一条快捷输入结果（「/rq」→「2026-02-14」），然后退出快捷输入态。
+     *
+     * 和 [commitWord] 的两处刻意不同：
+     * - **不学词**：日期、时间、UUID 每次都不一样，记进「上一词→这一词」只会
+     *   污染联想表（Windows 端也是这么定的）。
+     * - **不联想**：上屏的是「2024-06-01」，拿它去查下一个词没有任何意义。
+     */
+    private fun commitQuick(word: String) {
+        val ic = currentInputConnection ?: return
+        ic.commitText(word, 1)
+        quickMode = false
+        quickWords = emptyList()
+        pending.setLength(0)
+        code = ""
+        candidates = emptyList()
+        pendingSegments = emptyList()
+        segmentState = null
+        suggestions = emptyList()
+        // 上屏的是一串数字/符号，不能拿它当联想上下文
+        prevWord = ""
+        renderCandidates()
+        refreshStatus()
+    }
+
     private fun commitPending() {
         if (pending.isEmpty()) return
         val ic = currentInputConnection ?: return
@@ -884,6 +1005,8 @@ class FeiheIme : InputMethodService() {
     }
 
     private fun clearComposing() {
+        quickMode = false
+        quickWords = emptyList()
         pending.setLength(0)
         code = ""
         candidates = emptyList()
@@ -921,6 +1044,10 @@ class FeiheIme : InputMethodService() {
             if (pending.isNotEmpty()) {
                 append(" · ")
                 append(pending)
+                // 快捷输入态的码是命令码，不是拼音，别给它配一个「→实际用的码」
+                if (quickMode) {
+                    append(if (quickWords.isEmpty()) "  ·  没有这条命令" else "  ·  快捷输入")
+                }
                 // 双拼模式下码就是输入的字母，两者相同，不显示箭头；
                 // 全拼模式（或双拼模式退回全拼解释）才有 `nihao→nihc`。
                 if (code.isNotEmpty() && code != pending.toString()) {

@@ -47,6 +47,7 @@ pub mod number;
 pub mod paths;
 pub mod phrase;
 pub mod pin;
+pub mod quick;
 pub mod segment;
 pub mod shuangpin;
 pub mod zhconv;

@@ -12,3 +12,6 @@ name = "feihe_core"
 # 一条 `windows` 都不许出现——它在 Android/arm64 上根本编不过，那正是拆 crate
 # 的全部理由。CI 里有 `cargo tree` 的闸（见 docs/Android-方案.md M1）。
 [dependencies]
+# 唯一的第三方依赖：农历 / 干支 / 节气。纯 Rust 实现，不碰任何系统 API，
+# 所以 Android/arm64 上照样编得过（见 `quick` 模块文档）。
+tyme4rs = "1.5.0"

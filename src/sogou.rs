@@ -731,7 +731,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn job_for_file_maps_by_extension() {
         let j = job_for_file(Path::new("下载/经济学.scel")).unwrap();
         assert!(matches!(j.kind, Kind::Scel));

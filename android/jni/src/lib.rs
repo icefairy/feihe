@@ -337,3 +337,8 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_reloadAllNative<'l
     // 整个输入法进程）。
     let _ = std::panic::catch_unwind(feihe_core::backup::reload_all);
 }
+
+// 后加的入口分文件放：lib.rs 已经 340 行，再往里塞会让「同一个功能的两端」
+// 越离越远。子模块只用到父模块里的 make_string / read_string。
+mod dict_extra;
+mod quick_extra;

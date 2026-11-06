@@ -126,7 +126,7 @@
 | `pin.rs` / `demote.rs` / `custom.rs` | 置顶 / 降权 / 自定义短语 | 同上 |
 | `next.rs` | 联想（含内置表） | 完全纯逻辑 |
 | `number.rs` / `calc.rs` | 中文数字 / 算式 | 纯函数 |
-| `quick.rs` | 快捷输入 | 依赖 `GetLocalTime`，换 `chrono`-less 的 `std::time` + 时区处理 |
+| `quick.rs` | 快捷输入 | **已搬**（2026-02）：`core/src/quick.rs`，`GetLocalTime` 换 `core::clock`，日历/农历/干支/节气走 `tyme4rs`——唯一第三方依赖 |
 | `hint.rs` | 易错词读音 | 纯查表 |
 | `sogou.rs` | 搜狗词库导入 | 纯解析（文件选择在壳里） |
 
@@ -441,7 +441,7 @@ transducer 的解码路径；paraformer 是 CIF + 注意力解码，没有这个
 |---|---|---|---|
 | **M1** | crate 拆分：`feihe-core` + `feihe-win`，`textservice.rs` 拆成 `session.rs`（纯状态机）+ 壳 | **2–3 周** | Windows 端 313 项单测全绿 + 真机逐字对比一致 |
 | **M2** | Android 最小可用：IME 骨架 + 26 键键盘 + 候选条 + 双拼输入 + 上屏 + 读配置 | **3–4 周** | 能装、能打字、能选词、能标点 |
-| **M3** | 功能补齐：联想 / 短语 / 置顶 / 降权 / 简繁 / 模糊音 / 纠错 / 快捷输入 | **2–3 周** | 与 Windows 端功能对齐（除 Windows 专属项） |
+| **M3** | 功能补齐：联想 / 短语 / 置顶 / 降权 / 简繁 / 模糊音 / 纠错 / 快捷输入 | **✅ 2026-02** | 与 Windows 端功能对齐（除 Windows 专属项）。**快捷输入**：`quick.rs` 整体搬进 `feihe-core/src/quick.rs`（`GetLocalTime` → `core::clock`、`CoCreateGuid` → 时间派生模拟 v4、`fancha` → `core::fancha`），桌面壳只剩 `pub use` 门面，两端共用一份命令表；JNI 三个入口（`quickPrefixNative` / `quickCandidatesNative` / `quickCodeOkNative`）在 `android/jni/src/quick_extra.rs`，Kotlin 侧 `quickMode` 是独立状态位（不靠 `pending` 现判），快捷候选不学词不联想 |
 | **M4** | 语音：sherpa-onnx 集成 + 79 MB 模型打进 assets（`noCompress`）+ 句末标点 + 语音面板 | **✅ 2026-11-05** | 代码完成：按住 🎤 / silero VAD / paraformer `newFromAsset` / 句末标点 / 设置页开关与权限。APK 已核对 5 个 `.so` + 3 个 assets 齐全、`.onnx` STORED。**交付判据仍差真机验证**（adb WiFi 掉线），见 `handoff.md` |
 | **M5** | 设置页、皮肤、剪贴板、长按符号、手感打磨 | 持续 | — |
 
@@ -585,7 +585,25 @@ Android 的 26 键键盘不一样——用户按的是字母，屏幕上没有�
 单测喂的是**假探针**（`resolve_code_with(input, mode, scheme, probe)`），不查真词库：
 `lookup` 的结果进断言这条，`handoff` 里已经记过三次，个人词库一导入当场不成立。
 
-### 11.3 数据备份：清单在 core，容器在壳
+### 11.3 个人词库的单独导入 / 导出
+
+整包备份（11.4）解决「换手机」；但更常见的是「把搜狗词库导进来」和「把手机上的
+词带走」。这两件事塞在 zip 里说不通——用户得先知道 zip 是什么。
+
+所以设置页单独一张「个人词库」卡片，三个动作：**导入词库** / **导出词库** /
+**编译个人词库**，走 JNI 的 `dictExportNative` / `dictImportNative` /
+`dictCompileNative` / `dictSourceNative`（`android/jni/src/dict_extra.rs`）。
+
+- 格式就是 `user_dict.txt` 那一套纯文本（每行「词 + Tab + 全拼」），桌面端的
+  「导出词库」给的就是它。**纯文本是刻意的**：能记事本打开、能拷到电脑上用。
+- SAF 给的是 `Uri`，引擎只认路径。Kotlin 侧 `dictTransfer(uri, import)` 负责
+  「Uri ⇄ cacheDir 临时文件」那一小段，用完就删。**不给 core 传流**：那要么引入
+  一次 JNI 回调，要么在 core 里开个只有 Android 用的口子，都比一次拷贝更危险。
+- 导出是**先写临时文件、成功了才搬到用户选的位置**，失败不留空文件。
+- 编译不是必做的：没编也能查（走文本回退），编了才走映射。`CompileOutcome::NoSource`
+  不算失败——给「先导入一份」的人话，不抛 ERR。
+
+### 11.4 数据备份：清单在 core，容器在壳
 
 用户要「导出一份包含全部自有数据的备份」。边界划在**清单**上：
 
@@ -609,7 +627,7 @@ Android 的 26 键键盘不一样——用户按的是字母，屏幕上没有�
 里的名字（一字不差），`../config.ini` 这类路径天然进不来，单个文件超过 32 MB 直接拒绝
 （挡解压炸弹）。
 
-### 11.4 长串自动整句：分段规则从 `textservice` 搬进 core
+### 11.5 长串自动整句：分段规则从 `textservice` 搬进 core
 
 手机上打 `vhsjli` 之前是空候选条——3 个音节、词库里没有「张三李」这个词，于是什么
 都没有。桌面端不是这样：它进分词态，切成 `张三|李` 让人逐段选。手机上没做逐段选
@@ -633,7 +651,7 @@ DP 于是认为整串就是一个词、`codes.len() >= 2` 不成立、退回逐�
 `wobuzhidao` → 我不知道、`zhonghuarenmingongheguo` → 中华人民共和国、
 `mmap`（编码混英文）→ 整句放弃、什么都不给。耗时 0.1–2 ms，只在「整码查不到」时才跑。
 
-### 11.5 数字页：3×3 九宫格 + 独立符号页
+### 11.6 数字页：3×3 九宫格 + 独立符号页
 
 第一版数字页是每行 5 个键（`1 2 3 4 5` / `6 7 8 9 0`），每个键只有屏宽 1/5，
 手指容易按偏。改成电话拨号盘那种三列九宫格后，键宽接近 1/3。

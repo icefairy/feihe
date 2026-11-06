@@ -1,0 +1,816 @@
+//! 快捷输入：日期 / 时间 / 星期 / 时间戳 / 农历 / 干支 / 节气 / 剪贴板反查
+//!
+//! ## 为什么要有引导符
+//!
+//! 搜狗是**全拼**，所以 `rq`、`sj` 这种两字母码不会撞车。飞鹤是**双拼**，两字母
+//! 恰好就是一个音节：`sj` = `s`+`an` = `san`（三），`xq` = `x`+`iu` = `xiu`（休）。
+//! 直接照搬会有一半命令被词库吃掉，行为不可预测。
+//!
+//! 所以统一用引导符引导：`/rq` 日期、`/sj` 时间。引导符不属于任何双拼方案，
+//! 也不会出现在全拼音节里，永远不会有歧义。
+//!
+//! ## 引导符为什么是 `/`
+//!
+//! 最初用 `\`，但 `\` 是搜狗用户的「顿号键」——中文模式下按 `\` 就该出 `、`。
+//! 引导符占着它，`、` 就打不出来了。
+//!
+//! 中间一度搬到反引号（`` ` ``），理由是「`/` 和 `\` 都出顿号」。后来改回 `/`：
+//! 顿号留一个键就够（`\` 是搜狗习惯，也是绝大多数人的第一反应），而 `/` 位置好记、
+//! 好按，比反引号适合当功能入口。
+//!
+//! 代价是中文模式下 `/` 不再出 `、`（也不会出 `/`），想打半角斜杠就敲 `/` 再按回车
+//! （见 `textservice::commit_raw`）。`·`（原来在反引号上）仍在上屏符号面板里。
+//!
+//! ## 前缀匹配
+//!
+//! 九个命令的首字母互不相同（r / s / x / d / t / n / g / j / f），所以 `/r` 就能唯一
+//! 确定「日期」。打 `/rq` 和 `/r` 效果一样，不要求用户记全。
+//!
+//! 只打一个引导符时列出全部命令的预览——按空格得到最常用的日期，按数字选别的。
+//! 这样不用记码也能用。
+//!
+//! ## 两个「要带参数」的命令
+//!
+//! 上面九个命令的后面不能再打东西（`/rqx` 就是空）。`/c` 和 `/u` 相反，
+//! 参数本身就是内容：
+//!
+//! ```text
+//! /c1+2      → 3 / 1+2=3
+//! /c123      → 一百二十三 / 壹佰贰拾叁 / 一百二十三元整 / 壹佰贰拾叁元整
+//! /c1998-3-8 → 一九九八年三月八日 / 1998年3月8日 / 1998-03-08
+//! /u4e00     → 一
+//! /uuid      → 随机 UUID
+//! ```
+//!
+//! 算式和码点都要**数字键**。而输入法里数字键是选候选的——所以进了这两种模式，
+//! 数字键一律属于参数，选候选改用空格（第一项）/ 左右 / 上下 / 鼠标。这条规则
+//! 简单且可预测：「进了 `/c`，你就是在写算式」。
+//!
+//! 算式用 `c`（calculate）而不是搜狗的 `v`：**双拼里 `v` 是 `zh` 键**，`vi`/`vs`/`vu`
+//! 全是真实编码，拿它当引导符会把一大片常用字堵掉。
+//!
+//! 码点用 `u`（unicode），`/uuid` 归它——`uuid` 不是合法十六进制，不会和码点撞。
+//!
+//! ## 农历 / 干支 / 节气来自 Tyme
+//!
+//! 这三样都要「历法级」正确：农历要处理闰月、干支要按节气换月、四柱要按子时换日。
+//! 自己写等于重造一遍万年历，且几乎必然在边界上错。所以统一用
+//! [Tyme](https://6tail.cn/tyme.html)（`tyme4rs`，MIT）：它的节气算法引自寿星天文历，
+//! 农历和干支用的是同一套儒略日，三者不会互相打架。
+//!
+//! ## 为什么这个模块在 core 里（原来在壳里）
+//!
+//! 整个模块**一行系统调用都不剩**之后，留在 Windows 壳里就成了 Android 拿不到的功能：
+//!
+//! - 「现在几点」改走 [`crate::clock`]——壳注册 `GetLocalTime`（Windows）、
+//!   Android 注册 UTC 偏移，两边都对，而这本来就是 config / custom 早就定下的规矩；
+//! - UUID 不再调 `CoCreateGuid`，改成从时间 + 计数器派生的 v4 形态
+//!   （见 [`uuid_forms`] 的说明：形状要合法，唯一性对输入法这个用法（粘进工单）
+//!   够用，不值得为此在 core 里引 `windows`）；
+//! - 反查读剪贴板走 [`crate::fancha::from_clipboard`]，剪贴板读取器由壳注入。
+//!
+//! 时间基准是**本机本地时间**，不做时区换算——用户问「今天农历几号」问的是他
+//! 眼前这台机器的今天。
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+use tyme4rs::tyme::solar::{SolarDay, SolarTime};
+use tyme4rs::tyme::{Culture, Tyme};
+
+/// 引导符。见模块文档：双拼两字母会和音节撞车，必须有引导符；
+/// 顿号留给 `\` 一个键，`/` 位置好按，拿来当功能入口。
+pub const PREFIX: char = '/';
+
+/// 计算模式的子前缀：`/c` 后面是算式 / 数字 / 日期。
+pub const EXPR_KEY: char = 'c';
+
+/// 码点模式的子前缀：`/u4e00` 出「一」，`/uuid` 出随机 UUID。
+pub const UNI_KEY: char = 'u';
+
+/// `/v` 金额：数字 → 财务大写金额（`/v123` → 壹佰贰拾叁元整），开票场景专用。
+/// 和 `/c` 的区别是候选里只有金额，不用在一堆读法变体里挑。
+pub const AMT_KEY: char = 'v';
+
+/// 一次取到的时间快照。同一批候选必须用同一个时刻，否则「17:36」和「17:36:50」
+/// 可能跨秒对不上。
+struct Now {
+    year: u16,
+    month: u16,
+    day: u16,
+    /// 0 = 周日
+    weekday: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    /// Unix 秒
+    epoch: u64,
+    /// Unix 毫秒
+    epoch_ms: u128,
+}
+
+impl Now {
+    /// 从 [`crate::clock::now`] 取本地时间，再从 `SystemTime` 取 Unix 时间戳。
+    ///
+    /// 时间戳不能用 `clock::LocalTime` 反算：那个结构是「本地时间」，而时间戳要的是
+    /// UTC，两者之间差一个时区偏移，而偏移是壳注入的、core 不知道它准不准。
+    fn local() -> Self {
+        let t = crate::clock::now();
+        let (epoch, epoch_ms) = match std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+        {
+            Ok(d) => (d.as_secs(), d.as_millis()),
+            Err(_) => (0, 0),
+        };
+        Self {
+            year: t.year,
+            month: t.month,
+            day: t.day,
+            weekday: t.weekday,
+            hour: t.hour,
+            minute: t.minute,
+            second: t.second,
+            epoch,
+            epoch_ms,
+        }
+    }
+
+    fn date_cn(&self) -> String {
+        format!("{}年{}月{}日", self.year, self.month, self.day)
+    }
+
+    fn date_dash(&self) -> String {
+        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+
+    fn time_hms(&self) -> String {
+        format!("{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
+    }
+
+    fn time_hm(&self) -> String {
+        format!("{:02}:{:02}", self.hour, self.minute)
+    }
+
+    fn weekday_cn(&self) -> &'static str {
+        const NAMES: [&str; 7] = [
+            "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六",
+        ];
+        NAMES[(self.weekday as usize).min(6)]
+    }
+
+    fn weekday_short(&self) -> &'static str {
+        const NAMES: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+        NAMES[(self.weekday as usize).min(6)]
+    }
+
+    /// 12 小时制的钟点，`17` → `5`
+    fn hour12(&self) -> u16 {
+        let h = self.hour % 12;
+        if h == 0 {
+            12
+        } else {
+            h
+        }
+    }
+
+    fn ampm(&self) -> &'static str {
+        if self.hour < 12 {
+            "上午"
+        } else {
+            "下午"
+        }
+    }
+}
+
+/// 农历 / 干支 / 节气的缓存。
+///
+/// 这三样走 Tyme 的天文算法，比读一次系统时间贵；而 `candidates()` 每敲一个键
+/// 都会重算（只打引导符时更是要把 8 个命令全列出来）。同一分钟内的输出完全一样
+/// ——农历只到日、四柱的时柱两小时才换——所以按「年月日时分」缓存，三样一起算。
+static CACHE: Mutex<Option<CacheEntry>> = Mutex::new(None);
+
+struct CacheEntry {
+    stamp: String,
+    lunar: Vec<String>,
+    ganzhi: Vec<String>,
+    term: Vec<String>,
+}
+
+/// 取缓存；分钟变了就三样一起重算。`pick` 决定要哪一份。
+fn cached(n: &Now, pick: fn(&CacheEntry) -> &Vec<String>) -> Vec<String> {
+    let stamp = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        n.year, n.month, n.day, n.hour, n.minute
+    );
+    let mut g = match CACHE.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    };
+    if !g.as_ref().is_some_and(|e| e.stamp == stamp) {
+        *g = Some(CacheEntry {
+            lunar: lunar_candidates(n),
+            ganzhi: ganzhi_candidates(n),
+            term: term_candidates(n),
+            stamp,
+        });
+    }
+    pick(g.as_ref().expect("刚填过")).clone()
+}
+
+/// Tyme 的 `SolarDay`：本地时间的年月日直接当公历，不做时区换算。
+fn solar_day(n: &Now) -> SolarDay {
+    SolarDay::from_ymd(n.year as isize, n.month as usize, n.day as usize)
+}
+
+/// 农历：农历丙午年八月廿三 / 丙午年八月廿三 / 八月廿三
+///
+/// 干支年用**农历年**的干支（按春节换年），不是四柱的年柱（按立春换年）——
+/// 「今年什么年」问的是农历。
+fn lunar_candidates(n: &Now) -> Vec<String> {
+    let day = solar_day(n).get_lunar_day();
+    // 干支年用**农历年**的干支（按春节换年），不是四柱的年柱（按立春换年）——
+    // 「今年什么年」问的是农历。`get_year_sixty_cycle` 已废弃，走 SixtyCycleDay。
+    let gz = day.get_sixty_cycle_day().get_year().to_string();
+    let month = day.get_lunar_month().get_name(); // 八月 / 闰六月
+    let d = day.get_name(); // 廿三
+    vec![
+        format!("农历{gz}年{month}{d}"),
+        format!("{gz}年{month}{d}"),
+        format!("{month}{d}"),
+    ]
+}
+
+/// 干支四柱：丙午年 乙酉月 壬寅日 丁未时
+///
+/// 交给 Tyme 的 `EightChar`：月柱按节气分界、日柱按子时（23:00）换日，
+/// 这两条自己写几乎必错。
+fn ganzhi_candidates(n: &Now) -> Vec<String> {
+    let time = SolarTime::from_ymd_hms(
+        n.year as isize,
+        n.month as usize,
+        n.day as usize,
+        n.hour as usize,
+        n.minute as usize,
+        n.second as usize,
+    );
+    let ec = time.get_lunar_hour().get_eight_char();
+    let (y, m) = (ec.get_year().to_string(), ec.get_month().to_string());
+    let (d, h) = (ec.get_day().to_string(), ec.get_hour().to_string());
+    vec![
+        format!("{y}年 {m}月 {d}日 {h}时"),
+        format!("{y} {m} {d} {h}"),
+        format!("{y}年 {m}月 {d}日"),
+    ]
+}
+
+/// 下一个节气（精确到日）：2026年11月7日 立冬
+///
+/// `get_term_day()` 给的是「今天所在的节气 + 已经过了几天」，所以 `day_index == 0`
+/// 说明今天就是节气日——那就是最近的一个，不用往后跳。
+fn next_term_day(n: &Now) -> (SolarDay, String) {
+    let td = solar_day(n).get_term_day();
+    let term = if td.get_day_index() == 0 {
+        td.get_solar_term()
+    } else {
+        td.get_solar_term().next(1)
+    };
+    (term.get_solar_day(), term.get_name())
+}
+
+fn term_candidates(n: &Now) -> Vec<String> {
+    let (day, name) = next_term_day(n);
+    vec![
+        format!(
+            "{}年{}月{}日 {name}",
+            day.get_year(),
+            day.get_month(),
+            day.get_day()
+        ),
+        format!("{}月{}日 {name}", day.get_month(), day.get_day()),
+        name,
+    ]
+}
+
+struct Cmd {
+    /// 引导符后面的码
+    key: &'static str,
+    /// 给用户看的名字
+    label: &'static str,
+    /// 只打一个 `/` 时的预览文案。
+    ///
+    /// `None` = 用 `build` 的第一项（时间类命令「此刻的值」本身就是最好的预览）。
+    /// `Some` = 不能提前求值的那类：`/fc` 要去读剪贴板，预览列一遍就把用户
+    /// 当前复制的内容白读八次，还可能在剪贴板被占用时卡住。
+    preview: Option<&'static str>,
+    build: fn(&Now) -> Vec<String>,
+}
+
+const CMDS: &[Cmd] = &[
+    Cmd {
+        key: "rq",
+        label: "日期",
+        preview: None,
+        build: |n| {
+            vec![
+                n.date_cn(),
+                n.date_dash(),
+                format!("{:04}/{:02}/{:02}", n.year, n.month, n.day),
+                format!("{:04}.{:02}.{:02}", n.year, n.month, n.day),
+                format!("{}月{}日", n.month, n.day),
+                format!("{}日", n.day),
+            ]
+        },
+    },
+    Cmd {
+        key: "sj",
+        label: "时间",
+        preview: None,
+        build: |n| {
+            vec![
+                n.time_hm(),
+                n.time_hms(),
+                format!("{}{}点{:02}分", n.ampm(), n.hour12(), n.minute),
+                format!("{}{}:{:02}", n.ampm(), n.hour12(), n.minute),
+            ]
+        },
+    },
+    Cmd {
+        key: "xq",
+        label: "星期",
+        preview: None,
+        build: |n| vec![n.weekday_cn().to_string(), n.weekday_short().to_string()],
+    },
+    Cmd {
+        key: "dt",
+        label: "日期时间",
+        preview: None,
+        build: |n| {
+            vec![
+                format!("{} {}", n.date_dash(), n.time_hms()),
+                format!("{} {}", n.date_dash(), n.time_hm()),
+                format!("{} {}", n.date_cn(), n.time_hm()),
+                format!("{} {} {}", n.date_cn(), n.time_hm(), n.weekday_cn()),
+            ]
+        },
+    },
+    Cmd {
+        key: "ts",
+        label: "时间戳",
+        preview: None,
+        build: |n| vec![n.epoch.to_string(), n.epoch_ms.to_string()],
+    },
+    Cmd {
+        key: "nl",
+        label: "农历",
+        preview: None,
+        build: |n| cached(n, |c| &c.lunar),
+    },
+    Cmd {
+        key: "gz",
+        label: "干支",
+        preview: None,
+        build: |n| cached(n, |c| &c.ganzhi),
+    },
+    Cmd {
+        key: "jq",
+        label: "节气",
+        preview: None,
+        build: |n| cached(n, |c| &c.term),
+    },
+    // 反查：读剪贴板里的汉字，给每个字的音 + 辅助码，以及可以直接照着敲的连打串。
+    // 不做「此刻的值」预览（见 `preview` 字段注释）。
+    Cmd {
+        key: "fc",
+        label: "反查",
+        preview: Some("反查（复制文字后敲 /fc）"),
+        build: |_| crate::fancha::from_clipboard(),
+    },
+    // 下面三条**要带参数**，`candidates` 在走进这张表之前就把它们接走了；
+    // 放在这里只为两件事：`commands()` 能列出来（设置窗、文档），
+    // 以及只打 `/` 时的预览里有一行提示。`build` 永远不会被调到。
+    Cmd {
+        key: "c",
+        label: "算式",
+        preview: Some("算式 / 数字（/c1+2 → 3）"),
+        build: |_| Vec::new(),
+    },
+    Cmd {
+        key: "u",
+        label: "字符",
+        preview: Some("码点 / UUID（/u4e00 → 一）"),
+        build: |_| Vec::new(),
+    },
+    Cmd {
+        key: "v",
+        label: "金额",
+        preview: Some("/v123 → 壹佰贰拾叁元整（/v0.5 → 伍角）"),
+        build: |_| Vec::new(),
+    },
+];
+
+/// 可用命令清单（设置窗/文档里展示用）
+pub fn commands() -> Vec<(&'static str, &'static str)> {
+    CMDS.iter().map(|c| (c.key, c.label)).collect()
+}
+
+/// 算式里允许出现的字符。
+///
+/// `x` 也算：`*` 要按 Shift+8，笔记本上不一定好按，而算式语境里 `x` 没有别的意思。
+/// 汉字和别的字母一律不收——宁可字符进不去，也不要让一个手误变成「看起来对的错答案」。
+pub fn is_expr_char(c: char) -> bool {
+    c.is_ascii_digit() || matches!(c, '+' | '-' | '*' | '/' | '(' | ')' | '.' | '^' | 'x')
+}
+
+/// 引导符后面的内容是不是合法编码。
+///
+/// 四种形态：带参数的 `/c…`（算式字符）、`/u…`（十六进制或 `uuid` 的前缀）、
+/// `/v…`（金额数字）、
+/// 其余纯小写字母（日期之类的固定命令）。
+///
+/// **中间状态必须合法**：用户打 `/uuid` 会依次经过 `/u`、`/uu`、`/uui`…… 中间
+/// 任何一步被拒，组合串就断了，用户看到的是「打一半汉字消失」。所以 `uuid`
+/// 按前缀放行。
+pub fn code_ok(rest: &str) -> bool {
+    if rest.is_empty() {
+        return true;
+    }
+    if let Some(body) = rest.strip_prefix(EXPR_KEY) {
+        return body.chars().all(is_expr_char);
+    }
+    if let Some(body) = rest.strip_prefix(AMT_KEY) {
+        // 数字 + 至多一个小数点 + 角分两位；中间态（/v1、/v12、/v1.）都必须合法
+        return crate::calc::amount_ok(body);
+    }
+    if let Some(body) = rest.strip_prefix(UNI_KEY) {
+        let hex = body.len() <= 6
+            && body
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        // `body` 是去掉首个 `u` 之后的部分，而 `uuid` 也是 `u` 开头——所以比的是
+        // `uid`（`uuid` 去掉第一个字母）的前缀，不是 `uuid` 的前缀。
+        return hex || "uid".starts_with(body);
+    }
+    rest.chars().all(|c| c.is_ascii_lowercase())
+}
+
+/// `4e00` → `一`。不是码点（超范围、代理区、控制字符）返回 `None`。
+fn unicode_form(hex: &str) -> Option<String> {
+    if hex.is_empty() || hex.len() > 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let c = char::from_u32(u32::from_str_radix(hex, 16).ok()?)?;
+    // 控制字符上屏等于什么都看不见，还会把宿主的光标搞乱
+    (!c.is_control()).then(|| c.to_string())
+}
+
+/// UUID 的计数器，保证同一毫秒内连打两次 `/uuid` 也不撞。
+static UUID_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 一条随机 UUID（v4 形态）。返回「小写 + 全大写」两条。
+///
+/// ## 为什么不调 `CoCreateGuid`（Windows）/ `getrandom`（都要引依赖）
+///
+/// 输入法里 UUID 只有一个用法：**粘进工单、订单号、日志里去配一个唯一标识**。
+/// 它不需要密码学强度，也不需要在两台机器之间保证全局唯一——真正需要那些的场合
+/// 不该用输入法生成。而为了这一点点需求，要么在 core 里引 `windows`（Android 编不过），
+/// 要么引一个随机数 crate（违反「core 只许 tyme4rs」），两条都更贵。
+///
+/// 所以按 RFC 4122 的**形状**自己拼：版本位置固定写 4、变体位写 8/9/a/b，
+/// 剩下 122 位由「纳秒时间戳 × 计数器 × 毫秒」混出来。同一纳秒同一计数器值才会
+/// 重复，而计数器单调递增，进程内绝无可能。
+fn uuid_forms() -> Vec<String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let seq = UUID_SEQ.fetch_add(1, Ordering::Relaxed);
+
+    // splitmix64：纯算术扩散，把「纳秒」和「计数器」的低位搅开。不需要密码学性质，
+    // 只需要相邻输入的输出看着毫不相干——这正是不引依赖的价格。
+    let mix = |mut x: u64| {
+        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let a = mix(nanos ^ (seq << 32));
+    let b = mix(a ^ seq.wrapping_mul(0x5851_F42D_4C95_7F2D));
+
+    // 16 字节：前 8 字节来自 a，后 8 字节来自 b
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&a.to_be_bytes());
+    bytes[8..].copy_from_slice(&b.to_be_bytes());
+    // 版本 4（第 7 字节高 4 位）与变体 10xx（第 9 字节高 2 位）
+    bytes[6] = (bytes[6] & 0x0F) | 0x40;
+    bytes[8] = (bytes[8] & 0x3F) | 0x80;
+
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let text = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    );
+    vec![text.clone(), text.to_uppercase()]
+}
+
+/// 给引导符（`PREFIX`，即 `/`）后面的码生成候选。
+///
+/// - 空串：列出全部命令的当前值预览（按空格拿日期，按数字选别的）
+/// - 是某个命令的前缀：展开该命令的所有格式
+/// - `/c…`：算式 / 数字 / 日期，见 [`crate::calc`]
+/// - `/u…`：码点，`uuid` 出随机 UUID
+/// - `/v…`：金额，财务大写在前、小写读法在后
+/// - 匹配不到：空
+pub fn candidates(key: &str) -> Vec<String> {
+    if !code_ok(key) {
+        return Vec::new();
+    }
+    // 带参数的三条先接走，不能进下面那张表（表是按前缀匹配的，`/c` 会命中 `c` 条目）
+    if let Some(body) = key.strip_prefix(EXPR_KEY) {
+        return crate::calc::forms(body);
+    }
+    if let Some(body) = key.strip_prefix(AMT_KEY) {
+        return crate::calc::amount_forms(body);
+    }
+    if let Some(rest) = key.strip_prefix(UNI_KEY) {
+        // 整串就是 `uuid` 才生成；`/uid` 是「十六进制里没有 i」→ 交给下面返回空
+        if key == "uuid" {
+            return uuid_forms();
+        }
+        return unicode_form(rest).into_iter().collect();
+    }
+    if !key.chars().all(|c| c.is_ascii_lowercase()) {
+        return Vec::new();
+    }
+
+    let hits: Vec<&Cmd> = CMDS.iter().filter(|c| c.key.starts_with(key)).collect();
+    if hits.is_empty() {
+        return Vec::new();
+    }
+
+    let now = Now::local();
+    if hits.len() == 1 {
+        return (hits[0].build)(&now);
+    }
+    // 多个命令都匹配（只可能是空串）：各取第一项当预览
+    hits.iter()
+        .filter_map(|c| match c.preview {
+            Some(p) => Some(p.to_string()),
+            None => (c.build)(&now).into_iter().next(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amount_command_converts_to_uppercase_money() {
+        assert_eq!(candidates("v123"), ["壹佰贰拾叁元整", "一百二十三元整"]);
+        assert_eq!(candidates("v123.05"), ["壹佰贰拾叁元零伍分", "一百二十三元零五分"]);
+        assert!(candidates("v12.345").is_empty(), "角分只有两位");
+        assert!(code_ok("v1"), "中间态 /v1 必须合法");
+        assert!(code_ok("v1."), "刚敲完点也得合法，否则组合串断掉");
+        assert!(!code_ok("v1.2.3"));
+    }
+
+    #[test]
+    fn empty_key_lists_all_commands() {
+        let r = candidates("");
+        println!("预览: {r:?}");
+        for (k, name) in commands() {
+            println!("\\{k} {name}: {:?}", candidates(k));
+        }
+        assert_eq!(r.len(), CMDS.len(), "got {r:?}");
+        // 第一项是日期，形如 2026年10月22日
+        assert!(r[0].contains('年') && r[0].contains('月') && r[0].contains('日'));
+    }
+
+    #[test]
+    fn prefix_is_enough() {
+        // 首字母互不相同，所以一个字母就能确定命令
+        assert_eq!(candidates("r"), candidates("rq"));
+        assert_eq!(candidates("s"), candidates("sj"));
+        assert_eq!(candidates("x"), candidates("xq"));
+        assert_eq!(candidates("d"), candidates("dt"));
+        assert_eq!(candidates("t"), candidates("ts"));
+        assert_eq!(candidates("n"), candidates("nl"));
+        assert_eq!(candidates("g"), candidates("gz"));
+        assert_eq!(candidates("j"), candidates("jq"));
+    }
+
+    /// 固定时刻。农历 / 干支 / 节气都要能拿确定的输入去测，不能依赖「今天」。
+    fn at(y: u16, m: u16, d: u16, h: u16, mi: u16, s: u16) -> Now {
+        Now {
+            year: y,
+            month: m,
+            day: d,
+            weekday: 0,
+            hour: h,
+            minute: mi,
+            second: s,
+            epoch: 0,
+            epoch_ms: 0,
+        }
+    }
+
+    #[test]
+    fn lunar_matches_spring_festival() {
+        // 2024-02-10 是甲辰年正月初一（春节），公开可查
+        let r = lunar_candidates(&at(2024, 2, 10, 12, 0, 0));
+        assert_eq!(r[0], "农历甲辰年正月初一");
+        assert_eq!(r[1], "甲辰年正月初一");
+        assert_eq!(r[2], "正月初一");
+        // 前一天是癸卯年十二月三十（除夕）。Tyme 用「十二月」不用「腊月」，
+        // 这里跟着库的措辞走，别自己改一套。
+        let r = lunar_candidates(&at(2024, 2, 9, 12, 0, 0));
+        assert_eq!(r[2], "十二月三十");
+    }
+
+    #[test]
+    fn lunar_handles_leap_month() {
+        // 2023 年闰二月，闰月初一落在 3 月 22 日
+        let r = lunar_candidates(&at(2023, 3, 22, 12, 0, 0));
+        assert!(r[2].starts_with("闰二月"), "got {r:?}");
+    }
+
+    #[test]
+    fn ganzhi_year_switches_at_lichun_not_new_year() {
+        // 年柱按立春（2024-02-04）换，不按春节（2024-02-10）换
+        let before = ganzhi_candidates(&at(2024, 1, 15, 12, 0, 0));
+        let after = ganzhi_candidates(&at(2024, 2, 10, 12, 0, 0));
+        assert!(before[2].starts_with("癸卯年"), "{before:?}");
+        assert!(after[2].starts_with("甲辰年"), "{after:?}");
+        // 四柱各柱都是两字，空格分隔的四柱版正好 4 段
+        assert_eq!(after[1].split_whitespace().count(), 4, "{after:?}");
+        assert!(after[0].ends_with('时'), "{after:?}");
+    }
+
+    #[test]
+    fn term_is_the_next_one_and_lands_on_a_term_day() {
+        let n = at(2026, 10, 23, 12, 0, 0);
+        let today = solar_day(&n);
+        let (day, name) = next_term_day(&n);
+        // 给出的那天本身就是节气日
+        assert_eq!(day.get_term_day().get_day_index(), 0, "{name} {day}");
+        // 不超过今天 +16 天（一个节气间隔最长约 15.7 天）
+        assert!(!today.is_after(day), "must not be in the past: {day}");
+        assert!(today.subtract(day) <= 16, "{name} {day}");
+        // 三个候选：完整日期 / 月日 / 只有节气名
+        let r = term_candidates(&n);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[2], name);
+        assert!(r[0].ends_with(&name) && r[1].ends_with(&name), "{r:?}");
+    }
+
+    #[test]
+    fn term_on_a_term_day_returns_today() {
+        // 2024-02-04 是立春，当天问「下一个节气」就给今天这个
+        let (day, name) = next_term_day(&at(2024, 2, 4, 12, 0, 0));
+        assert_eq!(name, "立春");
+        assert_eq!((day.get_year(), day.get_month(), day.get_day()), (2024, 2, 4));
+    }
+
+    #[test]
+    fn tyme_cache_returns_same_result_within_a_minute() {
+        let n = at(2026, 10, 23, 12, 30, 0);
+        let a = lunar_candidates(&n);
+        let b = cached(&n, |c| &c.lunar);
+        let c = cached(&at(2026, 10, 23, 12, 30, 59), |c| &c.lunar);
+        assert_eq!(a, b);
+        assert_eq!(b, c, "同一分钟内（秒变了）应该命中缓存");
+        // 换一天必须重算
+        let d = cached(&at(2026, 10, 24, 0, 0, 0), |c| &c.lunar);
+        assert_ne!(b, d);
+    }
+
+    #[test]
+    fn date_formats() {
+        let r = candidates("rq");
+        assert!(r.len() >= 4, "got {r:?}");
+        // 第二项是 ISO 风格，形如 2026-10-22
+        let iso = &r[1];
+        assert_eq!(iso.len(), 10, "expected YYYY-MM-DD, got {iso}");
+        assert_eq!(iso.as_bytes()[4], b'-');
+        assert_eq!(iso.as_bytes()[7], b'-');
+    }
+
+    #[test]
+    fn time_has_seconds_and_12h() {
+        let r = candidates("sj");
+        assert!(r[0].len() == 5, "expected HH:MM, got {}", r[0]);
+        assert!(r[1].len() == 8, "expected HH:MM:SS, got {}", r[1]);
+        assert!(r.iter().any(|s| s.contains('点')), "expected 中文写法 in {r:?}");
+    }
+
+    #[test]
+    fn weekday_is_chinese() {
+        let r = candidates("xq");
+        assert_eq!(r.len(), 2);
+        assert!(r[0].starts_with("星期"));
+        assert!(r[1].starts_with('周'));
+    }
+
+    #[test]
+    fn timestamp_is_numeric() {
+        let r = candidates("ts");
+        assert_eq!(r.len(), 2);
+        assert!(r[0].chars().all(|c| c.is_ascii_digit()), "got {}", r[0]);
+        assert!(r[1].chars().all(|c| c.is_ascii_digit()), "got {}", r[1]);
+        assert!(r[1].len() > r[0].len(), "millis should be longer");
+    }
+
+    #[test]
+    fn unknown_key_is_empty() {
+        assert!(candidates("zz").is_empty());
+        assert!(candidates("rqz").is_empty());
+        assert!(candidates("1").is_empty());
+    }
+
+    #[test]
+    fn calc_prefix_takes_numbers_and_operators() {
+        assert_eq!(candidates("c1+2"), ["3", "1+2=3"]);
+        assert_eq!(candidates("c123")[0], "一百二十三");
+        assert_eq!(candidates("c1998-3-8")[0], "一九九八年三月八日");
+        // 只打 `/c` 什么都还没有
+        assert!(candidates("c").is_empty());
+        // 算不出来就是空，不能把半截算式当候选
+        assert!(candidates("c1+").is_empty());
+        assert!(candidates("cab").is_empty());
+    }
+
+    #[test]
+    fn code_ok_covers_every_intermediate_state() {
+        // 打 `/uuid` 会依次经过 u、uu、uui…… 中间任何一步被拒，组合串就断了
+        for s in ["u", "uu", "uui", "uuid"] {
+            assert!(code_ok(s), "`{s}` 必须是合法中间状态");
+        }
+        assert!(code_ok("u4e00"));
+        assert!(code_ok("u1f600"));
+        assert!(!code_ok("u4e0g"), "g 不是十六进制");
+        assert!(code_ok("c1+2*(3)"));
+        assert!(code_ok("c1.5x2"));
+        assert!(!code_ok("c1=a"), "`=` 不在算式字符表里");
+        assert!(code_ok("rq") && code_ok(""));
+        assert!(!code_ok("r1"), "普通命令后面不能跟数字");
+    }
+
+    #[test]
+    fn unicode_codepoint_forms() {
+        assert_eq!(candidates("u4e00"), ["一"]);
+        assert_eq!(candidates("u1f600"), ["😀"]);
+        // 控制字符不上屏（看不见，还会把宿主光标搞乱）
+        assert!(candidates("u07").is_empty());
+        // 超范围
+        assert!(candidates("u110000").is_empty());
+        // `u` 后面没有内容
+        assert!(candidates("u").is_empty());
+    }
+
+    #[test]
+    fn uuid_has_five_groups_and_version_4() {
+        let v = candidates("uuid");
+        assert_eq!(v.len(), 2, "小写 + 大写");
+        let chars: Vec<char> = v[0].chars().collect();
+        assert_eq!(chars.len(), 36);
+        for &i in &[8, 13, 18, 23] {
+            assert_eq!(chars[i], '-', "第 {i} 位应该是连字符：{}", v[0]);
+        }
+        assert_eq!(chars[14], '4', "版本位必须是 4：{}", v[0]);
+        // 变体位：第 20 个字符（第 9 字节高 4 位）必须是 8/9/a/b
+        assert!(
+            matches!(chars[19], '8' | '9' | 'a' | 'b'),
+            "变体位必须是 10xx：{}",
+            v[0]
+        );
+        assert!(v[1].chars().all(|c| !c.is_ascii_lowercase()), "第二条要全大写");
+    }
+
+    #[test]
+    fn uuid_is_unique_across_calls() {
+        // 时间派生 + 计数器：连打两次也不能撞（同一毫秒内的场景）
+        let a = candidates("uuid");
+        let b = candidates("uuid");
+        assert_ne!(a[0], b[0], "两次 /uuid 撞了：{}", a[0]);
+    }
+
+    #[test]
+    fn prefix_lists_paren_commands_too() {
+        // 只打 `/` 时，`/c` 和 `/u` 也要在预览里露一面，否则没人知道它们存在
+        let all = candidates("");
+        assert!(all.iter().any(|s| s.contains("/c")), "预览里没有 /c：{all:?}");
+        assert!(all.iter().any(|s| s.contains("/u")), "预览里没有 /u：{all:?}");
+    }
+
+    #[test]
+    fn datetime_contains_both() {
+        let r = candidates("dt");
+        assert!(!r.is_empty());
+        assert!(r[0].contains('-') && r[0].contains(':'), "got {}", r[0]);
+    }
+}
