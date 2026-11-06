@@ -284,7 +284,7 @@ class FeiheIme : InputMethodService() {
             text = "⚙"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             gravity = Gravity.CENTER
-            setTextColor(Palette.of(this).sub)
+            setTextColor(0xFF5F6368.toInt())
             setPadding(dp(14f), dp(6f), dp(14f), dp(6f))
             contentDescription = "输入法设置"
             setOnClickListener { openSettings() }
@@ -319,7 +319,7 @@ class FeiheIme : InputMethodService() {
         statusBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Palette.of(this).statusBg)
+            setBackgroundColor(0xFFEDEEF0.toInt())
             addView(
                 statusText,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
@@ -553,7 +553,6 @@ class FeiheIme : InputMethodService() {
                 when (key.code) {
                     "letters" -> Page.LETTERS
                     "symbols" -> Page.SYMBOLS
-                    "emoji" -> Page.EMOJI
                     else -> Page.DIGITS
                 },
             )
@@ -681,8 +680,7 @@ class FeiheIme : InputMethodService() {
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
         v.setPadding(dp(14f), 0, dp(14f), 0)
         // 第一个候选高亮：它对应空格，得让人看出来
-        val p = Palette.of(this)
-        v.setTextColor(if (first) p.accent else p.text)
+        v.setTextColor(if (first) 0xFF1A6FD4.toInt() else 0xFF202124.toInt())
         v.setOnClickListener { commitWord(word) }
     }
 
@@ -692,7 +690,7 @@ class FeiheIme : InputMethodService() {
         v.text = "|"
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         v.setPadding(dp(2f), 0, dp(2f), 0)
-        v.setTextColor(Palette.of(this).separator)
+        v.setTextColor(0xFFBDBDBD.toInt())
         v.setOnClickListener(null)
     }
 
@@ -702,7 +700,7 @@ class FeiheIme : InputMethodService() {
         v.text = "→$word"
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
         v.setPadding(dp(14f), 0, dp(14f), 0)
-        v.setTextColor(Palette.of(this).sub)
+        v.setTextColor(0xFF5F6368.toInt())
         v.setOnClickListener { commitSuggestion(word) }
     }
 
@@ -722,7 +720,7 @@ class FeiheIme : InputMethodService() {
                 TextView(this).apply {
                     text = "‹ 返回"
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-                    setTextColor(Palette.of(this).sub)
+                    setTextColor(0xFF5F6368.toInt())
                     setPadding(dp(10f), 0, dp(14f), 0)
                     setOnClickListener {
                         segmentState = state.back()
@@ -736,9 +734,9 @@ class FeiheIme : InputMethodService() {
                         text = word
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                         setPadding(dp(12f), 0, dp(12f), 0)
-                        val p = Palette.of(this@FeiheIme)
                         setTextColor(
-                            if (i == state.selected[state.focus]) p.accent else p.text
+                            if (i == state.selected[state.focus]) 0xFF1A6FD4.toInt()
+                            else 0xFF202124.toInt()
                         )
                         setOnClickListener {
                             segmentState = state.choose(i)
@@ -757,13 +755,10 @@ class FeiheIme : InputMethodService() {
                     text = state.wordAt(i)
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                     setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
-                    run {
-                        val p = Palette.of(this@FeiheIme)
-                        setTextColor(if (changed) p.accent else p.text)
-                    }
+                    setTextColor(if (changed) 0xFF1A6FD4.toInt() else 0xFF202124.toInt())
                     // 分段之间画一道竖线，否则「张三李」三个 chip 会看成一个词
                     background = GradientDrawable().apply {
-                        setStroke(dp(1f), Palette.of(this@FeiheIme).chipStroke)
+                        setStroke(dp(1f), 0xFFD9DCE1.toInt())
                         cornerRadius = dp(4f).toFloat()
                     }
                     setOnClickListener {
@@ -777,7 +772,7 @@ class FeiheIme : InputMethodService() {
             TextView(this).apply {
                 text = "  ↵上屏"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                setTextColor(Palette.of(this).hint)
+                setTextColor(0xFF9AA0A8.toInt())
                 setPadding(dp(10f), 0, dp(10f), 0)
             },
         )
