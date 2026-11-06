@@ -6,7 +6,7 @@
 
 Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
 
-**Windows 端当前版本 0.3.11** ｜ 安装包 1.83 MB ｜ 装完约 7.9 MB ｜ 单字 8006 ｜ 词条 46493 ｜
+**Windows 端当前版本 0.3.12** ｜ 安装包 1.99 MB ｜ 装完约 8.6 MB ｜ 单字 8006 ｜ 词条 46493 ｜
 不联网、不弹窗、无账号、密码框不接管 ｜ 354 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
@@ -70,8 +70,8 @@ M1/M2/M3 已完成，M4 代码完成、真机验收待补。
 
 | 维度 | 飞鹤 | 搜狗拼音 | 微软拼音 |
 |---|---|---|---|
-| 安装包 | **1.83 MB** | 百 MB 量级 | 随系统预装 |
-| 装完占用 | **约 7.9 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
+| 安装包 | **1.99 MB** | 百 MB 量级 | 随系统预装 |
+| 装完占用 | **约 8.6 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
 | 广告 / 热点推送 | **没有这功能** | 有（可在设置里关） | 无 |
 | 账号 / 联网 | **完全不需要** | 登录后云同步 | 微软账户可选 |
 | 开源 | **是**（Rust，全文可改） | 否 | 否 |
@@ -1071,7 +1071,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.11.exe
+# 产物：dist\Feihe-Setup-0.3.12.exe
 ```
 
 **为什么必须提权**：输入法的 COM / TSF 注册要写
@@ -1134,7 +1134,7 @@ HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Fe
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.11.exe
+# 产物：dist\Feihe-Setup-0.3.12.exe
 ```
 
 `build_setup.ps1` 做四件事：

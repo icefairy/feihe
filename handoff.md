@@ -4470,3 +4470,38 @@ message 打头，或干脆不写第三个参数。
 如果以后继续加头词，注意 `BUILTIN` 是 `OnceLock`，解析发生在**第一次上屏后的联想要
 求**，别让它在主线程上长到几十毫秒。
 
+
+## 2026-11-06 0.3.11 → 0.3.12 打包（联想覆盖任何长度）
+
+用户要求「递增小版本号，然后做安装包」。升 patch 号，走 `installer/build_setup.ps1 -SelfTest`。
+
+### 版本号
+
+以 `Cargo.toml` 为唯一真相（`build_setup.ps1` 从那里读，读到才继续），三处 crate 一起升：
+根 `feihe`、`core/feihe-core`、`android/jni/feihe-android` 都是 0.3.12；
+`installer/feihe.nsi` 的兜底 `APP_VER` 同步（只在绕过 build_setup 直接跑 makensis 时用到）。
+两个 `Cargo.lock` 跟着改（根的那个由构建自动更新，Android 那份没有构建就手动改了两行）。
+Android 的 `versionName` 仍是 `0.1.0-skeleton`，没动——那是 App 版本，和引擎版本是两件事，
+正式发 Android 包时再定规则。
+
+### 产物
+
+| 项 | 字节 | 可读 |
+|---|---|---|
+| `dist\Feihe-Setup-0.3.12.exe` | 2,082,982 | 1.99 MB |
+| 64 位 `feihe.dll` | 4,475,904 | 4371 KB |
+| 32 位 `feihe.dll` | 4,519,936 | 4414 KB |
+
+- FileVersion / ProductVersion 都是 **0.3.12**。
+- SHA256 `1734436AD2E91ADD6DB01BA279870257F5BBF20EAF8BE7DAC9291F5A81E01B85`
+- `-SelfTest` 通过：静默装到 `%TEMP%`，64/32 位 DLL 和用户手册都与构建产物 SHA256
+  逐字节一致（这个自检就是为了抓「makensis 不报错但装出来是空壳」）。
+- base.bin 46493 条 / 2895 KB，**不含个人词库**：`src\user_dict.txt` 有 55639 条，
+  `-NoUserDict` 把它们排除了。发布包必须走这条路，否则个人打字记录会随 DLL 发出去。
+
+### 体积为什么涨了
+
+安装包 1.83 → 1.99 MB，装完约 7.9 → 8.6 MB。**别把账都算到联想头上**——内置表只
++76 KB（233 → 309 KB），大头是 0.3.11 之后这半月累积的改动（分段候选、引擎代码、
+词条）。README / 首页 / 使用帮助三处的体积数字已按实测同步。
+

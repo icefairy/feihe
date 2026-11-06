@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "feihe"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "feihe-core",
  "tyme4rs",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "feihe-core"
-version = "0.3.11"
+version = "0.3.12"
 
 [[package]]
 name = "lazy_static"

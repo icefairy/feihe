@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "feihe-android"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "feihe-core",
  "jni",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "feihe-core"
-version = "0.3.11"
+version = "0.3.12"
 
 [[package]]
 name = "jni"

@@ -38,7 +38,7 @@ object NativeEngine {
         return state == LoadState.Ok
     }
 
-    /** 引擎版本 + 架构，例如 `0.3.11 (aarch64)`。加载失败返回 "未加载"。 */
+    /** 引擎版本 + 架构，例如 `0.3.12 (aarch64)`。加载失败返回 "未加载"。 */
     fun coreVersion(): String =
         if (ensureLoaded()) runCatching { coreVersionNative() }.getOrElse { "调用失败" } else "未加载"
 
