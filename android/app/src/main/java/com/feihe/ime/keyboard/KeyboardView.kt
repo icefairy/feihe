@@ -1,7 +1,6 @@
 package com.feihe.ime.keyboard
 
 import android.content.Context
-import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
@@ -9,12 +8,13 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.feihe.ime.Palette
 
 /**
- * 把 [QwertyLayout.rows] 画成视图。
+ * 把 [KeyboardPages] 的行数据画成一棵 View 树。
  *
- * 刻意不用 XML 布局：键位的**真值**是 `KeyboardLayout.kt` 里那份数据，XML 只是它的
- * 一个渲染结果。分成两份的话，改键位要改两处，而且 XML 那份没法单测。
+ * **颜色一律取自 [Palette]**，这个类里不允许再出现字面量色值——深色模式下
+ * 漏一处就是一块刺眼的白底（或黑底黑字）。深浅两套由 Palette 按系统夜间模式选。
  */
 object KeyboardView {
 
@@ -37,9 +37,10 @@ object KeyboardView {
         onLongKey: (Key) -> Unit = {},
         onKey: (Key) -> Unit,
     ): View {
+        val p = Palette.of(ctx)
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFFD9DCE1.toInt())
+            setBackgroundColor(p.keyboardBg)
             setPadding(dp(ctx, 3f), dp(ctx, 6f), dp(ctx, 3f), dp(ctx, 6f))
         }
 
@@ -83,9 +84,10 @@ object KeyboardView {
      */
     fun applyShiftState(root: View?, state: ShiftState) {
         val v = root?.findViewWithTag<TextView>(SHIFT_TAG) ?: return
+        val p = Palette.of(root.context)
         v.text = shiftLabel(state)
         v.background = keyBackground(root.context, Key("⇧", KeyKind.SHIFT), state)
-        v.setTextColor(if (state != ShiftState.OFF) Color.WHITE else 0xFF333333.toInt())
+        v.setTextColor(if (state != ShiftState.OFF) p.onAccent else p.fnText)
         v.contentDescription = shiftAccessibilityLabel(state)
     }
 
@@ -106,6 +108,7 @@ object KeyboardView {
         onLongKey: (Key) -> Unit,
         onKey: (Key) -> Unit,
     ): View {
+        val p = Palette.of(ctx)
         val lit = key.kind == KeyKind.SHIFT && shift != ShiftState.OFF
         val view = TextView(ctx).apply {
             text = if (key.kind == KeyKind.SHIFT) shiftLabel(shift) else key.label
@@ -115,12 +118,12 @@ object KeyboardView {
                 TypedValue.COMPLEX_UNIT_SP,
                 if (key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT) 20f else 16f,
             )
-            // 点亮的 ⇧ 用白字（底色是强调蓝），其余按老规矩黑/深灰
+            // 点亮的 ⇧ 用反色（底色是强调色），其余按「可打的字 / 功能键」分两档
             setTextColor(
                 when {
-                    lit -> Color.WHITE
-                    key.kind == KeyKind.CHAR -> Color.BLACK
-                    else -> 0xFF333333.toInt()
+                    lit -> p.onAccent
+                    key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT -> p.keyText
+                    else -> p.fnText
                 },
             )
             background = keyBackground(ctx, key, shift)
@@ -157,26 +160,31 @@ object KeyboardView {
         return view
     }
 
-    private fun keyBackground(ctx: Context, key: Key, shift: ShiftState = ShiftState.OFF): GradientDrawable {
+    private fun keyBackground(
+        ctx: Context,
+        key: Key,
+        shift: ShiftState = ShiftState.OFF,
+    ): GradientDrawable {
+        val p = Palette.of(ctx)
         val radius = dp(ctx, 6f).toFloat()
         return GradientDrawable().apply {
             cornerRadius = radius
             setColor(
                 when {
                     // 上档键点亮：和候选第一个同色的强调蓝，一眼看出「下一下是大写」
-                    key.kind == KeyKind.SHIFT && shift != ShiftState.OFF -> 0xFF1A6FD4.toInt()
-                    // 数字选词行：淡蓝底，和"能打出字"的白底键区分开——它选的是候选，
+                    key.kind == KeyKind.SHIFT && shift != ShiftState.OFF -> p.accent
+                    // 数字选词行：淡强调色底，和"能打出字"的键帽区分开——它选的是候选，
                     // 不是往组合串里加字符。
-                    key.kind == KeyKind.SELECT -> 0xFFE8F0FE.toInt()
-                    // 数字/标点页上的键和字母一样是「可打的字」，给白底；
-                    // 功能键才用灰底，靠颜色就能分出「这排是打字的还是操作的」。
-                    key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT -> Color.WHITE
-                    key.kind == KeyKind.SPACE -> 0xFFF7F7F8.toInt()
-                    else -> 0xFFB9BEC6.toInt()
+                    key.kind == KeyKind.SELECT -> p.selectBg
+                    // 数字/标点页上的键和字母一样是「可打的字」，给键帽色；
+                    // 功能键才用另一档灰，靠颜色就能分出「这排是打字的还是操作的」。
+                    key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT -> p.keyBg
+                    key.kind == KeyKind.SPACE -> p.spaceBg
+                    else -> p.fnBg
                 }
             )
             // 底部一条深色描边当"键帽影子"，纯色方块看着不像能按的东西
-            setStroke(dp(ctx, 1f), 0xFF9AA0A8.toInt())
+            setStroke(dp(ctx, 1f), p.stroke)
         }
     }
 
@@ -189,12 +197,22 @@ object KeyboardView {
         KeyKind.PUNCT -> key.label
         KeyKind.MODE -> "切换中英文"
         KeyKind.SELECT -> "选第 ${key.code} 个候选"
-        // 按钮上写的是「123」/「ABC」/「符」，读屏念这些没意义，念出「切到哪」才行
-        KeyKind.PAGE -> when (key.code) {
-            "letters" -> "字母键盘"
-            "digits" -> "数字键盘"
-            else -> "符号键盘"
-        }
+        // 按钮上写的是「123」/「ABC」/「符」/「😊」，读屏念这些没意义，念出「切到哪」才行
+        KeyKind.PAGE -> accessibilityPageLabel(key.code)
+    }
+
+    /**
+     * 换页键的读屏文案。
+     *
+     * 放在这里而不是写成一串 `when(code)`：新增页面时**只加一个分支**，
+     * 忘了加的后果是读屏念出英文 code——比念错更糟，但也比直接崩好查。
+     */
+    private fun accessibilityPageLabel(code: String): String = when (code) {
+        "letters" -> "字母键盘"
+        "digits" -> "数字键盘"
+        "symbols" -> "符号键盘"
+        "emoji" -> "表情键盘"
+        else -> "切换键盘"
     }
 
     private fun dp(ctx: Context, v: Float): Int =

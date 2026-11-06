@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色覆盖。字段与 values/themes.xml 一一对应，父主题换成非 Light 的那支。 -->
+    <style name="Theme.Feihe" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">#FF121212</item>
+        <!-- 深色底 → 状态栏图标改浅色，否则黑图标压在黑底上看不见 -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#FF121212</item>
+    </style>
+</resources>

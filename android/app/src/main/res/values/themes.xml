@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      设置页用的主题。
+
+      ## 为什么自己定一个而不是直接写 @android:style/Theme.DeviceDefault.Light.NoActionBar
+
+      那个主题是**写死的浅色**：系统切到深色模式时它不会跟着变，标题栏是白的、
+      系统弹出的一些控件（对话框、开关）也是白的，而页面本身已经变深了，
+      于是会看到「深底 + 白对话框」这种拼接感。
+
+      ## 为什么不用 Theme.DeviceDefault.DayNight
+
+      它是 API 29（Android 10）才加的，本工程 minSdk = 24。
+      自定义主题 +  覆盖这一套从 API 8 就可用，且和 Palette 走的
+      是同一个开关（系统夜间模式），两边不会打架。
+
+      ## 页面本身的底色不在这里定
+
+      这一页所有内容都是代码搭的（见 SettingsActivity 的类注释），底色由 Palette 给。
+      这里只负责 windowBackground（避免首帧闪白）和状态栏/导航栏的明暗。
+    -->
+    <style name="Theme.Feihe" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <!-- 首帧：windowBackground 跟随深浅，切页/冷启动不会先闪一块白 -->
+        <item name="android:windowBackground">#FFF2F3F5</item>
+        <!-- 状态栏图标用深色（浅色底） -->
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">#FFF2F3F5</item>
+    </style>
+</resources>

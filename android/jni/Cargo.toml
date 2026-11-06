@@ -1,6 +1,6 @@
 [package]
 name = "feihe-android"
-version = "0.3.13"
+version = "0.3.14"
 edition = "2021"
 publish = false
 

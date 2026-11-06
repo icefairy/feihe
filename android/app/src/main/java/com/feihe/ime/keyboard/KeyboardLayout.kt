@@ -17,11 +17,12 @@ data class Key(
     val weight: Float = 1f,
 )
 
-/** 三张键盘页。切页只换容器里的行，不重建 InputView。 */
+/** 键盘页。切页只换容器里的行，不重建 InputView。 */
 enum class Page {
     LETTERS,
     DIGITS,
     SYMBOLS,
+    EMOJI,
 }
 
 enum class KeyKind {
@@ -156,6 +157,7 @@ object NumericLayout {
         listOf(
             Key("ABC", KeyKind.PAGE, "letters"),
             Key("符", KeyKind.PAGE, "symbols"),
+            Key("😊", KeyKind.PAGE, "emoji"),
             Key("", KeyKind.SPACE, weight = 2f),
             Key("↵", KeyKind.ENTER),
             Key("⌫", KeyKind.DELETE),
@@ -183,6 +185,50 @@ object SymbolLayout {
         listOf(
             Key("ABC", KeyKind.PAGE, "letters"),
             Key("123", KeyKind.PAGE, "digits"),
+            Key("😊", KeyKind.PAGE, "emoji"),
+            Key("", KeyKind.SPACE, weight = 2f),
+            Key("↵", KeyKind.ENTER),
+            Key("⌫", KeyKind.DELETE),
+        ),
+    )
+
+    val textCodes: List<String>
+        get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
+}
+
+/**
+ * 表情页。
+ *
+ * ## 为什么复用 [KeyKind.TEXT] 而不是新加一个 EMOJI kind
+ *
+ * emoji 在本项目里**就是一个普通字符**：不经过引擎、不进组合串、直接 commitText。
+ * 这正是 TEXT 的语义。新加一个 kind 只会让 onKey 里多一个和 TEXT 完全一样的分支。
+ *
+ * ## 为什么只有 28 个、不做表情分类/翻页
+ *
+ * 手机自带的 emoji 键盘（长按地球键切出来的那个）有全套 + 搜索 + 最近使用，做得
+ * 比这好得多，且不占我们的包体。这一页的定位是**常用表情的快捷入口**——
+ * 用户要打 😂 不该先切出去。所以刻意控制在一屏内，不做滚动、不做分组。
+ * 想加表情就往数据里加，加满一屏为止。
+ *
+ * ## 为什么底部功能排和数字/符号页一模一样
+ *
+ * 三页共用 5 行 × 36dp（见 [NumericLayout] 里的高度计算），换页时键盘高度不变；
+ * 底部 ABC / 123 / 符 / 空格 / ↵ / ⌫ 位置固定，肌肉记忆直接复用。
+ */
+object EmojiLayout {
+
+    private fun e(s: String) = Key(s, KeyKind.TEXT, s)
+
+    val rows: List<List<Key>> = listOf(
+        listOf("😀", "😄", "😂", "🤣", "😊", "😍", "🤔").map(::e),
+        listOf("😅", "😭", "😡", "😴", "👍", "👌", "👏").map(::e),
+        listOf("🙏", "💪", "🤝", "❤️", "💔", "🎉", "🔥").map(::e),
+        listOf("✨", "⭐", "✅", "❌", "❓", "❗", "💯").map(::e),
+        listOf(
+            Key("ABC", KeyKind.PAGE, "letters"),
+            Key("123", KeyKind.PAGE, "digits"),
+            Key("符", KeyKind.PAGE, "symbols"),
             Key("", KeyKind.SPACE, weight = 2f),
             Key("↵", KeyKind.ENTER),
             Key("⌫", KeyKind.DELETE),
@@ -225,6 +271,7 @@ object KeyboardPages {
         Page.LETTERS -> QwertyLayout.rows
         Page.DIGITS -> NumericLayout.rows
         Page.SYMBOLS -> SymbolLayout.rows
+        Page.EMOJI -> EmojiLayout.rows
     }
 
     /** 见 [NumericLayout] 里的高度计算：紧凑页 36dp，总和与字母页 46dp×4 相当。 */
@@ -234,5 +281,6 @@ object KeyboardPages {
         Page.LETTERS -> "26 键"
         Page.DIGITS -> "数字"
         Page.SYMBOLS -> "符号"
+        Page.EMOJI -> "表情"
     }
 }

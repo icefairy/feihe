@@ -81,7 +81,7 @@ class SettingsActivity : Activity() {
                     "引擎 ${NativeEngine.coreVersion()}　·　改动立即生效"
                 }
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-                setTextColor(if (cfg == null) 0xFFC5221F.toInt() else SUB)
+                setTextColor(if (cfg == null) DANGER else SUB)
                 setPadding(dp(20f), 0, dp(20f), dp(12f))
             },
         )
@@ -538,13 +538,20 @@ class SettingsActivity : Activity() {
 
     private fun dp(v: Float): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
-    private companion object {
-        val BG = 0xFFF2F3F5.toInt()
-        val CARD = 0xFFFFFFFF.toInt()
-        val TEXT = 0xFF202124.toInt()
-        val SUB = 0xFF5F6368.toInt()
-        val ACCENT = 0xFF1A6FD4.toInt()
+    /**
+     * 配色。**从 [Palette] 取，不在本文件写字面量**——深浅两套由系统夜间模式决定，
+     * 页面每次进入都会重建（onCreate -> buildUi），所以退到后台改了系统主题，
+     * 回来时颜色是新的，不需要额外监听 onConfigurationChanged。
+     */
+    private val palette by lazy { Palette.of(this) }
+    private val BG get() = palette.bg
+    private val CARD get() = palette.card
+    private val TEXT get() = palette.text
+    private val SUB get() = palette.sub
+    private val ACCENT get() = palette.accent
+    private val DANGER get() = palette.danger
 
+    private companion object {
         /** 文件选择器的请求码。两个值够用就行，别和别的 startActivityForResult 撞。 */
         const val REQ_EXPORT = 1001
         const val REQ_IMPORT = 1002

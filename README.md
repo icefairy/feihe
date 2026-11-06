@@ -6,7 +6,7 @@
 
 Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
 
-**Windows 端当前版本 0.3.13** ｜ 安装包 2.51 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
+**Windows 端当前版本 0.3.14** ｜ 安装包 2.51 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
 不联网、不弹窗、无账号、密码框不接管 ｜ 358 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
@@ -1084,7 +1084,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.13.exe
+# 产物：dist\Feihe-Setup-0.3.14.exe
 ```
 
 **为什么必须提权**：输入法的 COM / TSF 注册要写
@@ -1147,7 +1147,7 @@ HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Fe
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.13.exe
+# 产物：dist\Feihe-Setup-0.3.14.exe
 ```
 
 `build_setup.ps1` 做四件事：
