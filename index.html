@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 目标替换搜狗的开源双拼输入法（Windows + Android）</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 1.99 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 2.53 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -255,7 +255,7 @@
 
     <div class="stats">
       <div class="stat"><div class="n">2</div><div class="k">平台（Win + Android）</div></div>
-      <div class="stat"><div class="n">1.99<small>MB</small></div><div class="k">Windows 安装包</div></div>
+      <div class="stat"><div class="n">2.53<small>MB</small></div><div class="k">Windows 安装包</div></div>
       <div class="stat"><div class="n">74869</div><div class="k">词条（两端共用）</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
     </div>
@@ -271,7 +271,7 @@
         不靠「功能比搜狗多」取胜，靠的是同样的日常能力、零广告零联网、体积小两个数量级、
         源码全开可改，以及桌面 / 手机共用一份引擎。差距也写在明面上：
         没有云同步、词库 7.5 万条（vs 数百万）、没有皮肤商店和手写。
-        体积数据本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件；飞鹤两份 DLL 约 8.6 MB）。
+        体积数据本机实测（搜狗 16.3.0.3446 装完 134 MB / 81 个文件；飞鹤两份 DLL + 词库数据约 12.6 MB）。
       </p>
     </div>
 
@@ -281,8 +281,8 @@
           <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
         </thead>
         <tbody>
-          <tr><td>安装包</td><td class="me">1.99 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
-          <tr><td>装完占用</td><td class="me">约 8.6 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
+          <tr><td>安装包</td><td class="me">2.53 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>装完占用</td><td class="me">约 12.6 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
           <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
           <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
           <tr><td>开源</td><td class="yes">是，Rust 全文可改</td><td class="no">否</td><td class="no">否</td></tr>
@@ -624,7 +624,7 @@ rustup target add i686-pc-windows-gnullvm
 
 <span class="c"># 3. 打安装包（发布模式，排除本机个人词库）</span>
 <span class="p">powershell</span> -ExecutionPolicy Bypass -File installer\build_setup.ps1
-<span class="c"># → dist\Feihe-Setup-0.3.14.exe</span></pre>
+<span class="c"># → dist\Feihe-Setup-0.3.15.exe</span></pre>
 
     <div class="grid" style="margin-top:20px">
       <div class="card">

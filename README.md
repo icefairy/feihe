@@ -6,8 +6,8 @@
 
 Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
 
-**Windows 端当前版本 0.3.14** ｜ 安装包 2.51 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 358 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
+**Windows 端当前版本 0.3.15** ｜ 安装包 2.53 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
+不联网、不弹窗、无账号、密码框不接管 ｜ 384 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
 > 上档锁定、数字选词、离线语音输入、数据备份，已可装机（真机验收待补）。
@@ -70,8 +70,8 @@ M1/M2/M3 已完成，M4 代码完成、真机验收待补。
 
 | 维度 | 飞鹤 | 搜狗拼音 | 微软拼音 |
 |---|---|---|---|
-| 安装包 | **1.99 MB** | 百 MB 量级 | 随系统预装 |
-| 装完占用 | **约 8.6 MB**（两份 DLL） | 134 MB + 用户数据 | 随系统 |
+| 安装包 | **2.53 MB** | 百 MB 量级 | 随系统预装 |
+| 装完占用 | **约 12.6 MB**（两份 DLL + 词库数据） | 134 MB + 用户数据 | 随系统 |
 | 广告 / 热点推送 | **没有这功能** | 有（可在设置里关） | 无 |
 | 账号 / 联网 | **完全不需要** | 登录后云同步 | 微软账户可选 |
 | 开源 | **是**（Rust，全文可改） | 否 | 否 |
@@ -874,6 +874,20 @@ Shift 组合是**表驱动**的（规则照搜狗），中文态下十三个键�
 的应用要重新切一下输入法）。文件里带 `config_ver`；老配置（v1 把全角标点默认成关）
 会一次性迁移成全角标点开——之后再手动关掉不会被改回去。
 
+### 高 DPI（150% / 200% 缩放）
+
+候选窗、状态浮窗、符号面板、设置窗都是**自己画的**，尺寸在代码里按 100% 缩放写成
+逻辑像素。显示器缩放调成 150%，它们会整块跟着放大——字、行高、内边距、按钮宽、
+面板格子一起，鼠标点第 3 个候选也还是第 3 个（命中判定和绘制用同一套换算）。
+
+实现上我们**不调 `SetProcessDpiAwareness`**：飞鹤是进程内的输入法 DLL，DPI 感知是
+**进程级**状态，宿主的缩放轮不到我们改。做法是每次弹窗前问系统「这块屏多少 DPI」
+（`GetDpiForMonitor`，多屏各算各的），再按比例放大自己的窗口；宿主本身是 DPI
+unaware 的老程序时按 100% 处理，避免系统已经虚拟化放大过一次、我们再来一次。
+
+多屏混缩放也能跟：把窗口拖到缩放不同的另一块屏，`WM_DPICHANGED` 里重排（看
+`src/dpi.rs`）。
+
 ### 密码框里一个字都不接管
 
 登录框、支付密码、Wi-Fi 密码这类输入位置，输入法**完全不介入**：不弹候选、不组组合串、
@@ -1046,9 +1060,9 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选，共 358 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选 / 高 DPI 换算，共 384 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
-# 358 = feihe（TSF 壳）111 项 + feihe-core（平台无关）247 项。两个包都会跑，
+# 384 = feihe（TSF 壳）133 项 + feihe-core（平台无关）251 项。两个包都会跑，
 # 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 237 项会被静默跳过。
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -1084,7 +1098,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.14.exe
+# 产物：dist\Feihe-Setup-0.3.15.exe
 ```
 
 **为什么必须提权**：输入法的 COM / TSF 注册要写
@@ -1147,7 +1161,7 @@ HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Fe
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.14.exe
+# 产物：dist\Feihe-Setup-0.3.15.exe
 ```
 
 `build_setup.ps1` 做四件事：
@@ -1297,7 +1311,7 @@ installer/unregister.cmd     卸载入口（管理员）
 build.ps1             一键构建（llvm-mingw，默认 64 + 32 位；-Arch / -Debug / -SkipTest）
 check_env.ps1         环境自检（llvm-mingw / rust target / NSIS 是否就位）
 docs/使用帮助.md       用户手册（随安装包装进安装目录，UTF-8 BOM 便于记事本打开）
-docs/验证清单.md       手工验收步骤（Windows 367 条按里程碑分组 + Android 15 条，发版前照着跑）
+docs/验证清单.md       手工验收步骤（Windows 384 条按里程碑分组 + Android 15 条，发版前照着跑）
 handoff.md            开发笔记（实测事实 + 踩过的坑 + 为什么这么设计，不随包分发）
 dist/                 安装包产物（已 gitignore）
 rust-toolchain.toml   固定 gnu toolchain + gnullvm target
@@ -1609,7 +1623,7 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 ## 验证清单
 
 手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)
-（Windows 367 条 + Android 15 条）。不需要全跑——改到哪块就跑哪组，比如动
+（Windows 384 条 + Android 15 条）。不需要全跑——改到哪块就跑哪组，比如动
 `textservice.rs` 的按键路径至少要跑 M2 + 分词 + 回车三组。自动化那部分仍然是
-`cargo test --workspace`（358 项）+ `tools/smoke_com.py` + Android 的
+`cargo test --workspace`（384 项）+ `tools/smoke_com.py` + Android 的
 `gradlew testDebugUnitTest`（71 项）。

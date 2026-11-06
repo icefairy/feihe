@@ -1,6 +1,6 @@
 [package]
 name = "feihe-core"
-version = "0.3.14"
+version = "0.3.15"
 edition = "2021"
 description = "飞鹤输入法 · 平台无关的核心逻辑（双拼编码 / 纠错 / 数字 / 简码 / 辅助码表）"
 license = "MIT"
