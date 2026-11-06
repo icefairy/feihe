@@ -69,6 +69,11 @@ val buildRust by tasks.registering(Exec::class) {
     inputs.file(rootProject.file("jni/Cargo.toml"))
     inputs.dir(rootProject.file("../core/src"))
     inputs.file(rootProject.file("../core/Cargo.toml"))
+    // 词库数据也要算输入：base.bin 是 build.rs 从 ../src/ 编出来的，只盯 core/src
+    // 会漏掉「换了词库、.so 还是旧的」——2026-11-06 扩词库时就真踩过一次。
+    // 整个 src/ 目录都算（dict.txt / extra_*.txt / user_dict.txt，含被
+    // FEIHE_NO_USER_DICT 排除的：排除与否本身就是构建输入）。
+    inputs.dir(rootProject.file("../src"))
     outputs.file(rustSo)
 
     environment(

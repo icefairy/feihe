@@ -63,8 +63,10 @@ MAX_CHARS = None  # None = 全部收录
 
 # 词组条数。465k 条可编码词组里按词频取前 N 条：
 #   6500 → 词频下限 17 万（只有极高频词，覆盖太窄）
-#  30000 → 词频下限 3.3 万（约 450KB，常见词基本齐了）
-MAX_WORDS = 30000
+#  30000 → 词频下限 3.3 万（常见词基本齐了，但生僻一点的词打不出来）
+#  60000 → 词频下限掉到四五千（2026-11-06 起用：目标是替换搜狗，词库规模
+#          不能再是「还差什么」表里的一条；代价是 base.bin 约莫翻倍，见 README 体积数字）
+MAX_WORDS = 60000
 
 
 def encode_syllable(syl):
@@ -250,7 +252,10 @@ def main():
     for text, pinyin, weight in words:
         if kept >= MAX_WORDS:
             break
-        if not (2 <= len(text) <= 4) or not is_cjk(text):
+        # 长度 2..=8：原来只收 2~4 字，五字以上的成语、专名、术语（词库里有 7.6 万条）
+        # 一条都进不来——「替换搜狗」的目标下这个默认去得太狠。8 字和联想表的
+        # is_word 上限对齐，再长的基本是句子碎片不是词。
+        if not (2 <= len(text) <= 8) or not is_cjk(text):
             continue
         if encode_pinyin(pinyin) is None:
             continue
