@@ -99,7 +99,7 @@ object CandidateBarPolicy {
 
     const val DEFAULT_LIMIT = 9
 
-    /** 有联想时最多给几个候选。留 3 格给 `→词`（SUGGEST_LIMIT 是 4，横滑一点即可）。 */
+    /** 有联想时最多给几个候选。留出 `→词` 的位置（SUGGEST_LIMIT 是 5，横滑一点即可）。 */
     const val RESERVED_FOR_SUGGESTIONS = 6
 
     /** 设置值不合法（手改过 SharedPreferences）时回落到默认档。 */

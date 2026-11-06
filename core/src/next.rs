@@ -3,7 +3,7 @@
 //! ## 两张表：内置 + 用户
 //!
 //! - **内置表**（`next_builtin.txt`，`include_str!` 进 DLL）：从 rime-ice 词库的复合词
-//!   反推出来的词对（`北京时间` → `北京→时间`），约 5000 个头词 / 1.5 万条。解决
+//!   反推出来的词对（`北京时间` → `北京→时间`），约 7000 个头词 / 2 万条。解决
 //!   「刚装完一个字都联想不出来」的冷启动。
 //! - **用户表**（`next.txt`，数据目录）：用户自己打出来的词对，按选择次数排。
 //!
@@ -26,6 +26,23 @@
 //! 「你好，」不是词，「nihao」也不是。上屏带标点时由调用方只取**开头的连续汉字**
 //! （`leading_word`），标点本身不参与配对，但也不打断配对链：打完「他说：」，
 //! 下一个词仍然和「他说」配对。
+//!
+//! ## 任何长度的词都要能联想
+//!
+//! 最早内置表只收 2 字头词（1 字头的「北京→市」是噪音，3 字头又太少），结果就是
+//! **只有打完两字词才看得见联想**。真实写作里单字（`我`）、三字词（`计算机`）、
+//! 四字词（`上市公司`）都是常客，没有联想等于这个功能只覆盖了一半场景。
+//!
+//! 现在有两条路一起走：
+//!
+//! 1. **表里就有**（`tools/gen_next.py` 按头词长度分桶，见那个脚本的注释）。
+//! 2. **后缀回退**（[`resolve`]）：`今天北京` / `去北京` / `大北京` 在表里都查不到，
+//!    但它们的后缀 `北京` 查得到，而「北京后面接什么」对这三者基本是一回事。
+//!    取**最长的已知后缀**，比整个词失配就放弃要有用得多。
+//!
+//! 后缀最少留 2 个字：`计算机` 落到单字「机」上会联想出一堆和整词无关的碎片，
+//! 而「机」后面的词也未必接得上「计算机」。单字头只在**用户真的上屏了一个字**时
+//! 才用（`我` → `觉得`），不是从长词里截出来的。
 //!
 //! ## 容量
 //!
@@ -96,8 +113,9 @@ static LAST_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
 static BUILTIN: std::sync::OnceLock<Table> = std::sync::OnceLock::new();
 
 /// 内置表的文本。由 `tools/gen_next.py` 从 rime-ice 词库生成（复合词拆分），
-/// 每行 `头词<TAB>后续词 权重 后续词 权重 …`。生成参数（5000 头词 / 每头 5 个）
-/// 见那个脚本的注释，调过参数记得重新编译。
+/// 每行 `头词<TAB>后续词 权重 后续词 权重 …`。生成参数（按头词长度分桶：
+/// 单字 900 / 两字 5200 / 三字 800 / 四字 300，每头 5 个）见那个脚本的注释，
+/// 调过参数记得重新编译。
 const BUILTIN_TEXT: &str = include_str!("next_builtin.txt");
 
 fn builtin() -> &'static Table {
@@ -106,7 +124,7 @@ fn builtin() -> &'static Table {
 
 /// 内置表的行格式和用户表不同（头词分组，一行多个后续），单独一个解析器。
 ///
-/// 不复用 `parse` 的原因：那个格式一行一个词对，1.5 万行 × 20 字节 ≈ 300 KB，
+/// 不复用 `parse` 的原因：那个格式一行一个词对，2 万行 × 20 字节 ≈ 400 KB，
 /// 而分组后头词只出现一次，省下的是文件体积——`include_str!` 的每个字节都进 DLL。
 fn parse_builtin(text: &str) -> Table {
     let mut t = Table::new();
@@ -352,30 +370,75 @@ pub fn record(prev: &str, next: &str) {
     maybe_flush();
 }
 
-/// 查 `prev` 后面的联想词，按「用户表优先、内置表补位」合并，去重。
+/// 全是汉字（不限长度）。`suggest` 用它代替 `is_word`：联想是只读的，
+/// `prev` 长一点（整句上屏）反而更该靠后缀回退救回来。
+fn all_han(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(is_han)
+}
+
+/// 在表里找 `key` 的后续；精确失配就**逐个丢掉最左边的字**再找（后缀回退）。
 ///
-/// 两张表的权重不是一回事（内置是词库词频，用户是选择次数），**不能**按数值
-/// 混排——用户打过的词对他自己永远比词库统计更可信，所以用户表整段排前面。
-pub fn suggest(prev: &str, limit: usize) -> Vec<String> {
-    if !is_word(prev) || limit == 0 {
-        return Vec::new();
+/// `今天北京` 查不到，但 `北京` 查得到，而「北京后面接什么」和「今天北京后面接
+/// 什么」基本是同一件事。取**最长的已知后缀**——越长的后缀越接近整词，别一上来
+/// 就退到最短的那个。
+///
+/// 后缀最少 2 个字：`计算机` 退到单字「机」得到的是一堆跟整词无关的碎片。
+/// 单字头词只在 `key` 本身就是一个字时才用（用户真的上屏了「我」，不是从长词里截的）。
+fn resolve<'a>(t: &'a Table, key: &str) -> Option<&'a Vec<(String, u32)>> {
+    if let Some(v) = t.get(key) {
+        return Some(v);
     }
-    let mine = with_table(|t| t.get(prev).cloned()).unwrap_or_default();
-    let mut out: Vec<String> = mine.iter().map(|(w, _)| w.clone()).collect();
-    if out.len() < limit {
-        if let Some(b) = builtin().get(prev) {
-            for (w, _) in b {
-                if !out.iter().any(|x| x == w) {
-                    out.push(w.clone());
-                }
-                if out.len() >= limit {
-                    break;
-                }
+    if key.chars().count() <= 2 {
+        return None;
+    }
+    for (i, _) in key.char_indices().skip(1) {
+        let suffix = &key[i..];
+        if suffix.chars().count() < 2 {
+            break;
+        }
+        if let Some(v) = t.get(suffix) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// 合并两张表的后续：用户表整段排前面，内置表只补位，按词去重。
+///
+/// 权重**不能**跨表比数值：内置是词库统计（几十万量级），用户是选择次数（个位数），
+/// 混排会让内置表压死用户刚学的那一条。用户打过的词对他自己永远更可信。
+fn merge(
+    mine: Option<&Vec<(String, u32)>>,
+    theirs: Option<&Vec<(String, u32)>>,
+    limit: usize,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(limit);
+    for tail in [mine, theirs].into_iter().flatten() {
+        for (w, _) in tail {
+            if out.len() >= limit {
+                return out;
+            }
+            if !out.iter().any(|x| x == w) {
+                out.push(w.clone());
             }
         }
     }
-    out.truncate(limit);
     out
+}
+
+/// 查 `prev` 后面的联想词，按「用户表优先、内置表补位」合并，去重。
+///
+/// 两张表各自做后缀回退（[`resolve`]）：同一个 `prev` 在用户表和内置表里可能落在
+/// 不同长度的后缀上，各查各的再合并，比强行统一到同一个键更不容易漏。
+///
+/// 接受 1..=任意长度的纯汉字 `prev`——单字、三字词、整句上屏都走这一条路。
+pub fn suggest(prev: &str, limit: usize) -> Vec<String> {
+    if limit == 0 || !all_han(prev) {
+        return Vec::new();
+    }
+    let mine = with_table(|t| resolve(t, prev).cloned());
+    let theirs = resolve(builtin(), prev).cloned();
+    merge(mine.as_ref(), theirs.as_ref(), limit)
 }
 
 /// 用户表里有多少个词对（设置窗显示用）。内置表不算——那是发货就带的，不是
@@ -507,7 +570,77 @@ mod tests {
         assert!(!m.contains_key(""));
     }
 
-    /// 内置表是 `include_str!` 编进 DLL 的，**它坏了就等于联想功能带病发货**。
+    /// 后缀回退：整词查不到时，取最长的已知后缀。
+    #[test]
+    fn resolve_falls_back_to_the_longest_suffix() {
+        let mut m = t();
+        m.insert("北京".to_string(), vec![("时间".to_string(), 5)]);
+        m.insert("京".to_string(), vec![("剧".to_string(), 9)]);
+        assert_eq!(resolve(&m, "北京").unwrap()[0].0, "时间", "精确命中优先");
+        assert_eq!(resolve(&m, "今天北京").unwrap()[0].0, "时间", "长词靠后缀回退");
+        assert_eq!(resolve(&m, "去了北京").unwrap()[0].0, "时间");
+        assert!(resolve(&m, "上海").is_none(), "没有后缀可用");
+        assert!(resolve(&m, "南京").is_none(), "单字后缀不当退路");
+    }
+
+    /// 越长的后缀越接近整词，不能一上来就退到最短的那个。
+    #[test]
+    fn resolve_prefers_the_longer_suffix() {
+        let mut m = t();
+        m.insert("京".to_string(), vec![("剧".to_string(), 1)]);
+        m.insert("北京".to_string(), vec![("时间".to_string(), 1)]);
+        m.insert("天北京".to_string(), vec![("欢迎".to_string(), 1)]);
+        assert_eq!(resolve(&m, "今天北京").unwrap()[0].0, "欢迎", "最长后缀优先");
+        assert_eq!(resolve(&m, "北京").unwrap()[0].0, "时间");
+    }
+
+    /// 单字头词只在 prev 本身就是一个字时用，不能从长词末尾截一个字凑。
+    #[test]
+    fn single_char_head_only_matches_a_single_char_prev() {
+        let mut m = t();
+        m.insert("我".to_string(), vec![("觉得".to_string(), 9)]);
+        assert_eq!(resolve(&m, "我").unwrap()[0].0, "觉得");
+        assert!(resolve(&m, "你们我").is_none(), "单字后缀不当退路");
+    }
+
+    /// 用户表整段排前面 + 按词去重 + 到 limit 就停。
+    #[test]
+    fn merge_puts_user_table_first_and_dedups() {
+        let mine = vec![("时间".to_string(), 3u32)];
+        let theirs = vec![("时间".to_string(), 999u32), ("大学".to_string(), 500)];
+        assert_eq!(merge(Some(&mine), Some(&theirs), 5), vec!["时间", "大学"]);
+        assert_eq!(merge(None, Some(&theirs), 1), vec!["时间"], "limit 要截断");
+        assert!(merge(None, None, 5).is_empty());
+    }
+
+    /// suggest 接受任意长度的纯汉字（长词靠后缀回退），但不是纯汉字的直接拒。
+    #[test]
+    fn suggest_accepts_any_length_of_han() {
+        assert!(all_han("我"));
+        assert!(all_han("一二三四五六七八九"), "超过 8 字也要接受，后缀回退要用");
+        assert!(!all_han("北京1"));
+        assert!(!all_han(""));
+    }
+
+    /// 内置表必须各长度都有货——这抓的是「只有两字词有联想」那次退化：
+    /// 生成器曾经按总权重取前 5000，2 字头词把单字 / 三字头词全挤掉了。
+    #[test]
+    fn builtin_covers_single_and_long_heads() {
+        let t = parse_builtin(BUILTIN_TEXT);
+        let mut by_len: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        for k in t.keys() {
+            *by_len.entry(k.chars().count()).or_default() += 1;
+        }
+        assert!(*by_len.get(&1).unwrap_or(&0) >= 800, "单字头词太少：{by_len:?}");
+        assert!(*by_len.get(&2).unwrap_or(&0) >= 4500, "两字头词太少：{by_len:?}");
+        assert!(*by_len.get(&3).unwrap_or(&0) >= 500, "三字头词太少：{by_len:?}");
+        assert!(*by_len.get(&4).unwrap_or(&0) >= 200, "四字头词太少：{by_len:?}");
+        for head in ["我", "不", "计算机", "上市公司"] {
+            assert!(t.contains_key(head), "内置表缺「{head}」——重新跑 tools/gen_next.py");
+        }
+    }
+
+    /// 内置表是 include_str! 编进 DLL 的，**它坏了就等于联想功能带病发货**。
     /// 这条测试锁住三件事：规模没被生成参数意外缩小、高频词都在、每一行都干净。
     #[test]
     fn builtin_table_parses_clean() {

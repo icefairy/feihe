@@ -916,9 +916,10 @@ class FeiheIme : InputMethodService() {
         /**
          * 联想最多给几个。
          *
-         * 4 是「一排能扫完」和「有点可挑」的折中：候选条是横向滚动的，联想排在
-         * 候选后面，给多了用户得先滑一下才看得见，那就等于没有。
+         * 5 和 core 的 `next::SHOW`（桌面端候选窗）对齐：两边同一份词对表，
+         * 给出条数不一样会让人以为「手机上联想更少」。刚上屏、没有候选时这 5 个
+         * 正好排满一行；正在打字时它们排在候选后面，多出来的部分横向滑一下。
          */
-        private const val SUGGEST_LIMIT = 4
+        private const val SUGGEST_LIMIT = 5
     }
 }
