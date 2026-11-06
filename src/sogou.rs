@@ -635,6 +635,46 @@ pub fn import_auto(max_len: usize) -> Result<Imported, String> {
     run(&jobs, max_len)
 }
 
+/// 用户手动挑的一个词库文件 → 解析任务。扩展名决定解析器。
+///
+/// 优先级给 1（细胞词库级）：手动挑的文件和自动发现的细胞词库都是「词库作者
+/// 给的词」，没有谁更可信；打字历史（3）/用户词库（2）永远压在它们上面。
+fn job_for_file(path: &Path) -> Result<Job, String> {
+    let label = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let kind = match ext.as_str() {
+        "scel" => Kind::Scel,
+        // 手动挑的 .bin 没有背景/用户之分（那两个文件名是自动发现认的），
+        // 用宽松解析兜底：宁可少收几条，不要因为校验和整包拒绝。
+        "bin" => Kind::BinLoose,
+        "txt" => Kind::Text,
+        other => {
+            return Err(format!(
+                "不认识的扩展名 .{other}（支持 .scel 细胞词库 / .bin / .txt）"
+            ))
+        }
+    };
+    Ok(Job {
+        label,
+        path: path.to_path_buf(),
+        kind,
+        prio: 1,
+    })
+}
+
+/// 导入用户手动挑选的**单个文件**——典型场景：从搜狗词库网站下载了一个
+/// 细胞词库 .scel，跟本机装没装搜狗完全无关。
+pub fn import_file(path: &Path, max_len: usize) -> Result<Imported, String> {
+    let job = job_for_file(path)?;
+    run(std::slice::from_ref(&job), max_len)
+}
+
 /// 从用户手动指定的目录导入。
 pub fn import_dir(dir: &Path, max_len: usize) -> Result<Imported, String> {
     let jobs = jobs_in_dir(dir);
@@ -688,6 +728,17 @@ mod tests {
         assert!(extract_bin_strict(&record).is_empty());
         // 但宽松解析本来就只看长度，照样认（不然 usr.bin 一个词都读不出来）
         assert_eq!(extract_bin_loose(&record), vec!["你好".to_string()]);
+    }
+
+    #[test]
+    #[test]
+    fn job_for_file_maps_by_extension() {
+        let j = job_for_file(Path::new("下载/经济学.scel")).unwrap();
+        assert!(matches!(j.kind, Kind::Scel));
+        assert_eq!(j.prio, 1, "手动挑的文件和细胞词库同级");
+        assert!(matches!(job_for_file(Path::new("a/b.txt")).unwrap().kind, Kind::Text));
+        assert!(matches!(job_for_file(Path::new("a/b.BIN")).unwrap().kind, Kind::BinLoose), "扩展名大小写不敏感");
+        assert!(job_for_file(Path::new("a/b.exe")).is_err(), "不认识的扩展名要拒绝而不是瞎猜");
     }
 
     #[test]

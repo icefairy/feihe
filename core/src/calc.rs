@@ -15,6 +15,36 @@
 //!
 //! 全部是纯函数，不读时钟、不碰全局状态，测试可以随便喂输入。
 
+#[cfg(test)]
+mod amount_tests {
+    use super::*;
+
+    #[test]
+    fn amount_forms_puts_uppercase_first() {
+        assert_eq!(amount_forms("123"), ["壹佰贰拾叁元整", "一百二十三元整"]);
+        assert_eq!(amount_forms("123.5"), ["壹佰贰拾叁元伍角", "一百二十三元五角"]);
+    }
+
+    #[test]
+    fn amount_forms_handles_fraction_edges() {
+        assert_eq!(amount_forms("123.05")[0], "壹佰贰拾叁元零伍分", "有分无角补零");
+        assert_eq!(amount_forms("123.50"), amount_forms("123.5"), "末尾零不影响");
+        assert_eq!(amount_forms("0.5"), ["伍角", "五角"], "不足一元不写元");
+        assert_eq!(amount_forms("123."), amount_forms("123"), "刚敲完点按整数给，候选不闪");
+    }
+
+    #[test]
+    fn amount_ok_rejects_garbage_and_overflow() {
+        assert!(amount_ok("123"), "中间态 /v1 /v12 都得合法");
+        assert!(amount_ok("123.5"));
+        assert!(!amount_ok("12.345"), "角分只有两位");
+        assert!(!amount_ok(".5"), "整数部分不能空");
+        assert!(!amount_ok("abc"));
+        assert!(!amount_ok("1.2.3"), "最多一个小数点");
+        assert!(!amount_ok("12345678901234567"), "16 位封顶，再长没有中文读法");
+    }
+}
+
 /// 算出 `/c` 后面那一串对应的候选。算不出来（语法错、除零）返回空。
 pub fn forms(body: &str) -> Vec<String> {
     if body.is_empty() {
@@ -57,6 +87,40 @@ fn number_forms(body: &str) -> Option<Vec<String>> {
         out.push(crate::number::amount_upper(integer, fraction));
     }
     Some(out)
+}
+
+/// `/v` 金额模式的合法性：纯数字、至多一个小数点、角分最多两位、整数 16 位以内。
+///
+/// 中间态必须合法：用户打 `/v123.5` 会依次经过 `/v1`、`/v12`……任何一步被拒，
+/// 组合串就断了（和 `code_ok` 的注释同一个道理）。
+pub fn amount_ok(body: &str) -> bool {
+    let (integer, fraction) = body.split_once('.').unwrap_or((body, ""));
+    let digit = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    !integer.is_empty()
+        && digit(integer)
+        && digit(fraction)
+        && fraction.len() <= 2
+        && integer.trim_start_matches('0').len() <= 16
+}
+
+/// `/v` 后面那串数字 → 金额候选：**大写在前**（这个命令就是为了开票），小写读法
+/// 随后当参考。`/v` 和 `/c123` 的区别是只有金额、没有读法/算式的一堆变体。
+///
+/// - `123` → 壹佰贰拾叁元整 / 一百二十三元整
+/// - `123.5` → 壹佰贰拾叁元伍角 / 一百二十三元五角
+/// - `123.05` → 壹佰贰拾叁元零伍分（有分无角，元后补零）
+/// - `123.50` → 壹佰贰拾叁元伍角（末尾的零不影响数值，截掉）
+pub fn amount_forms(body: &str) -> Vec<String> {
+    if !amount_ok(body) {
+        return Vec::new();
+    }
+    let (integer, fraction) = body.split_once('.').unwrap_or((body, ""));
+    // 末尾的零不参与数值（伍角 = 伍拾分），但「零伍分」里的 0 是有效位，得留着
+    let fraction = fraction.trim_end_matches('0');
+    vec![
+        crate::number::amount_upper(integer, fraction),
+        crate::number::amount_lower(integer, fraction),
+    ]
 }
 
 /// `1998-3-8` / `1998/3/8` / `1998.3.8` → 中文日期、常见写法、补零的 ISO。

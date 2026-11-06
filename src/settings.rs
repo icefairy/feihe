@@ -21,6 +21,10 @@ use windows::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 };
 // SetScrollInfo 在 windows-rs 里归在 Controls 下（GetScrollInfo 还在 WindowsAndMessaging）
+// 滚动时的原子重画：RedrawWindow 和 RDW_* 标志归 Gdi
+use windows::Win32::Graphics::Gdi::{
+    RedrawWindow, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+};
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::Controls::Dialogs::*;
 // EnableWindow 在 windows-rs 里归到了 KeyboardAndMouse 模块（跟着 user32 的分组走）
@@ -111,6 +115,7 @@ const ID_EXPORT: i32 = 152;
 const ID_CLOSE: i32 = 153;
 const ID_COMPILE: i32 = 154;
 const ID_SOGOU: i32 = 157;
+const ID_SOGOU_FILE: i32 = 158;
 const ID_ABOUT: i32 = 155;
 const ID_ABOUT_LINK: i32 = 156;
 
@@ -412,13 +417,39 @@ fn apply_scheme(scheme: Scheme) {
 }
 
 fn pick_file(h: HWND, save: bool) -> Option<std::path::PathBuf> {
+    pick_file_filtered(
+        h,
+        save,
+        "词库文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0",
+        if save { "导出词库" } else { "导入词库" },
+        "txt",
+    )
+}
+
+/// 细胞词库文件选择框：从搜狗词库网站下载的就是 .scel，放在哪个目录都行，
+/// 跟本机装没装搜狗无关。
+fn pick_scel_file(h: HWND) -> Option<std::path::PathBuf> {
+    pick_file_filtered(
+        h,
+        false,
+        "搜狗细胞词库 (*.scel)\0*.scel\0所有文件 (*.*)\0*.*\0",
+        "导入细胞词库",
+        "scel",
+    )
+}
+
+fn pick_file_filtered(
+    h: HWND,
+    save: bool,
+    filter_text: &str,
+    title: &str,
+    defext: &str,
+) -> Option<std::path::PathBuf> {
     let mut buf = [0u16; 1024];
-    let filter: Vec<u16> = "词库文件 (*.txt)\0*.txt\0所有文件 (*.*)\0*.*\0\0"
-        .encode_utf16()
-        .collect();
-    let title = if save { "导出词库" } else { "导入词库" };
+    // OFN 的 filter 以「描述\0模式\0」成对出现，结尾要多一个 \0 收口
+    let filter: Vec<u16> = format!("{filter_text}\0").encode_utf16().collect();
     let title_w = to_wide(title);
-    let defext = to_wide("txt");
+    let defext = to_wide(defext);
 
     let mut ofn = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
@@ -611,6 +642,20 @@ unsafe fn on_command(h: HWND, id: i32) {
                     } else {
                         set_text(h, ID_NOTE, "未导入（没找到搜狗词库）");
                     }
+                }
+            }
+        }
+        ID_SOGOU_FILE => {
+            // 从搜狗词库网站下载的细胞词库是单个 .scel 文件，放在哪个目录都行，
+            // 跟本机装没装搜狗无关——所以给独立的选文件入口，而不是塞进
+            // 「从搜狗导入」的自动发现/选目录流程里让用户绕。
+            if let Some(path) = pick_scel_file(h) {
+                let r = with_wait_cursor(|| {
+                    crate::sogou::import_file(&path, crate::sogou::MAX_LEN)
+                });
+                match r {
+                    Ok(s) => set_text(h, ID_NOTE, &sogou_summary(&s)),
+                    Err(e) => set_text(h, ID_NOTE, &format!("导入失败：{e}")),
                 }
             }
         }
@@ -874,6 +919,11 @@ unsafe fn scroll_to(h: HWND, pos: i32) {
     }
     SCROLL.store(pos, Ordering::Release);
     if let Ok(g) = SCROLLABLE.lock() {
+        // 残影的根因：逐个 SetWindowPos 会让每个子窗口各自异步重画，而父窗口
+        // 暴露出来的空隙没人擦——先动的画完了、后动的还没挪，中间态就留在屏幕上。
+        // 对策三步：挂起重绘 → 全部挪完 → 原子重画。UpdateWindow 只管父窗口自己，
+        // 子窗口的过期区域得过 RDW_ALLCHILDREN 才能一起同步刷掉。
+        let _ = SendMessageW(h, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0)));
         for &(hwnd, x, base) in g.iter() {
             let child = HWND(hwnd as *mut core::ffi::c_void);
             let _ = SetWindowPos(
@@ -886,6 +936,13 @@ unsafe fn scroll_to(h: HWND, pos: i32) {
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
+        let _ = SendMessageW(h, WM_SETREDRAW, Some(WPARAM(1)), Some(LPARAM(0)));
+        let _ = RedrawWindow(
+            Some(h),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        );
     }
     sync_scrollbar(h);
 }
@@ -1066,24 +1123,29 @@ unsafe fn build(h: HWND) {
     label(h, "", 16, y, 428, ID_DATA_DIR);
 
     y += 34;
-    // 四个按钮挤一行：428px 里 96+116+90+98 加上 8px 间隔正好铺满。
-    // 「从搜狗导入」排在「导入词库」右边——它本质上也是导入，只是词从哪来不同。
+    // 四个按钮挤一行：428px 里 96+116+96+96 加上 8px 间隔正好铺满。
+    // 「从搜狗导入」自动发现本机搜狗；「细胞词库」直接选下载来的 .scel 文件
+    // （搜狗词库网站下载的，跟装没装搜狗无关）——同一个「词从哪来」的家族。
     push(h, "导入词库…", 16, y, 96, 28, ID_IMPORT);
     push(h, "从搜狗导入…", 120, y, 116, 28, ID_SOGOU);
-    push(h, "导出词库…", 244, y, 90, 28, ID_EXPORT);
-    push(h, "编译个人词库", 342, y, 98, 28, ID_COMPILE);
-
-    y += 38;
-    label(h, "格式：词<TAB>全拼（你好<TAB>ni hao）· 从搜狗导入自动注音", 16, y, 428, ID_NOTE);
-
-    // 自定义短语：和「导入词库」一样属于「我能喂给它什么」，紧跟在这一块后面。
+    push(h, "细胞词库…", 244, y, 96, 28, ID_SOGOU_FILE);
+    push(h, "导出词库…", 348, y, 96, 28, ID_EXPORT);    y += 38;
+    push(h, "编译个人词库", 16, y, 98, 28, ID_COMPILE);
+    label(
+        h,
+        "格式：词<TAB>全拼（你好<TAB>ni hao）· 细胞词库选 .scel，自动注音",
+        122,
+        y + 6,
+        322,
+        ID_NOTE,
+    );    // 自定义短语：和「导入词库」一样属于「我能喂给它什么」，紧跟在这一块后面。
     // 入口做成按钮而不是写个路径：用户不会为了一个没见过的文件去翻设置目录。
-    push(h, "编辑自定义短语…", 16, y + 24, 130, 26, ID_CUSTOM);
+    push(h, "编辑自定义短语…", 16, y + 38, 130, 26, ID_CUSTOM);
     label(
         h,
         "码<TAB>文本，可用 {year} {month} {day} 这类变量",
         152,
-        y + 28,
+        y + 42,
         292,
         0,
     );

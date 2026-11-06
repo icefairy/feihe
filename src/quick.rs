@@ -78,6 +78,10 @@ pub const EXPR_KEY: char = 'c';
 /// 码点模式的子前缀：`/u4e00` 出「一」，`/uuid` 出随机 UUID。
 pub const UNI_KEY: char = 'u';
 
+/// `/v` 金额：数字 → 财务大写金额（`/v123` → 壹佰贰拾叁元整），开票场景专用。
+/// 和 `/c` 的区别是候选里只有金额，不用在一堆读法变体里挑。
+pub const AMT_KEY: char = 'v';
+
 /// 一次取到的时间快照。同一批候选必须用同一个时刻，否则「17:36」和「17:36:50」
 /// 可能跨秒对不上。
 struct Now {
@@ -382,6 +386,12 @@ const CMDS: &[Cmd] = &[
         preview: Some("码点 / UUID（/u4e00 → 一）"),
         build: |_| Vec::new(),
     },
+    Cmd {
+        key: "v",
+        label: "金额",
+        preview: Some("/v123 → 壹佰贰拾叁元整（/v0.5 → 伍角）"),
+        build: |_| Vec::new(),
+    },
 ];
 
 /// 可用命令清单（设置窗/文档里展示用）
@@ -399,7 +409,8 @@ pub fn is_expr_char(c: char) -> bool {
 
 /// 引导符后面的内容是不是合法编码。
 ///
-/// 三种形态：带参数的 `/c…`（算式字符）、`/u…`（十六进制或 `uuid` 的前缀）、
+/// 四种形态：带参数的 `/c…`（算式字符）、`/u…`（十六进制或 `uuid` 的前缀）、
+/// `/v…`（金额数字）、
 /// 其余纯小写字母（日期之类的固定命令）。
 ///
 /// **中间状态必须合法**：用户打 `/uuid` 会依次经过 `/u`、`/uu`、`/uui`…… 中间
@@ -411,6 +422,10 @@ pub fn code_ok(rest: &str) -> bool {
     }
     if let Some(body) = rest.strip_prefix(EXPR_KEY) {
         return body.chars().all(is_expr_char);
+    }
+    if let Some(body) = rest.strip_prefix(AMT_KEY) {
+        // 数字 + 至多一个小数点 + 角分两位；中间态（/v1、/v12、/v1.）都必须合法
+        return crate::calc::amount_ok(body);
     }
     if let Some(body) = rest.strip_prefix(UNI_KEY) {
         let hex = body.len() <= 6
@@ -453,6 +468,7 @@ fn uuid_forms() -> Vec<String> {
 /// - 是某个命令的前缀：展开该命令的所有格式
 /// - `/c…`：算式 / 数字 / 日期，见 [`crate::calc`]
 /// - `/u…`：码点，`uuid` 出随机 UUID
+/// - `/v…`：金额，财务大写在前、小写读法在后
 /// - 匹配不到：空
 pub fn candidates(key: &str) -> Vec<String> {
     if !code_ok(key) {
@@ -461,6 +477,9 @@ pub fn candidates(key: &str) -> Vec<String> {
     // 带参数的两条先接走，不能进下面那张表（表是按前缀匹配的，`/c` 会命中 `c` 条目）
     if let Some(body) = key.strip_prefix(EXPR_KEY) {
         return crate::calc::forms(body);
+    }
+    if let Some(body) = key.strip_prefix(AMT_KEY) {
+        return crate::calc::amount_forms(body);
     }
     if let Some(rest) = key.strip_prefix(UNI_KEY) {
         // 整串就是 `uuid` 才生成；`/uid` 是「十六进制里没有 i」→ 交给下面返回空
@@ -494,6 +513,16 @@ pub fn candidates(key: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn amount_command_converts_to_uppercase_money() {
+        assert_eq!(candidates("v123"), ["壹佰贰拾叁元整", "一百二十三元整"]);
+        assert_eq!(candidates("v123.05"), ["壹佰贰拾叁元零伍分", "一百二十三元零五分"]);
+        assert!(candidates("v12.345").is_empty(), "角分只有两位");
+        assert!(code_ok("v1"), "中间态 /v1 必须合法");
+        assert!(code_ok("v1."), "刚敲完点也得合法，否则组合串断掉");
+        assert!(!code_ok("v1.2.3"));
+    }
 
     #[test]
     fn empty_key_lists_all_commands() {
