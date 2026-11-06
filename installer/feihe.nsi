@@ -304,6 +304,18 @@ Section "主程序" SecMain
   SetOutPath "$INSTDIR"
   StrCpy $R5 0
 
+  ; 装之前先把上一次留下的改名备份扫掉。
+  ;
+  ; `CopyOrReplace` 只在**本次走到改名替换**时才顺手清 `backup-*.bak`；如果本次
+  ; 首拷就成功（DLL 没被映射，最常见的情况），那条 done 分支根本不会执行，
+  ; 于是每装了 N 次就攒下 N 份 4~6 MB 的旧 DLL。实测一台常升级的机器上攒到
+  ; 8 份 36 MB，用户看到的是「这个文件夹怎么越来越大」。
+  ;
+  ; 此刻本次的文件还没落地，目录里现有的 bak **一定**是更早版本的残留，
+  ; 删了绝不影响本次回滚（本次失败时 `MakeBackupName` 会另起一个新名字）。
+  ; 删不掉（还有进程映射着）就算了，不影响安装，留到下次再来。
+  Delete "$INSTDIR\backup-*.bak"
+
   DetailPrint "部署 64 位 DLL…"
   StrCpy $R8 "$PLUGINSDIR\ime\feihe.dll"
   StrCpy $R9 "$INSTDIR\feihe.dll"
