@@ -664,7 +664,7 @@ unsafe fn on_command(h: HWND, id: i32) {
                             });
                             match r {
                                 Ok(s) => set_text(h, ID_NOTE, &sogou_summary(&s)),
-                                Err(e) => set_text(h, ID_NOTE, &format!("导入失败：{e}")),
+                                Err(e) => show_import_error(h, "从搜狗导入", &e),
                             }
                         }
                     } else {
@@ -683,7 +683,10 @@ unsafe fn on_command(h: HWND, id: i32) {
                 });
                 match r {
                     Ok(s) => set_text(h, ID_NOTE, &sogou_summary(&s)),
-                    Err(e) => set_text(h, ID_NOTE, &format!("导入失败：{e}")),
+                    // 解析不出词、格式对不上、文件太大……都在这条路上。
+                    // **必须弹框**：只写进 428px 的静态标签，长一点就被裁成半句，
+                    // 用户看到的就是「点了没反应」（2026-11-07 的现场）。
+                    Err(e) => show_import_error(h, "导入细胞词库", &e),
                 }
             }
         }
@@ -787,9 +790,12 @@ unsafe fn open_custom() {
 /// 也是为这个；更细的数字（扫了多少条、多少走基础词库、多少逐字注音）都在
 /// `feihe.log` 里。
 fn sogou_summary(s: &crate::sogou::Imported) -> String {
+    // `encoded == 0` 走不到这里：core 的 `sogou_import` 把它当 Err 处理了。
+    // 之前它在这是「已解析1个文件（0条），没有新词——都已在词库里」——
+    // 用户点了「细胞词库…」看到这句，完全分不清是「没解析出来」还是「本来就有」。
     if s.added == 0 {
         return format!(
-            "已解析{}个文件（{}条），没有新词——都已在词库里。",
+            "解析{}个文件（{}条），没有新词——都已在词库里。",
             s.files, s.encoded
         );
     }
@@ -797,6 +803,27 @@ fn sogou_summary(s: &crate::sogou::Imported) -> String {
         "已导入{}个新词（{}个文件，跳过{}条）。切换输入法后生效。",
         s.added, s.files, s.skipped
     )
+}
+
+/// 导入失败时给用户看的话：错误全文（可能多行）+ 一句「去哪看细节」。
+///
+/// 以前只有 `set_text(h, ID_NOTE, ...)`——428px 的静态标签，超过一行就被裁。
+/// 现在错误还会弹一个对话框：用户报「点了没反应」时，最怕的就是**错误被裁成
+/// 半句话**或者压根没看见。
+unsafe fn show_import_error(h: HWND, title: &str, msg: &str) {
+    set_text(h, ID_NOTE, &format!("导入失败：{msg}"));
+    // 多行错误用对话框（MessageBoxW 会自动换行）；单行短的就不打扰。
+    // 两串必须绑到局部变量，同 `ask_yes_no` 的注释。
+    if msg.chars().count() > 24 || msg.contains('\n') {
+        let text = to_wide(msg);
+        let cap = to_wide(title);
+        MessageBoxW(
+            Some(h),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(cap.as_ptr()),
+            MB_OK | MB_ICONWARNING,
+        );
+    }
 }
 
 /// 执行期间把光标换成沙漏。

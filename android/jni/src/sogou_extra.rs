@@ -5,8 +5,11 @@
 //! 没有注册表，用户是从浏览器下载一个 `.scel` 然后交给系统文件选择器，所以这里
 //! 只有「从一个文件路径走到个人词库」这一段。
 //!
-//! 解析和注音**不在这一层写**：`feihe_core::sogou::encode_one` 是两端共用的同一份
-//! 实现，这一层只负责「读盘 → 调 core → 合并进个人词库 → 汇报数字」。
+//! **这一段现在是两端共用的**：`feihe_core::sogou_import::import_file` 干的就是
+//! 「读盘 → 判扩展名 → 解析注音 → 合并进个人词库」，Windows 的「细胞词库…」按钮
+//! 也调它（`src/settings.rs`）。以前这段逻辑各写一份，2026-11-07 才发现桌面端那份
+//! 是**静默失败**的：`.scel` 解析出 0 条也回 `Ok`，界面只显示一句看不出问题的摘要。
+
 
 use super::{make_string, read_string};
 use jni::objects::{JClass, JString};
@@ -39,59 +42,14 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_sogouImportNative<
     make_string(&mut env, &text)
 }
 
-/// 真正的活：读文件 → 判格式 → 解析注音 → 合并 → 编译。抽出来方便单测。
-pub fn import_path(path: &std::path::Path) -> String {
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    let Some(kind) = feihe_core::sogou::kind_for_ext(&ext) else {
-        return format!(
-            "ERR|不认识的扩展名 .{ext}（支持 .scel 细胞词库 / .bin / .txt 文本词库）"
-        );
-    };
-
-    // `.scel` / `.bin` 动辄几十 MB，读之前先看一眼大小：手机的内存不像电脑那么宽裕，
-    // 而这个词库本来也不该有几百 MB。
-    match std::fs::metadata(path) {
-        Ok(m) if m.len() > 128 * 1024 * 1024 => {
-            return format!(
-                "ERR|文件有 {} MB，太大了（词库文件不该超过 128 MB）",
-                m.len() / 1024 / 1024
-            )
-        }
-        Ok(_) => {}
-        Err(e) => return format!("ERR|读不到这个文件：{e}"),
-    }
-
-    let data = match std::fs::read(path) {
-        Ok(d) => d,
-        Err(e) => return format!("ERR|读不到这个文件：{e}"),
-    };
-
-    let label = path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
-    let job = feihe_core::sogou::Job {
-        label,
-        data,
-        kind,
-        // 手动挑的文件按细胞词库级（1）：和 Windows 端同一个取舍，见 sogou::kind_for_ext
-        prio: 1,
-    };
-
-    let (wordlist, mut stat) = feihe_core::sogou::encode_one(&job, feihe_core::sogou::MAX_LEN);
-    if stat.encoded == 0 {
-        return format!("ERR|{}", stat.summary());
-    }
-
-    // 合并进个人词库（会顺手编译 user.bin；编译失败只影响速度，不算导入失败）。
-    match feihe_core::dict::merge_text(&wordlist) {
-        Ok((added, _bin)) => {
-            stat.added = added;
-            format!("OK|{}|{added}", stat.summary())
-        }
-        Err(e) => format!("ERR|解析出 {} 条，但写个人词库失败：{e}", stat.encoded),
+/// 真正的活：只做「调 core 的共实现 + 拼返回串」。
+///
+/// **不在这一层读盘、不在这一层解析**：`feihe_core::sogou_import::import_file`
+/// 两端共用（Windows 的「细胞词库…」也调它）。2026-11-07 之前这里和桌面端各写
+/// 一份，结果桌面端那份解析出 0 条还返回成功，用户看到的就是「导入没反应」。
+fn import_path(path: &std::path::Path) -> String {
+    match feihe_core::sogou_import::import_file(path, feihe_core::sogou::MAX_LEN) {
+        Ok(stat) => format!("OK|{}|{}", stat.summary(), stat.added),
+        Err(e) => format!("ERR|{e}"),
     }
 }

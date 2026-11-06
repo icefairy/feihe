@@ -57,6 +57,7 @@ pub struct Job {
 
 /// 一次导入的统计。只留**设置窗要说给人听**的那几个数；更细的（扫描了多少条、
 /// 多少走基础词库、多少逐字注音）写进 `feihe.log`，那是排查用的。
+#[derive(Debug, Clone, Default)]
 pub struct Imported {
     /// 成功解析的文件数
     pub files: usize,
@@ -191,53 +192,76 @@ fn extract_scel(data: &[u8]) -> Vec<String> {
     if !data.starts_with(b"SougouPY") {
         return Vec::new();
     }
-    let mut pos = 9usize;
+
+    // 头部：magic 之后是 4 个以 0x0A 结尾的字段（不含末尾 0x00）。各版本字段数
+    // 略有差异，所以四个候选起点都试一遍，取「解析出词最多」的那个——比猜版本号可靠。
+    let mut base = 9usize;
+    let mut heads = vec![base];
     for _ in 0..4 {
-        while pos + 1 < data.len() && data[pos..pos + 2] != [0x0a, 0x00] {
-            pos += 2;
+        while base + 1 < data.len() && data[base..base + 2] != [0x0a, 0x00] {
+            base += 2;
         }
-        pos += 2;
-    }
-    if pos >= data.len() {
-        return Vec::new();
+        base += 2;
+        heads.push(base);
     }
 
+    // 游标对齐（2026-11-07 修）。
+    //
+    // 老写法是「严格按记录走，一遇不合法就 `break`」：只要有一个记录解析失败，
+    // **后面整个文件都不要了**。实测在搜狗现在的 .scel 上会解析出 0 条——因为
+    // 词条区和列表区之间有一段格式不认识的数据，第一次 `break` 就把剩下的全丢。
+    //
+    // 现在改成：解析成功就前进一条；失败就**跳过 2 字节重试**。搜狗自己的解析器
+    // 也是这个思路。代价是理论上可能误判出半截词，但那类东西注不出音，会在
+    // `Encoder::encode` 那步被丢掉。
     let parse = |start: usize| -> Vec<String> {
         let mut out = Vec::new();
         let mut p = start;
         while p + 4 <= data.len() {
-            let Some(plen) = u16_at(data, p).map(|v| v as usize) else { break };
-            if plen == 0 || plen > 200 {
-                break;
+            let done = (|| {
+                let plen = u16_at(data, p)? as usize;
+                if !(2..=64).contains(&plen) {
+                    return None;
+                }
+                let py_end = p + 2 + plen * 2;
+                if py_end + 2 > data.len() {
+                    return None;
+                }
+                let wlen = u16_at(data, py_end)? as usize;
+                if !(2..=16).contains(&wlen) {
+                    return None;
+                }
+                let w_end = py_end + 2 + wlen * 2;
+                if w_end > data.len() {
+                    return None;
+                }
+                let w = utf16_at(data, py_end + 2, wlen * 2)?;
+                if !is_all_cjk(&w) {
+                    return None;
+                }
+                Some((w, w_end))
+            })();
+            match done {
+                Some((w, next)) => {
+                    out.push(w);
+                    p = next;
+                }
+                // 这条记录不合法：跳 2 字节再对齐（UTF-16 的边界）
+                None => p += 2,
             }
-            p += 2;
-            if p + plen * 2 + 2 > data.len() {
-                break;
-            }
-            p += plen * 2;
-            let Some(wlen) = u16_at(data, p).map(|v| v as usize) else { break };
-            if wlen == 0 || wlen > 64 {
-                break;
-            }
-            p += 2;
-            if p + wlen * 2 > data.len() {
-                break;
-            }
-            match utf16_at(data, p, wlen * 2) {
-                Some(w) if is_all_cjk(&w) => out.push(w),
-                Some(_) => {}
-                None => break,
-            }
-            p += wlen * 2;
         }
         out
     };
 
     let mut best = Vec::new();
-    for start in [pos, pos + 4, pos + 2, pos + 8] {
+    for start in heads {
         let got = parse(start);
         if got.len() > best.len() {
             best = got;
+        }
+        // 已经解析出足够多的词，不必再试更靠后的起点
+        if best.len() > 16 {
+            break;
         }
     }
     best
