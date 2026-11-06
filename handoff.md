@@ -4505,3 +4505,63 @@ Android 的 `versionName` 仍是 `0.1.0-skeleton`，没动——那是 App 版�
 +76 KB（233 → 309 KB），大头是 0.3.11 之后这半月累积的改动（分段候选、引擎代码、
 词条）。README / 首页 / 使用帮助三处的体积数字已按实测同步。
 
+
+## 2026-11-06（续）性能优化：P0~P3 全做
+
+用户看完性能报告后要求「建议的条目全都要做」。基准工具 `core/examples/bench.rs`
+（`FEIHE_NO_USER_DICT=1 cargo run --release --example bench -p feihe-core`）先行，
+改动前后都有数。
+
+### P0：内置联想表 309 KB 文本 → 323 KB 二进制（next.bin）
+
+`next.rs` 原来是 `include_str!` + 第一次 `suggest` 时解析成 HashMap：实测
+**5.8 ms / 37,000 次分配 / 2.1 MB 堆**，落在「第一次上屏」或「键盘带着已有文字弹出」
+的瞬间，而且 2.1 MB 是每个宿主进程一份。现在：
+
+- `core/src/nextbin.rs`：零解析读取器（排序头词池 + 偏移表 + 尾词池，二分查找）。
+  **不存权重**——内置表顺序就是生成时的词频顺序，运行时只按序取；省 80 KB。
+  编码器 `nextbin::encode` 就住在读取器同一个文件里，`build.rs` 用 `#[path]` 拉进去用，
+  单测也用它——编码/解码不会各改一半。
+- `core/build.rs`：新增 `gen_next_bin`，把 `src/next_builtin.txt` 编成 `$OUT_DIR/next.bin`，
+  并检查每个头词的权重是否递减（乱序会改变联想排序，构建时就警告）。
+- 效果：首次 suggest **5.8 ms → 0.088 ms**，分配 37,000 次 / 2.1 MB → 10 次 / ~0 KB。
+
+### P1：长串输入的 DP 从三次并成一次
+
+`lookup_input` 里本来就有 `segments`，但 JNI 只回传码+候选，Kotlin 拿到后再调一次
+`segmentCandidatesNative` 重算——24 键输入每次按键白跑 ~100 µs。现在：
+
+- `lookupInputNative` 返回串末尾加 `#seg` 标记行 + 分段数据（每行 `段码\t候选…`）；
+- `NativeEngine.lookupInput` 返回 `Lookup(code, words, segments)`；
+- `FeiheIme.refreshSegmentMode` 直接用带回的 `pendingSegments`，删掉
+  `candidates.size == 1 && code.length >= 4` 那个启发式短路（真值本来就只在 core）；
+- `segmentCandidatesNative` JNI + Kotlin 包装 + core `lookup_segments` 随之删除（无调用方）；
+- `lookup_input` 本身也只算一次分段：整句由各段第一名拼出来，
+  `lookup_input_sentence_equals_compose_sentence` 钉住「与 compose_sentence 一字不差」。
+
+### P2：候选条不再每次按键重建 20~35 个 View
+
+引擎一次按键才几微秒，UI 才是大头。`renderCandidates` 改成复用：
+多退少补 TextView，`bindCandidateView` / `bindSeparatorView` / `bindSuggestionView`
+把每个视觉属性（含 background——可能是分段 chip 复用来的）都重设一遍。
+数字行按「显示开关 + 候选个数」缓存，个数不变就不重建（省 9 个 GradientDrawable）。
+**真机手感未验**（adb WiFi 掉线），但逻辑上渲染输出和以前逐像素等价。
+
+### P3：超长串限长
+
+分段 DP 开销随音节数平方涨。`lookup_input` 加 `MAX_SENTENCE_SYLLABLES = 24`（48 键）：
+以内照常，超过就不试整句/分段——那种串基本是忘了选词，上限把最坏情况钉住。
+
+### 数字
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 首次 suggest | 5.8 ms / 2.1 MB 堆 | **0.088 ms / ~0** |
+| lookup 乱码 8 键 | 40 µs / 171 allocs | 21 µs / 93 |
+| lookup 乱码 16 键 | 89 µs | 46 µs |
+| lookup 24 键（含壳重复） | 205 + 103 µs | **108 µs** |
+| 全拼长句 22 键 | 98 µs | 55 µs |
+| suggest 每次分配 | 12 次 | 6 次 |
+
+测试：Rust **358** 项（111 + 247，nextbin 新增 4 + dict 新增 1，删 2 旧内置表测试），
+Android 71 项不变，`assembleDebug` 通过。文档数字四处同步（354 → 358）。

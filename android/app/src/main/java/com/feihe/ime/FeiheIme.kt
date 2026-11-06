@@ -101,6 +101,14 @@ class FeiheIme : InputMethodService() {
      */
     private var segmentState: SegmentState? = null
 
+    /**
+     * 这次查询引擎带回的分段信息（`NativeEngine.Lookup.segments`）。
+     *
+     * 和 [segmentState] 分开存：segmentState 是「进没进分段态」的 UI 状态，
+     * 这里是引擎算好的真值。core 在 lookup 里顺手算好搭车回来，壳不再单独调 JNI。
+     */
+    private var pendingSegments: List<NativeEngine.SegmentChoice> = emptyList()
+
     private val segmentActive: Boolean get() = segmentState != null
 
     /**
@@ -131,6 +139,9 @@ class FeiheIme : InputMethodService() {
      * 没候选时高度为 0，字母键一 dp 不少。见 [NumberSelectLayout]。
      */
     private var numberRowHost: LinearLayout? = null
+
+    /** 上次画数字行时的内容键（0 = 隐藏）。输入视图重建时复位成 MIN_VALUE 强制重画。 */
+    private var numberRowKey = Int.MIN_VALUE
 
     /** 键盘容器。字母页和数字页在这里换，**不是**重建整个 InputView。 */
     private var keyboardHost: LinearLayout? = null
@@ -345,6 +356,7 @@ class FeiheIme : InputMethodService() {
 
         // 数字选词行：夹在候选条和键盘之间。没候选时整行 GONE（高度 0），
         // 所以它不占字母键的高度——这是 A2「不挤掉字母高度」的落点。
+        numberRowKey = Int.MIN_VALUE
         numberRowHost = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -596,13 +608,15 @@ class FeiheIme : InputMethodService() {
         if (!chinese || pending.isEmpty()) {
             code = ""
             candidates = emptyList()
+            pendingSegments = emptyList()
         } else {
             // 有联想时候选少给几个，让候选条末尾的 →词 不用横滑就看得见。
             // 上限来自设置页；算式在 CandidateBarPolicy（有 JVM 单测）。
             val slots = CandidateBarPolicy.candidateSlots(candidateLimit, suggestions.isNotEmpty())
-            val (c, words) = NativeEngine.lookupInput(pending.toString(), pinyinMode, slots)
-            code = c
-            candidates = words
+            val lookup = NativeEngine.lookupInput(pending.toString(), pinyinMode, slots)
+            code = lookup.code
+            candidates = lookup.words
+            pendingSegments = lookup.segments
         }
         refreshSegmentMode()
         renderCandidates()
@@ -611,18 +625,13 @@ class FeiheIme : InputMethodService() {
     /**
      * 要不要进「逐段选择」态。
      *
-     * 判据**完全来自引擎**：`segmentCandidates` 返回空就是普通候选。这里加的
-     * `candidates.size == 1 && code.length >= 4` 只是省一次 JNI 的短路条件（整句
-     * 按定义只有一条候选），不是第二份判断规则——真值仍在 `lookup_input.segments`。
+     * 判据**完全来自引擎**：`pendingSegments` 为空就是普通候选——它是这次查询里
+     * core 顺手算好带回来的（`lookup_input.segments`），不是壳猜的。以前这里会再调
+     * 一次 JNI 重算分段，长串输入时同一段 DP 每次按键跑两遍。
      */
     private fun refreshSegmentMode() {
-        segmentState = if (chinese && candidates.size == 1 && code.length >= 4) {
-            val segs = NativeEngine.segmentCandidates(pending.toString(), pinyinMode, 9)
-            if (segs.isEmpty()) {
-                null
-            } else {
-                SegmentState(segs.map { it.words }).takeIf { it.active }
-            }
+        segmentState = if (chinese) {
+            SegmentState(pendingSegments.map { it.words }).takeIf { it.active }
         } else {
             null
         }
@@ -637,50 +646,62 @@ class FeiheIme : InputMethodService() {
 
     private fun renderCandidates() {
         val bar = candidateBar ?: return
-        bar.removeAllViews()
         renderNumberRow()
         val seg = segmentState
         if (seg != null) {
+            // 分段态的 chip 带选中底色、还有「‹ 返回」这种特殊项，画法不同且低频，
+            // 直接整条重画（它不占键盘高度，重建的抖动没人看得见）。
+            bar.removeAllViews()
             renderSegmentBar(bar, seg)
             return
         }
-        for ((i, word) in candidates.withIndex()) {
-            val item = TextView(this).apply {
-                text = word
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-                setPadding(dp(14f), 0, dp(14f), 0)
-                // 第一个候选高亮：它对应空格，得让人看出来
-                setTextColor(if (i == 0) 0xFF1A6FD4.toInt() else 0xFF202124.toInt())
-                setOnClickListener { commitWord(word) }
-            }
-            bar.addView(item)
+        // 复用已有的 TextView：候选 + 分隔符 + 联想按顺序对位，多了删、少了补。
+        // 以前每次按键都 removeAllViews 再新建 20~35 个 View——引擎一次按键才几微秒，
+        // View 重建才是候选条的大头，而且绝大多数按键只是换几个字。
+        val total = candidates.size + if (suggestions.isEmpty()) 0 else 1 + suggestions.size
+        while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
+        while (bar.childCount < total) bar.addView(TextView(this))
+        var i = 0
+        candidates.forEachIndexed { idx, word ->
+            bindCandidateView(bar.getChildAt(i++) as TextView, word, idx == 0)
         }
-
-        // 联想接在候选后面。**加 `→` 前缀不是为了好看**：它必须让人一眼看出
-        // 「这个不是候选，点了会直接上屏、不吃空格」，否则用户会以为空格能选它。
         if (suggestions.isNotEmpty()) {
-            if (candidates.isNotEmpty()) {
-                bar.addView(
-                    TextView(this).apply {
-                        text = "|"
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-                        setTextColor(0xFFBDBDBD.toInt())
-                        setPadding(dp(2f), 0, dp(2f), 0)
-                    },
-                )
-            }
-            for (word in suggestions) {
-                bar.addView(
-                    TextView(this).apply {
-                        text = "→$word"
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-                        setPadding(dp(14f), 0, dp(14f), 0)
-                        setTextColor(0xFF5F6368.toInt())
-                        setOnClickListener { commitSuggestion(word) }
-                    },
-                )
+            bindSeparatorView(bar.getChildAt(i++) as TextView)
+            suggestions.forEach { word ->
+                bindSuggestionView(bar.getChildAt(i++) as TextView, word)
             }
         }
+    }
+
+    /** 普通候选项。每个视觉属性都重设：这一格可能是从分段 chip 复用来的，带背景。 */
+    private fun bindCandidateView(v: TextView, word: String, first: Boolean) {
+        v.background = null
+        v.text = word
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+        v.setPadding(dp(14f), 0, dp(14f), 0)
+        // 第一个候选高亮：它对应空格，得让人看出来
+        v.setTextColor(if (first) 0xFF1A6FD4.toInt() else 0xFF202124.toInt())
+        v.setOnClickListener { commitWord(word) }
+    }
+
+    /** 候选和联想之间的细竖线，不可点。 */
+    private fun bindSeparatorView(v: TextView) {
+        v.background = null
+        v.text = "|"
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        v.setPadding(dp(2f), 0, dp(2f), 0)
+        v.setTextColor(0xFFBDBDBD.toInt())
+        v.setOnClickListener(null)
+    }
+
+    /** 联想项。**加 → 前缀不是为了好看**：必须一眼看出「点了直接上屏、不吃空格」。 */
+    private fun bindSuggestionView(v: TextView, word: String) {
+        v.background = null
+        v.text = "→$word"
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+        v.setPadding(dp(14f), 0, dp(14f), 0)
+        v.setTextColor(0xFF5F6368.toInt())
+        v.setOnClickListener { commitSuggestion(word) }
     }
 
     /**
@@ -766,12 +787,17 @@ class FeiheIme : InputMethodService() {
      */
     private fun renderNumberRow() {
         val host = numberRowHost ?: return
-        host.removeAllViews()
         val rows = if (showNumberRow && !segmentActive) {
             NumberSelectLayout.rows(candidates.size)
         } else {
             emptyList()
         }
+        // 内容只由「显示开关 + 候选个数」决定，没变就不重建。打一个词要按五六个键，
+        // 候选个数常常不变，这里省掉的是每次按键 10 来个 View + 9 个 GradientDrawable。
+        val key = if (rows.isEmpty()) 0 else candidates.size + 1
+        if (key == numberRowKey) return
+        numberRowKey = key
+        host.removeAllViews()
         if (rows.isEmpty()) {
             host.visibility = View.GONE
             return
@@ -810,6 +836,7 @@ class FeiheIme : InputMethodService() {
         pending.setLength(0)
         code = ""
         candidates = emptyList()
+        pendingSegments = emptyList()
         // 整句上屏后组合结束，分段态必须一起收掉，否则候选条会留着一排旧 chip
         segmentState = null
         suggestions = if (thenSuggest && chinese) {
@@ -833,6 +860,7 @@ class FeiheIme : InputMethodService() {
         pending.setLength(0)
         code = ""
         candidates = emptyList()
+        pendingSegments = emptyList()
         segmentState = null
         suggestions = NativeEngine.suggest(word, SUGGEST_LIMIT)
         renderCandidates()
@@ -852,6 +880,7 @@ class FeiheIme : InputMethodService() {
         pending.setLength(0)
         code = ""
         candidates = emptyList()
+        pendingSegments = emptyList()
         suggestions = emptyList()
         segmentState = null
         renderCandidates()

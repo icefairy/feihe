@@ -2,9 +2,9 @@
 //!
 //! ## 两张表：内置 + 用户
 //!
-//! - **内置表**（`next_builtin.txt`，`include_str!` 进 DLL）：从 rime-ice 词库的复合词
-//!   反推出来的词对（`北京时间` → `北京→时间`），约 7000 个头词 / 2 万条。解决
-//!   「刚装完一个字都联想不出来」的冷启动。
+//! - **内置表**（`next_builtin.txt` 在构建期编成 `next.bin`，零解析嵌进 DLL）：从
+//!   rime-ice 词库的复合词反推出来的词对（`北京时间` → `北京→时间`），约 7000 个头词 /
+//!   2 万条。解决「刚装完一个字都联想不出来」的冷启动。
 //! - **用户表**（`next.txt`，数据目录）：用户自己打出来的词对，按选择次数排。
 //!
 //! 查询时**用户表优先、内置表补位**：两张表的权重不是一回事（内置是词库词频，
@@ -68,6 +68,8 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use crate::nextbin::Bin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -106,58 +108,15 @@ static LAST_FLUSH: Mutex<Option<Instant>> = Mutex::new(None);
 /// （表大了有几百 KB，而「切窗口」是分钟级的动作）。
 static LAST_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
 
-/// 内置联想表，编译期嵌进 DLL（`include_str!`，只读数据，多进程共享同一份物理页）。
+/// 内置联想表：构建期编好的扁平二进制（`next.bin`），**零解析**。
 ///
-/// 惰性解析：`suggest` 大部分调用命不中内置表（用户表已经有足够候选），按需解析
-/// 一次就行，省掉每次 `Activate` 的 228 KB 扫描。
-static BUILTIN: std::sync::OnceLock<Table> = std::sync::OnceLock::new();
+/// 数据落在只读段，由加载器 mmap，多个宿主进程共享同一份物理页。曾经是
+/// `include_str!` + 第一次查询时解析成 HashMap：309 KB 文本 → 5.8 ms / 2.1 MB 堆，
+/// 而且那 2.1 MB 是每个进程各一份。格式和取舍见 `nextbin` 的模块注释。
+static BUILTIN: Bin = Bin::new(include_bytes!(concat!(env!("OUT_DIR"), "/next.bin")));
 
-/// 内置表的文本。由 `tools/gen_next.py` 从 rime-ice 词库生成（复合词拆分），
-/// 每行 `头词<TAB>后续词 权重 后续词 权重 …`。生成参数（按头词长度分桶：
-/// 单字 900 / 两字 5200 / 三字 800 / 四字 300，每头 5 个）见那个脚本的注释，
-/// 调过参数记得重新编译。
-const BUILTIN_TEXT: &str = include_str!("next_builtin.txt");
-
-fn builtin() -> &'static Table {
-    BUILTIN.get_or_init(|| parse_builtin(BUILTIN_TEXT))
-}
-
-/// 内置表的行格式和用户表不同（头词分组，一行多个后续），单独一个解析器。
-///
-/// 不复用 `parse` 的原因：那个格式一行一个词对，2 万行 × 20 字节 ≈ 400 KB，
-/// 而分组后头词只出现一次，省下的是文件体积——`include_str!` 的每个字节都进 DLL。
-fn parse_builtin(text: &str) -> Table {
-    let mut t = Table::new();
-    for line in text.lines() {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((head, rest)) = line.split_once('\t') else {
-            continue;
-        };
-        if !is_word(head) {
-            continue;
-        }
-        let mut tail: Vec<(String, u32)> = Vec::new();
-        let mut it = rest.split_whitespace();
-        while let (Some(w), Some(n)) = (it.next(), it.next()) {
-            if !is_word(w) {
-                continue;
-            }
-            match n.parse::<u32>() {
-                // **不套 `MAX_COUNT`**：那是用户表的计数上限（+1 累加），
-                // 内置表用的是词库统计权重，量级差四个数量级，压平之后
-                // 排序会退化成按字符串比。
-                Ok(n) if n > 0 => tail.push((w.to_string(), n)),
-                _ => continue,
-            }
-        }
-        if !tail.is_empty() {
-            tail.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            t.insert(head.to_string(), tail);
-        }
-    }
-    t
+fn builtin() -> &'static Bin {
+    &BUILTIN
 }
 
 fn file() -> PathBuf {
@@ -376,7 +335,7 @@ fn all_han(s: &str) -> bool {
     !s.is_empty() && s.chars().all(is_han)
 }
 
-/// 在表里找 `key` 的后续；精确失配就**逐个丢掉最左边的字**再找（后缀回退）。
+/// 先精确查 `key`，查不到就**逐个丢掉最左边的字**再查（后缀回退）。
 ///
 /// `今天北京` 查不到，但 `北京` 查得到，而「北京后面接什么」和「今天北京后面接
 /// 什么」基本是同一件事。取**最长的已知后缀**——越长的后缀越接近整词，别一上来
@@ -384,8 +343,11 @@ fn all_han(s: &str) -> bool {
 ///
 /// 后缀最少 2 个字：`计算机` 退到单字「机」得到的是一堆跟整词无关的碎片。
 /// 单字头词只在 `key` 本身就是一个字时才用（用户真的上屏了「我」，不是从长词里截的）。
-fn resolve<'a>(t: &'a Table, key: &str) -> Option<&'a Vec<(String, u32)>> {
-    if let Some(v) = t.get(key) {
+///
+/// 用户表和内置表**共用这一份规则**：写两遍迟早会一边加了下限、另一边没加，
+/// 表现是「桌面能联想、手机不行」这种最难查的分歧。
+fn find_with<T>(key: &str, mut get: impl FnMut(&str) -> Option<T>) -> Option<T> {
+    if let Some(v) = get(key) {
         return Some(v);
     }
     if key.chars().count() <= 2 {
@@ -396,7 +358,7 @@ fn resolve<'a>(t: &'a Table, key: &str) -> Option<&'a Vec<(String, u32)>> {
         if suffix.chars().count() < 2 {
             break;
         }
-        if let Some(v) = t.get(suffix) {
+        if let Some(v) = get(suffix) {
             return Some(v);
         }
     }
@@ -407,24 +369,30 @@ fn resolve<'a>(t: &'a Table, key: &str) -> Option<&'a Vec<(String, u32)>> {
 ///
 /// 权重**不能**跨表比数值：内置是词库统计（几十万量级），用户是选择次数（个位数），
 /// 混排会让内置表压死用户刚学的那一条。用户打过的词对他自己永远更可信。
-fn merge(
-    mine: Option<&Vec<(String, u32)>>,
-    theirs: Option<&Vec<(String, u32)>>,
-    limit: usize,
-) -> Vec<String> {
+fn merge<'a, 'b, A, B>(mine: Option<A>, theirs: Option<B>, limit: usize) -> Vec<String>
+where
+    A: Iterator<Item = &'a str>,
+    B: Iterator<Item = &'b str>,
+{
     let mut out: Vec<String> = Vec::with_capacity(limit);
-    for tail in [mine, theirs].into_iter().flatten() {
-        for (w, _) in tail {
-            if out.len() >= limit {
-                return out;
-            }
-            if !out.iter().any(|x| x == w) {
-                out.push(w.clone());
-            }
-        }
-    }
+    push_uniq(&mut out, mine, limit);
+    push_uniq(&mut out, theirs, limit);
     out
 }
+
+fn push_uniq(out: &mut Vec<String>, it: Option<impl Iterator<Item = impl AsRef<str>>>, limit: usize) {
+    let Some(it) = it else { return };
+    for w in it {
+        if out.len() >= limit {
+            return;
+        }
+        let w = w.as_ref();
+        if !out.iter().any(|x| x == w) {
+            out.push(w.to_string());
+        }
+    }
+}
+
 
 /// 查 `prev` 后面的联想词，按「用户表优先、内置表补位」合并，去重。
 ///
@@ -436,9 +404,13 @@ pub fn suggest(prev: &str, limit: usize) -> Vec<String> {
     if limit == 0 || !all_han(prev) {
         return Vec::new();
     }
-    let mine = with_table(|t| resolve(t, prev).cloned());
-    let theirs = resolve(builtin(), prev).cloned();
-    merge(mine.as_ref(), theirs.as_ref(), limit)
+    let mine = with_table(|t| find_with(prev, |k| t.get(k)).cloned());
+    let theirs = find_with(prev, |k| builtin().find(k));
+    merge(
+        mine.as_ref().map(|v| v.iter().map(|(w, _)| w.as_str())),
+        theirs,
+        limit,
+    )
 }
 
 /// 用户表里有多少个词对（设置窗显示用）。内置表不算——那是发货就带的，不是
@@ -449,7 +421,7 @@ pub fn count() -> usize {
 
 /// 内置表有多少条词对（设置窗显示用）。
 pub fn builtin_count() -> usize {
-    builtin().values().map(|v| v.len()).sum()
+    builtin().pair_count()
 }
 
 /// 清空**用户表**（设置窗的「清空」按钮）。
@@ -576,11 +548,12 @@ mod tests {
         let mut m = t();
         m.insert("北京".to_string(), vec![("时间".to_string(), 5)]);
         m.insert("京".to_string(), vec![("剧".to_string(), 9)]);
-        assert_eq!(resolve(&m, "北京").unwrap()[0].0, "时间", "精确命中优先");
-        assert_eq!(resolve(&m, "今天北京").unwrap()[0].0, "时间", "长词靠后缀回退");
-        assert_eq!(resolve(&m, "去了北京").unwrap()[0].0, "时间");
-        assert!(resolve(&m, "上海").is_none(), "没有后缀可用");
-        assert!(resolve(&m, "南京").is_none(), "单字后缀不当退路");
+        let get = |k: &str| m.get(k);
+        assert_eq!(find_with("北京", get).unwrap()[0].0, "时间", "精确命中优先");
+        assert_eq!(find_with("今天北京", get).unwrap()[0].0, "时间", "长词靠后缀回退");
+        assert_eq!(find_with("去了北京", get).unwrap()[0].0, "时间");
+        assert!(find_with("上海", get).is_none(), "没有后缀可用");
+        assert!(find_with("南京", get).is_none(), "单字后缀不当退路");
     }
 
     /// 越长的后缀越接近整词，不能一上来就退到最短的那个。
@@ -590,8 +563,9 @@ mod tests {
         m.insert("京".to_string(), vec![("剧".to_string(), 1)]);
         m.insert("北京".to_string(), vec![("时间".to_string(), 1)]);
         m.insert("天北京".to_string(), vec![("欢迎".to_string(), 1)]);
-        assert_eq!(resolve(&m, "今天北京").unwrap()[0].0, "欢迎", "最长后缀优先");
-        assert_eq!(resolve(&m, "北京").unwrap()[0].0, "时间");
+        let get = |k: &str| m.get(k);
+        assert_eq!(find_with("今天北京", get).unwrap()[0].0, "欢迎", "最长后缀优先");
+        assert_eq!(find_with("北京", get).unwrap()[0].0, "时间");
     }
 
     /// 单字头词只在 prev 本身就是一个字时用，不能从长词末尾截一个字凑。
@@ -599,18 +573,26 @@ mod tests {
     fn single_char_head_only_matches_a_single_char_prev() {
         let mut m = t();
         m.insert("我".to_string(), vec![("觉得".to_string(), 9)]);
-        assert_eq!(resolve(&m, "我").unwrap()[0].0, "觉得");
-        assert!(resolve(&m, "你们我").is_none(), "单字后缀不当退路");
+        let get = |k: &str| m.get(k);
+        assert_eq!(find_with("我", get).unwrap()[0].0, "觉得");
+        assert!(find_with("你们我", get).is_none(), "单字后缀不当退路");
     }
 
     /// 用户表整段排前面 + 按词去重 + 到 limit 就停。
     #[test]
     fn merge_puts_user_table_first_and_dedups() {
-        let mine = vec![("时间".to_string(), 3u32)];
-        let theirs = vec![("时间".to_string(), 999u32), ("大学".to_string(), 500)];
-        assert_eq!(merge(Some(&mine), Some(&theirs), 5), vec!["时间", "大学"]);
-        assert_eq!(merge(None, Some(&theirs), 1), vec!["时间"], "limit 要截断");
-        assert!(merge(None, None, 5).is_empty());
+        let mine = ["时间"];
+        let theirs = ["时间", "大学"];
+        assert_eq!(
+            merge(Some(mine.into_iter()), Some(theirs.into_iter()), 5),
+            vec!["时间", "大学"]
+        );
+        assert_eq!(
+            merge(None::<std::iter::Empty<&str>>, Some(theirs.into_iter()), 1),
+            vec!["时间"],
+            "limit 要截断"
+        );
+        assert!(merge(None::<std::iter::Empty<&str>>, None::<std::iter::Empty<&str>>, 5).is_empty());
     }
 
     /// suggest 接受任意长度的纯汉字（长词靠后缀回退），但不是纯汉字的直接拒。
@@ -626,69 +608,59 @@ mod tests {
     /// 生成器曾经按总权重取前 5000，2 字头词把单字 / 三字头词全挤掉了。
     #[test]
     fn builtin_covers_single_and_long_heads() {
-        let t = parse_builtin(BUILTIN_TEXT);
+        let t = builtin();
         let mut by_len: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
-        for k in t.keys() {
-            *by_len.entry(k.chars().count()).or_default() += 1;
+        for (head, _) in t.iter() {
+            *by_len.entry(head.chars().count()).or_default() += 1;
         }
         assert!(*by_len.get(&1).unwrap_or(&0) >= 800, "单字头词太少：{by_len:?}");
         assert!(*by_len.get(&2).unwrap_or(&0) >= 4500, "两字头词太少：{by_len:?}");
         assert!(*by_len.get(&3).unwrap_or(&0) >= 500, "三字头词太少：{by_len:?}");
         assert!(*by_len.get(&4).unwrap_or(&0) >= 200, "四字头词太少：{by_len:?}");
         for head in ["我", "不", "计算机", "上市公司"] {
-            assert!(t.contains_key(head), "内置表缺「{head}」——重新跑 tools/gen_next.py");
+            assert!(t.find(head).is_some(), "内置表缺「{head}」——重新跑 tools/gen_next.py");
         }
     }
 
-    /// 内置表是 include_str! 编进 DLL 的，**它坏了就等于联想功能带病发货**。
-    /// 这条测试锁住三件事：规模没被生成参数意外缩小、高频词都在、每一行都干净。
+    /// 内置表是 build.rs 编进 DLL 的二进制，**它坏了就等于联想功能带病发货**。
+    /// 这条测试锁住三件事：规模没被生成参数意外缩小、高频词都在、每一条都干净。
     #[test]
-    fn builtin_table_parses_clean() {
-        let t = parse_builtin(BUILTIN_TEXT);
-        assert!(t.len() >= 4000, "内置表头词只有 {} 个，生成参数是不是变了", t.len());
+    fn builtin_table_is_intact() {
+        let t = builtin();
+        assert!(
+            t.head_count() >= 6000,
+            "内置表头词只有 {} 个，生成参数是不是变了",
+            t.head_count()
+        );
+        assert!(t.pair_count() >= 15000, "内置表词对只有 {} 条", t.pair_count());
         for head in ["北京", "我们", "经济", "工作"] {
-            let Some(tail) = t.get(head) else {
-                panic!("内置表缺「{head}」——重新跑 tools/gen_next.py 看看");
+            let tails: Vec<&str> = match t.find(head) {
+                Some(x) => x.collect(),
+                None => panic!("内置表缺「{head}」——重新跑 tools/gen_next.py 看看"),
             };
-            assert!(!tail.is_empty() && tail.len() <= MAX_TAIL, "「{head}」的后续数量异常");
-            for (w, n) in tail {
+            assert!(!tails.is_empty() && tails.len() <= MAX_TAIL, "「{head}」的后续数量异常");
+            for w in tails {
                 assert!(is_word(w), "内置表「{head}」的后续「{w}」不是合法词");
-                assert!(*n > 0, "「{head}→{w}」权重为 0");
             }
         }
-    }
-
-    /// 用户表优先：同一条词对两边都有时，用户那条排前面；内置表只负责补位。
-    /// （直接调 `suggest` 会碰真实文件——这条用内置表单独验证合并逻辑的前提：
-    /// 解析出来的顺序就是按权重降序的。）
-    #[test]
-    fn builtin_tail_is_sorted_by_weight() {
-        let t = parse_builtin(BUILTIN_TEXT);
-        for tail in t.values() {
-            let ns: Vec<u32> = tail.iter().map(|(_, n)| *n).collect();
-            let mut sorted = ns.clone();
-            sorted.sort_by(|a, b| b.cmp(a));
-            assert_eq!(ns, sorted, "内置表的后续没有按权重降序");
+        for (head, tails) in t.iter() {
+            assert!(is_word(head), "内置表头词「{head}」不是合法词");
+            assert!(tails.len() <= MAX_TAIL, "「{head}」挂了 {} 个后续", tails.len());
         }
     }
 
-    /// 权重必须**真的**参与排序，不能被压成同一个数。
+    /// 二进制里**不存权重**，运行时按文件顺序取——所以顺序必须就是生成时的词频顺序。
     ///
-    /// 这条抓的是一次真实事故：`parse_builtin` 曾经把内置权重也 `min(MAX_COUNT)`
-    /// （=500），「三国」后面的 群英传 / 演义 / 时期 / 时代 全变成 500，
-    /// `sort_by` 退化成按字符串比 —— 屏幕上先出「时代」。
-    /// 上面那条 `builtin_tail_is_sorted_by_weight` **照样绿**，因为「全部相等」
-    /// 也满足它的断言。堆到真机上才看出来。
+    /// 这条抓的是一次真实事故：解析时曾经把内置权重 min(MAX_COUNT)（=500）压平，
+    /// 「三国」后面的 群英传 / 演义 / 时期 / 时代 全变成 500，排序退化成按字符串比，
+    /// 屏幕上先出「时代」。现在没有权重可压平了，但顺序同样可能被生成器或编码器
+    /// 打乱，所以直接钉住第一名。
     #[test]
-    fn builtin_weights_are_not_flattened() {
-        let t = parse_builtin(BUILTIN_TEXT);
-        let tail = t.get("三国").expect("内置表里没有「三国」");
-        assert!(tail.len() >= 3, "{tail:?}");
-        assert!(
-            tail[0].1 > tail[tail.len() - 1].1,
-            "权重被压平了，排序会退化成按字符串：{tail:?}"
-        );
-        // 首尾之间要有真实差距，不是 1 和 2 这种抖动
-        assert!(tail[0].1 >= 1000, "最大权重太小，怀疑又被截断了：{tail:?}");
+    fn builtin_tail_order_is_preserved() {
+        let t = builtin();
+        let san: Vec<&str> = t.find("三国").expect("内置表里没有「三国」").collect();
+        assert_eq!(san.first().copied(), Some("群英传"), "{san:?}");
+        let ban: Vec<&str> = t.find("版权").expect("内置表里没有「版权」").collect();
+        assert_eq!(ban.first().copied(), Some("所有"), "{ban:?}");
     }
 }

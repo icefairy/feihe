@@ -127,6 +127,9 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_initNative<'local>
 /// 返回串的**第一行是「实际用的码」**，后面每行一个候选；空串表示「没有码，也没有
 /// 候选」。用一行塞码是为了**一次 JNI 调用**解决问题：码要显示在状态条上（`nihao→nihc`），
 /// 候选要摆进候选条，分两次调用就意味着同一串字母要过两遍边界、两遍切分。
+
+/// 若拼出了整句，末尾再跟一个 `#seg` 标记行和分段数据（每行 `段码	候选…`）。以前分段由壳拿到结果后再调一次 JNI
+/// 重算——同一段 DP 每次按键跑两遍；现在 core 算好的结果直接搭车回来。
 ///
 /// 判断「这串按键是双拼码还是全拼」的逻辑在 core 的 `dict::lookup_input` 里，
 /// 不在这里——见那边的注释：它是第二份真值的高危区，必须在有单测的地方。
@@ -153,44 +156,15 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupInputNative<
             out.push('\n');
             out.push_str(w.as_ref());
         }
-        out
-    })
-    .unwrap_or_default();
-    make_string(&mut env, &text)
-}
-
-/// `NativeEngine.segmentCandidatesNative(input, pinyinMode, limit)` —— 逐段选择（A1）。
-///
-/// 格式：**每段一行**，行内 `\t` 分隔 —— `<段码>\t<候选1>\t<候选2>…`。
-/// 空串 = 不进分段态。
-///
-/// **传的是原始按键串，不是码**：是不是「自动拼出来的整句」只有 `lookup_input` 知道，
-/// 让壳传码再自己判断，等于把这条规则复制到 Kotlin 里（第二份真值）。分段规则本身
-/// 来自 `feihe_core::segment::plan`，和桌面端、和 `compose_sentence` 同一份。
-///
-/// 用 `\t` 而不是 JSON：字段都是词和码，不含制表符，拼串一眼能看穿，也不需要往
-/// core 里塞序列化库（依赖政策只剩 `tyme4rs`）。
-#[no_mangle]
-pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_segmentCandidatesNative<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-    input: JString<'local>,
-    pinyin_mode: jboolean,
-    limit: i32,
-) -> jstring {
-    let input = read_string(&mut env, &input);
-    let text = std::panic::catch_unwind(move || {
-        let n = limit.clamp(1, 9) as usize;
-        let segs = feihe_core::dict::lookup_segments(&input, pinyin_mode != 0, n);
-        let mut out = String::new();
-        for (i, seg) in segs.iter().enumerate() {
-            if i > 0 {
+        if !r.segments.is_empty() {
+            out.push_str("\n#seg");
+            for seg in r.segments {
                 out.push('\n');
-            }
-            out.push_str(&seg.code);
-            for w in &seg.words {
-                out.push('\t');
-                out.push_str(w);
+                out.push_str(&seg.code);
+                for w in seg.words {
+                    out.push('\t');
+                    out.push_str(&w);
+                }
             }
         }
         out

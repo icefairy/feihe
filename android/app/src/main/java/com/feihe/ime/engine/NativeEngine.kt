@@ -83,38 +83,41 @@ object NativeEngine {
      *
      * 返回 `("" to emptyList())` 就是「没有码也没有候选」，不是错误。
      */
-    fun lookupInput(input: String, pinyinMode: Boolean, limit: Int = 9): Pair<String, List<String>> {
-        if (input.isEmpty() || !ensureLoaded()) return "" to emptyList()
+    fun lookupInput(input: String, pinyinMode: Boolean, limit: Int = 9): Lookup {
+        if (input.isEmpty() || !ensureLoaded()) return Lookup("", emptyList(), emptyList())
         val raw = runCatching { lookupInputNative(input, pinyinMode, limit) }
-            .getOrElse { return "" to emptyList() }
-        if (raw.isEmpty()) return "" to emptyList()
-        // 第一行是码，剩下的是候选。split 不丢空行，但 code 不会是空串（上面判过），
-        // 所以 `drop(1)` 之后每一行都是真候选。
+            .getOrElse { return Lookup("", emptyList(), emptyList()) }
+        if (raw.isEmpty()) return Lookup("", emptyList(), emptyList())
+        // 第一行是码，剩下的是候选；若有整句，末尾还有 `#seg` 标记行和分段数据
+        // （每行 `段码\t候选…`）。分段由 core 在这次查询里顺手算好搭车回来，
+        // 壳**不要**再调一次 JNI 重算——那等于同一段 DP 每次按键跑两遍。
         val lines = raw.split('\n')
-        return lines[0] to if (lines.size > 1) lines.subList(1, lines.size) else emptyList()
+        val segIdx = lines.indexOf(SEG_MARK)
+        val words = if (segIdx >= 0) lines.subList(1, segIdx) else lines.drop(1)
+        val segments = if (segIdx >= 0) {
+            lines.subList(segIdx + 1, lines.size).mapNotNull { line ->
+                val parts = line.split('\t')
+                // 至少要有段码 + 一个候选；格式不对的行直接丢掉，别让半截数据进 UI
+                if (parts.size < 2) null else SegmentChoice(parts[0], parts.drop(1))
+            }
+        } else {
+            emptyList()
+        }
+        return Lookup(lines[0], words, segments)
     }
+
+    /** [lookupInput] 的返回值。`segments` 非空 = words[0] 是各段第一名拼成的整句。 */
+    data class Lookup(
+        val code: String,
+        val words: List<String>,
+        val segments: List<SegmentChoice>,
+    )
 
     /** 一段的候选（逐段选择 A1）。`code` 只给诊断/状态条用，界面显示的是 [words]。 */
     data class SegmentChoice(val code: String, val words: List<String>)
 
-    /**
-     * 原始按键串 → 每段的候选列表。空列表 = 不进分段态（普通候选，或拼不出整句）。
-     *
-     * 格式是 JNI 那边定的：每段一行，行内 `\t` 分隔，第一格是段码、后面是候选。
-     * **分段规则不在这里**——在 `feihe_core::segment::plan`，和桌面端同一份；
-     * 「这一条是不是整句」也由 core 判定并显式带出来，Kotlin 不猜、不自己切段。
-     */
-    fun segmentCandidates(input: String, pinyinMode: Boolean, limit: Int = 9): List<SegmentChoice> {
-        if (input.isEmpty() || !ensureLoaded()) return emptyList()
-        val raw = runCatching { segmentCandidatesNative(input, pinyinMode, limit) }
-            .getOrElse { return emptyList() }
-        if (raw.isEmpty()) return emptyList()
-        return raw.split('\n').mapNotNull { line ->
-            val parts = line.split('\t')
-            // 至少要有段码 + 一个候选；格式不对的行直接丢掉，别让半截数据进 UI
-            if (parts.size < 2) null else SegmentChoice(parts[0], parts.subList(1, parts.size))
-        }
-    }
+    /** JNI 返回串里「候选结束、分段数据开始」的标记行。候选和码都不可能以 # 开头。 */
+    private const val SEG_MARK = "#seg"
 
     /**
      * 上一个上屏词后面可能接的词。空列表 = 没有联想（这也意味着候选条不该为它留位置）。
@@ -217,7 +220,6 @@ object NativeEngine {
 
     private external fun lookupInputNative(input: String, pinyinMode: Boolean, limit: Int): String
 
-    private external fun segmentCandidatesNative(input: String, pinyinMode: Boolean, limit: Int): String
 
     private external fun suggestNative(prev: String, limit: Int): String
 

@@ -7,7 +7,7 @@
 Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
 
 **Windows 端当前版本 0.3.12** ｜ 安装包 1.99 MB ｜ 装完约 8.6 MB ｜ 单字 8006 ｜ 词条 46493 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 354 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
+不联网、不弹窗、无账号、密码框不接管 ｜ 358 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
 > 上档锁定、数字选词、离线语音输入、数据备份，已可装机（真机验收待补）。
@@ -1033,9 +1033,9 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选，共 354 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选，共 358 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
-# 354 = feihe（TSF 壳）111 项 + feihe-core（平台无关）243 项。两个包都会跑，
+# 358 = feihe（TSF 壳）111 项 + feihe-core（平台无关）247 项。两个包都会跑，
 # 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 237 项会被静默跳过。
 
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
@@ -1215,7 +1215,7 @@ core/src/phrase.rs    自造词（逐段拼出来的新词，全拼入库，phra
 core/src/pin.rs       手动置顶（编码 → 词，pinned.txt 落盘，压过一切默认排序）
 core/src/demote.rs    手动降权（编码 → 一串词，demoted.txt 落盘，沉到候选最后）
 core/src/next.rs      上屏后联想（内置表 + 用户词对表，next.txt 落盘）
-core/src/next_builtin.txt  内置联想表（gen_next.py 从 rime-ice 复合词生成，编译进 .so / DLL）
+core/src/next_builtin.txt  内置联想表源文件（gen_next.py 生成；build.rs 编成 next.bin 零解析嵌进 .so / DLL）
 core/src/custom.rs    自定义短语（custom.txt）
 core/src/fuzzy.rs     模糊音（在双拼码上按位置换键）
 core/src/correct.rs   拼写纠错（换一个键，不删不加）
@@ -1591,5 +1591,5 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)
 （Windows 367 条 + Android 15 条）。不需要全跑——改到哪块就跑哪组，比如动
 `textservice.rs` 的按键路径至少要跑 M2 + 分词 + 回车三组。自动化那部分仍然是
-`cargo test --workspace`（354 项）+ `tools/smoke_com.py` + Android 的
+`cargo test --workspace`（358 项）+ `tools/smoke_com.py` + Android 的
 `gradlew testDebugUnitTest`（71 项）。

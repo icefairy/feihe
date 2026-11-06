@@ -15,11 +15,102 @@ mod shuangpin;
 #[allow(dead_code)]
 #[path = "src/dictenc.rs"]
 mod dictenc;
+// 联想表的编码器就住在运行时读取器里（nextbin.rs）：编码 / 解码共用同一份格式定义，
+// 不会出现「这边加了个字段、那边没跟上」。
+#[allow(dead_code)]
+#[path = "src/nextbin.rs"]
+mod nextbin;
 
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     gen_dict_bin(&manifest, &out);
+    gen_next_bin(&manifest, &out);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 联想表二进制生成
+// ─────────────────────────────────────────────────────────────
+
+/// 把 src/next_builtin.txt 编成 next.bin（零解析，见 src/nextbin.rs）。
+///
+/// 为什么不在运行时解析：309 KB 文本解析成 HashMap 要 5.8 ms + 2.1 MB 堆，而这段
+/// 代码跑在「第一次上屏」的 UI 线程上。构建期多做几毫秒，换运行时零成本。
+///
+/// 校验只做「这一行能不能用」，不做「词好不好」——词的质量是 gen_next.py 的事。
+/// 但会检查同一头词的权重是否递减：文件顺序就是运行时的顺序（二进制里不存权重），
+/// 乱序会在无声无息中改变联想排序。
+fn gen_next_bin(manifest: &std::path::Path, out: &std::path::Path) {
+    println!("cargo:rerun-if-changed=src/next_builtin.txt");
+    let path = manifest.join("src/next_builtin.txt");
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+
+    let mut rows: Vec<(String, Vec<String>)> = Vec::new();
+    let mut warned = false;
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((head, rest)) = line.split_once('\t') else {
+            continue;
+        };
+        if !is_word(head) {
+            continue;
+        }
+        let mut words: Vec<String> = Vec::new();
+        let mut prev_weight = u32::MAX;
+        let mut it = rest.split_whitespace();
+        while let (Some(w), Some(n)) = (it.next(), it.next()) {
+            let Ok(weight) = n.parse::<u32>() else {
+                continue;
+            };
+            if weight == 0 || !is_word(w) {
+                continue;
+            }
+            if weight > prev_weight && !warned {
+                warned = true;
+                println!(
+                    "cargo:warning=next_builtin.txt 里「{head}」的后续权重不是递减的；\
+                     运行时按文件顺序取，乱序会改变联想排序"
+                );
+            }
+            prev_weight = weight;
+            words.push(w.to_string());
+        }
+        if !words.is_empty() {
+            rows.push((head.to_string(), words));
+        }
+    }
+
+    let bytes = nextbin::encode(&rows);
+    std::fs::write(out.join("next.bin"), &bytes).expect("写 next.bin 失败");
+    let pairs: usize = rows.iter().map(|r| r.1.len()).sum();
+    println!(
+        "cargo:warning=next.bin: {} 头词 / {} 对, {} KB",
+        rows.len(),
+        pairs,
+        bytes.len() / 1024
+    );
+}
+
+/// 联想表里合法的词：1..=8 个汉字。和运行时 next::is_word 同一条规则。
+fn is_word(s: &str) -> bool {
+    let mut n = 0;
+    for c in s.chars() {
+        let o = c as u32;
+        let han = (0x4E00..=0x9FFF).contains(&o)
+            || (0x3400..=0x4DBF).contains(&o)
+            || (0xF900..=0xFAFF).contains(&o);
+        if !han {
+            return false;
+        }
+        n += 1;
+        if n > 8 {
+            return false;
+        }
+    }
+    n > 0
 }
 
 // ─────────────────────────────────────────────────────────────

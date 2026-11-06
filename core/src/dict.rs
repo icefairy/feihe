@@ -430,6 +430,13 @@ pub struct LookupResult {
     pub segments: Vec<SegmentChoice>,
 }
 
+/// 整句/分段的音节上限。
+///
+/// 分段 DP 的开销随音节数平方涨（每对切分点都要探测一次词库）。24 个音节（48 键）
+/// 以内是亚毫秒级，再长基本是「用户忘了选词」的串，整句本来也没法看——这个上限
+/// 把最坏情况钉住，不让一根超长串把按键线程拖垮。正常输入（一句以内）永远够用。
+const MAX_SENTENCE_SYLLABLES: usize = 24;
+
 /// 按键串 → 码 + 候选（+ 整句时的分段）。Android 的 `lookupInputNative` 就是它。
 ///
 /// 返回码是给状态条用的：打 `nihao` 时显示 `nihao→nihc`，让人看得见引擎在干什么；
@@ -447,8 +454,19 @@ pub fn lookup_input(input: &str, pinyin_mode: bool, limit: usize) -> LookupResul
             if words.is_empty() {
                 // 整码查不到 → 试整句（`vhsjli` → 张三李）。**只在查不到时试**：
                 // 整词优先，否则打 `nihc` 会先看到一堆拼凑的整句。
-                if let Some(sentence) = compose_sentence(&r.code) {
-                    let segs = segment_candidates(&r.code, limit);
+                //
+                // 分段只算**一次**：整句就是各段第一名拼起来（这个等式由
+                // `lookup_input_sentence_equals_compose_sentence` 钉着）。以前是
+                // 先 `compose_sentence` 再 `segment_candidates`，同一段 DP 跑两遍；
+                // 长串输入每次按键都在这条路上，24 键时是 ~100µs 白跑。
+                let segs = if syllables_of(&r.code) <= MAX_SENTENCE_SYLLABLES {
+                    segment_candidates(&r.code, limit)
+                } else {
+                    Vec::new()
+                };
+                if !segs.is_empty() {
+                    let sentence: String =
+                        segs.iter().map(|s| s.words[0].as_str()).collect();
                     words.push(Cow::Owned(sentence));
                     return LookupResult { code: r.code, words, segments: segs };
                 }
@@ -461,14 +479,20 @@ pub fn lookup_input(input: &str, pinyin_mode: bool, limit: usize) -> LookupResul
             if pinyin_mode {
                 return LookupResult::default();
             }
-            match compose_sentence(input) {
-                Some(sentence) => LookupResult {
+            let segs = if syllables_of(input) <= MAX_SENTENCE_SYLLABLES {
+                segment_candidates(input, limit)
+            } else {
+                Vec::new()
+            };
+            if segs.is_empty() {
+                LookupResult::default()
+            } else {
+                let sentence: String = segs.iter().map(|s| s.words[0].as_str()).collect();
+                LookupResult {
                     code: input.to_string(),
-                    // 长串码的段码就是 input 本身切出来的，直接拿它算分段
-                    segments: segment_candidates(input, limit),
+                    segments: segs,
                     words: vec![Cow::Owned(sentence)],
-                },
-                None => LookupResult::default(),
+                }
             }
         }
     }
@@ -557,14 +581,7 @@ pub fn compose_sentence_with(
     Some(out)
 }
 
-/// 这次查询的分段信息（A1）。空 = 普通候选，壳不该进分段态。
-///
-/// 单独开这个入口而不是让壳拿"候选只有一条 / 码够长"去猜：`lookup_input` 内部
-/// 才知道那条候选是不是 `compose_sentence` 拼出来的。猜的后果是打 `nihc` 出「你好」
-/// 这种正常双字词时也会弹出分段 chip，而且判断规则会散到两个壳里各写一份。
-pub fn lookup_segments(input: &str, pinyin_mode: bool, limit: usize) -> Vec<SegmentChoice> {
-    lookup_input(input, pinyin_mode, limit).segments
-}
+
 
 /// 一段的候选列表，给 Android 的「逐段选择」用（A1）。
 ///
@@ -2570,8 +2587,8 @@ pub(crate) mod tests {
         let _g = scheme_guard();
         set_scheme(Scheme::Xiaohe);
         // 空 / 编不出码的输入不带分段
-        assert!(lookup_segments("", false, 9).is_empty());
-        assert!(lookup_segments("zzz", true, 9).is_empty());
+        assert!(lookup_input("", false, 9).segments.is_empty());
+        assert!(lookup_input("zzz", true, 9).segments.is_empty());
         // 真词库里有没有 `vhsjli` 不假设：只断言「有整句时 words 与 segments 数量自洽」
         let r = lookup_input("vhsjli", false, 9);
         if !r.segments.is_empty() {
@@ -2616,6 +2633,21 @@ pub(crate) mod tests {
         // 或者词在这条路径上查不到）——这时宁可什么都不给。
         let first = |c: &str| if c == "sj" { None } else { fake_first(c) };
         assert_eq!(compose_sentence_with("vhsjli", fake_has, first), None);
+    }
+
+    /// `lookup_input` 改成「分段算一次、整句由分段第一名拼出来」之后，必须保证
+    /// 拼出来的整句和 `compose_sentence` 一字不差——这是「逐段选择不改变默认结果」
+    /// 的硬约束（用户什么都没点时，改功能前后上屏的字必须一模一样）。
+    #[test]
+    fn lookup_input_sentence_equals_compose_sentence() {
+        for code in ["vhsjli", "vhsj", "mfhcdm", "uujiuuji"] {
+            let r = lookup_input(code, false, 9);
+            if r.segments.is_empty() {
+                continue; // 这个码有整词候选，不走整句路径
+            }
+            let composed = compose_sentence(code).expect("有分段就该有整句");
+            assert_eq!(r.words[0], composed, "整句不一致：{code}");
+        }
     }
 
     /// 一个音节谈不上分段，硬拼只会把单字当「整句」塞进候选条。

@@ -41,6 +41,7 @@ pub mod fuzzy;
 pub mod hint;
 pub mod log;
 pub mod next;
+pub mod nextbin;
 pub mod number;
 pub mod paths;
 pub mod phrase;
