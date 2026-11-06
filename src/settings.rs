@@ -36,13 +36,20 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::assist::AssistMode;
 use crate::config::{self, PopupMode, Skin};
 use crate::dict;
+use crate::dpi;
 use crate::font;
 use crate::shuangpin::Scheme;
 use crate::statusbar;
 
 const CLASS_NAME: PCWSTR = w!("FeiheSettings");
 
-/// **客户区**尺寸。窗口尺寸由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
+/// **客户区**尺寸，单位是**逻辑像素**（96 DPI 下的样子）。
+///
+/// 真正下发给系统的尺寸一律过 [`px`]：本工程是进程内 COM 组件，没法把宿主改成
+/// DPI 感知，只能问出当前 DPI 再按比例放大自己的窗口。不这么做的话，150% 缩放的
+/// 屏上设置窗只有 460 物理像素宽——同一行里挤着三列单选按钮，文字被截成半个字。
+///
+/// 窗口尺寸仍由 `window_size()` 反算——标题栏高度随 DPI 和系统主题变，
 /// 写死窗口高度会在高 DPI / 大字号下把最下面那排按钮截掉。
 const W: i32 = 460;
 
@@ -55,6 +62,17 @@ const CLIENT_H_MIN: i32 = 460;
 
 /// 底部「关闭」那一栏固定不动，滚内容时不跟着走。这是给它留的高度。
 const FOOTER_H: i32 = 52;
+
+/// 把逻辑像素换算成当前 DPI 下的物理像素。
+///
+/// 设置窗里所有常量、`build()` 里所有坐标都是**逻辑值**；只有跟系统对话
+/// （`GetSystemMetrics`、客户区尺寸、`CreateWindowExW`）时才需要物理值，
+/// 所以换算集中在 [`mk`] / [`window_size`] / [`client_h`] / [`want_client_h`]
+/// 这几个边界上做，布局代码里一个 `px()` 都不用写——否则每个 `y += 40` 后面
+/// 都要跟一句换算，漏一个就在某个缩放下错位。
+fn px(v: i32) -> i32 {
+    dpi::px(v)
+}
 
 /// 项目主页。设置窗最下面显示它，点按钮直接用默认浏览器打开。
 ///
@@ -155,15 +173,17 @@ unsafe fn mk(
     id: i32,
 ) -> HWND {
     let wide = to_wide(text);
+    // 布局代码（build() 里那一串 y += 40）全按逻辑值写，物理换算只在这一处做。
+    // 反过来（布局里逐处调 px）会漏，漏一个就在某个缩放下错位，而且很难看出来。
     let child = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         class,
         PCWSTR(wide.as_ptr()),
         WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0) | style,
-        x,
-        y,
-        w,
-        h,
+        px(x),
+        px(y),
+        px(w),
+        px(h),
         Some(parent),
         Some(HMENU(id as isize as *mut core::ffi::c_void)),
         None,
@@ -845,26 +865,34 @@ fn pick_folder(h: HWND) -> Option<std::path::PathBuf> {
     }
 }
 
-/// 这台机器上设置窗该多高：屏幕矮的时候按屏幕缩（1366×768 的笔记本很常见），
-/// 但不低于 `CLIENT_H_MIN`、不超过 `CLIENT_H_MAX`。
+/// 这台机器上设置窗该**多高**（逻辑像素）：屏幕矮的时候按屏幕缩
+/// （1366×768 的笔记本很常见），但不低于 CLIENT_H_MIN、不超过 CLIENT_H_MAX。
+///
+/// `GetSystemMetrics(SM_CYSCREEN)` 给的是**物理**像素，必须先换回逻辑值再夹范围：
+/// 150% 缩放的 768p 屏物理高 768、逻辑高 512，直接拿 768 去夹会以为屏幕很宽裕，
+/// 结果窗口高过屏幕、底部按钮跑到屏幕外。这和「1366×768 装不下 900 客户区」
+/// 是同一个老问题，只是高 DPI 下换了副面孔回来。
 unsafe fn want_client_h() -> i32 {
-    let screen = GetSystemMetrics(SM_CYSCREEN);
+    let screen = dpi::unscale(GetSystemMetrics(SM_CYSCREEN), dpi::dpi());
     (screen - 120).clamp(CLIENT_H_MIN, CLIENT_H_MAX)
 }
 
-/// 当前客户区高度。窗口创建后以实际值为准——高 DPI 下按比例换算可能差几个像素，
-/// 底部按钮必须按真实高度摆。
+/// 当前客户区高度，**物理**像素。
+///
+/// 窗口建好之后以实际值为准——高 DPI 下按比例换算可能差几个像素，而底部按钮
+/// 必须按真实高度摆。滚动相关的量（CONTENT_H / 滚动位置 / SetWindowPos）
+/// 也统一留在这个坐标系里，逻辑坐标系只在布局代码里用。
 unsafe fn client_h(h: HWND) -> i32 {
     let mut rc = RECT::default();
     if GetClientRect(h, &mut rc).is_err() {
-        return CLIENT_H_MAX;
+        return px(CLIENT_H_MAX);
     }
-    (rc.bottom - rc.top).max(CLIENT_H_MIN)
+    (rc.bottom - rc.top).max(px(CLIENT_H_MIN))
 }
 
-/// 可滚动区域高度：客户区减去底部那条固定栏。
+/// 可滚动区域高度：客户区减去底部那条固定栏。两者都是物理值。
 unsafe fn view_h(h: HWND) -> i32 {
-    (client_h(h) - FOOTER_H).max(1)
+    (client_h(h) - px(FOOTER_H)).max(1)
 }
 
 /// 记下每个子控件创建时的位置，供滚动时重摆。
@@ -1211,7 +1239,8 @@ unsafe fn build(h: HWND) {
         (200..4000).contains(&content_h),
         "设置窗内容高度不像话：{content_h}"
     );
-    CONTENT_H.store(content_h, Ordering::Release);
+    // 存像素值：滚动位置和子窗口坐标都是物理量，CONTENT_H 跟它们同坐标系才比得了。
+    CONTENT_H.store(px(content_h), Ordering::Release);
     label(
         h,
         "关于：开源输入法 · Rust + windows-rs 实现 · 不联网、不弹窗、无账号",
@@ -1230,8 +1259,12 @@ unsafe fn build(h: HWND) {
     );
     push(h, "打开项目主页", 320, about_y + 19, 124, 26, ID_ABOUT);
 
-    // 底部这一栏**不参与滚动**：滚到底时它依然在，任何时候都能关掉窗口
-    push(h, "关闭", W - 106, client_h(h) - 40, 90, 30, ID_CLOSE);
+    // 底部这一栏**不参与滚动**：滚到底时它依然在，任何时候都能关掉窗口。
+    //
+    // 它的 y 必须从「实际客户区高度」反推，而这个高度是物理值——先换回逻辑值
+    // 再减 40，因为 mk() 还会再乘一次 DPI。直接减会得到「150% 下按钮浮在半空」。
+    let close_y = dpi::unscale(client_h(h), dpi::dpi()) - 40;
+    push(h, "关闭", W - 106, close_y, 90, 30, ID_CLOSE);
     init_scroll(h);
 }
 
@@ -1266,8 +1299,8 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             let cur = SCROLL.load(Ordering::Acquire);
             let view = view_h(h);
             let max_pos = (CONTENT_H.load(Ordering::Acquire) - view).max(0);
-            // 一行 24px ≈ 一个复选框行距，滚起来跟得上眼睛
-            let line = 24;
+            // 一行 24 逻辑像素 ≈ 一个复选框行距，滚起来跟得上眼睛
+            let line = px(24);
             let target = if cmd == SB_LINEUP.0 {
                 cur - line
             } else if cmd == SB_LINEDOWN.0 {
@@ -1302,8 +1335,40 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
         WM_MOUSEWHEEL => {
             // 高字是有符号的滚动量，一格 120
             let delta = ((w.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
-            let step = -(delta / 120) * 24 * 3;
+            let step = -(delta / 120) * px(24) * 3;
             scroll_to(h, SCROLL.load(Ordering::Acquire) + step);
+            LRESULT(0)
+        }
+        // 窗口被拖到缩放不同的屏幕上（多屏混缩放时很常见）：整块重排。
+        //
+        // 布局坐标是逻辑值、`mk()` 里统一乘 DPI，所以重排必须**重建子窗口**——
+        // 就地挪动改不了已经下发过的高度和字体（`font::ui()` 也是按 DPI 缓存的，
+        // 换屏后要拿新句柄）。重建比「遍历子窗口逐个 SetWindowPos + WM_SETFONT」
+        // 少一半代码，而且不会漏掉下拉框这类自绘部分。
+        WM_DPICHANGED => {
+            dpi::update_for_window(h);
+            let mut child = GetWindow(h, GW_CHILD).unwrap_or_default();
+            while !child.is_invalid() {
+                // 先取下一个再销毁：DestroyWindow 之后 hwnd 就失效了，查不了兄弟
+                let next = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
+                let _ = DestroyWindow(child);
+                child = next;
+            }
+            if let Ok(mut g) = SCROLLABLE.lock() {
+                g.clear();
+            }
+            build(h);
+            sync(h);
+            let (win_w, win_h) = window_size(W, want_client_h());
+            let _ = SetWindowPos(
+                h,
+                None,
+                0,
+                0,
+                win_w,
+                win_h,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -1357,7 +1422,13 @@ const STYLE: WINDOW_STYLE = WINDOW_STYLE(
 
 /// 由客户区尺寸反算窗口尺寸。标题栏和边框高度随 DPI / 主题变，写死窗口高度
 /// 会在高 DPI 下把最下面那排控件截掉。
+///
+/// 入参是**逻辑**客户区尺寸，返回值是**物理**窗口尺寸：
+/// `AdjustWindowRectEx` 和 `GetSystemMetrics` 都在物理坐标系里工作，
+/// 混着用会让窗口比内容小一圈（150% 下正好小三分之一）。
 unsafe fn window_size(client_w: i32, client_h: i32) -> (i32, i32) {
+    let client_w = px(client_w);
+    let client_h = px(client_h);
     // **`AdjustWindowRectEx` 不为 `WS_VSCROLL` 留位置**（文档明写：要自己加
     // `SM_CXVSCROLL`）。不补这一条，客户区会窄 17px，右边那列控件被滚动条压掉一截。
     let vscroll = GetSystemMetrics(SM_CXVSCROLL);
@@ -1375,6 +1446,17 @@ unsafe fn window_size(client_w: i32, client_h: i32) -> (i32, i32) {
 }
 
 unsafe fn create() -> Option<HWND> {
+    // 先按**光标所在那块屏**定 DPI 再算窗口尺寸：设置窗是从状态浮窗点开的，
+    // 光标就在用户想看的那个屏上。多屏混缩放（笔记本 150% + 外接 100%）时，
+    // 按主屏算会把窗口做到另一块屏上却按错的尺寸排。
+    {
+        let mut pt = POINT::default();
+        if GetCursorPos(&mut pt).is_err() {
+            dpi::update_for_system();
+        } else {
+            dpi::update_for_point(pt.x, pt.y);
+        }
+    }
     let hinst = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
     let icon = load_icon();
     let wc = WNDCLASSW {

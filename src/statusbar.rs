@@ -36,8 +36,31 @@ use crate::theme;
 
 const CLASS_NAME: PCWSTR = w!("FeiheStatusBar");
 
-const PAD: i32 = 6;
-const HEIGHT: i32 = 30;
+// ── 逻辑尺寸（96 DPI）─────────────────────────────────────────
+//
+// 和候选窗一样，这些数只是 100% 缩放下的基准，真机上要过 `dpi::px` 换成
+// 物理像素（见 `src/dpi.rs`）。浮窗是常驻的，缩放下如果还按 96 算，
+// 在 200% 的屏上会变成一条 30 物理像素的细缝，字挤成一团。
+const PAD_L: i32 = 6;
+const HEIGHT_L: i32 = 30;
+/// 按钮上下各留的空，让高亮块不顶到边框
+const BTN_INSET_L: i32 = 3;
+/// 按钮宽度（逻辑像素）
+const BTN_W: [i32; 4] = [34, 34, 44, 44];
+
+fn pad() -> i32 {
+    crate::dpi::px(PAD_L)
+}
+fn height() -> i32 {
+    crate::dpi::px(HEIGHT_L)
+}
+fn btn_inset() -> i32 {
+    crate::dpi::px(BTN_INSET_L)
+}
+/// 浮窗总宽：两侧留白 + 四个按钮
+fn width() -> i32 {
+    pad() * 2 + BTN_W.iter().map(|w| crate::dpi::px(*w)).sum::<i32>()
+}
 const TIMER_ID: usize = 0xF1;
 const TIMER_MS: u32 = 300;
 
@@ -49,27 +72,22 @@ enum Btn {
     Settings,
 }
 
-/// (按钮, 宽度)
-const LAYOUT: [(Btn, i32); 4] = [
-    (Btn::Mode, 34),
-    (Btn::Width, 34),
-    (Btn::Symbols, 44),
-    (Btn::Settings, 44),
-];
-
-const WIDTH: i32 = PAD * 2 + 34 + 34 + 44 + 44;
+/// 四个按钮，从左到右
+const LAYOUT: [Btn; 4] = [Btn::Mode, Btn::Width, Btn::Symbols, Btn::Settings];
 
 fn button_rects() -> [(Btn, RECT); 4] {
     let mut out = [(Btn::Mode, RECT::default()); 4];
-    let mut x = PAD;
-    for (i, (btn, w)) in LAYOUT.iter().enumerate() {
+    let mut x = pad();
+    for (i, btn) in LAYOUT.iter().enumerate() {
+        let w = crate::dpi::px(BTN_W[i]);
+        let inset = btn_inset();
         out[i] = (
             *btn,
             RECT {
                 left: x,
-                top: 3,
+                top: inset,
                 right: x + w,
-                bottom: HEIGHT - 3,
+                bottom: height() - inset,
             },
         );
         x += w;
@@ -92,9 +110,16 @@ static WND: AtomicIsize = AtomicIsize::new(0);
 // 黄条，很出戏。自己画就二十行，还能跟着换肤走。
 const TIP_CLASS: PCWSTR = w!("FeiheStatusTip");
 /// 提示窗与浮窗之间的空隙
-const TIP_GAP: i32 = 4;
+const TIP_GAP_L: i32 = 4;
 /// 提示窗内边距
-const TIP_PAD: i32 = 8;
+const TIP_PAD_L: i32 = 8;
+
+fn tip_gap() -> i32 {
+    crate::dpi::px(TIP_GAP_L)
+}
+fn tip_pad() -> i32 {
+    crate::dpi::px(TIP_PAD_L)
+}
 
 static TIP_WND: AtomicIsize = AtomicIsize::new(0);
 static TIP_CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -181,7 +206,7 @@ unsafe fn default_pos() -> (i32, i32) {
         rc.right = GetSystemMetrics(SM_CXSCREEN);
         rc.bottom = GetSystemMetrics(SM_CYSCREEN);
     }
-    (rc.right - WIDTH - 24, rc.bottom - HEIGHT - 24)
+    (rc.right - width() - crate::dpi::px(24), rc.bottom - height() - crate::dpi::px(24))
 }
 
 /// 矩形落在哪块显示器上，返回那块的工作区。拿不到返回 `None`。
@@ -226,12 +251,27 @@ unsafe fn clamp_to_monitor(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
 
 /// 把窗口摆到应该待的位置
 unsafe fn place(hwnd: HWND, follow_caret: bool) {
+    // 先刷新 DPI 再算坐标和尺寸：/ 都按当前 DPI 缩放，
+    // 用旧的算出来会把窗口摆到错的位置（尤其是拖动到另一块屏之后）。
+    {
+        let (cx, cy) = *CARET.lock().unwrap();
+        if follow_caret && (cx != 0 || cy != 0) {
+            crate::dpi::update_for_point(cx, cy);
+        } else {
+            let cfg = config::get();
+            if cfg.bar_x != 0 || cfg.bar_y != 0 {
+                crate::dpi::update_for_point(cfg.bar_x, cfg.bar_y);
+            } else {
+                crate::dpi::update_for_system();
+            }
+        }
+    }
     let (x, y) = if follow_caret {
         let (cx, cy) = *CARET.lock().unwrap();
         if cx == 0 && cy == 0 {
             default_pos()
         } else {
-            (cx, cy + 24)
+            (cx, cy + crate::dpi::px(24))
         }
     } else {
         let cfg = config::get();
@@ -242,8 +282,8 @@ unsafe fn place(hwnd: HWND, follow_caret: bool) {
         }
     };
     // 夹在屏幕内，避免改分辨率后跑到看不见的地方（按所在显示器夹，见函数注释）
-    let (x, y) = clamp_to_monitor(x, y, WIDTH, HEIGHT);
-    let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, WIDTH, HEIGHT, SWP_NOACTIVATE);
+    let (x, y) = clamp_to_monitor(x, y, width(), height());
+    let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width(), height(), SWP_NOACTIVATE);
 }
 
 unsafe fn create() -> Option<HWND> {
@@ -258,8 +298,8 @@ unsafe fn create() -> Option<HWND> {
         WS_POPUP,
         0,
         0,
-        WIDTH,
-        HEIGHT,
+        width(),
+        height(),
         None,
         None,
         Some(HINSTANCE(hinst.0)),
@@ -586,8 +626,8 @@ unsafe fn tip_show(owner: HWND, idx: usize) {
         SelectObject(hdc, old);
         let _ = ReleaseDC(Some(tip), hdc);
     }
-    let tw = calc.right + TIP_PAD * 2;
-    let th = calc.bottom + TIP_PAD * 2;
+    let tw = calc.right + tip_pad() * 2;
+    let th = calc.bottom + tip_pad() * 2;
 
     let mut o = RECT::default();
     let _ = GetWindowRect(owner, &mut o);
@@ -601,9 +641,9 @@ unsafe fn tip_show(owner: HWND, idx: usize) {
         bottom: GetSystemMetrics(SM_CYSCREEN),
     });
     let mut x = o.left + rect.left;
-    let mut y = o.bottom + TIP_GAP;
+    let mut y = o.bottom + tip_gap();
     if y + th > work.bottom {
-        y = (o.top - th - TIP_GAP).max(work.top);
+        y = (o.top - th - tip_gap()).max(work.top);
     }
     x = x.clamp(work.left, (work.right - tw).max(work.left));
 
@@ -693,7 +733,7 @@ unsafe fn on_click(idx: usize) {
     // 而光标通常还停在按钮上，`tip_show` 的幂等早退会让气泡一直浮在设置窗
     // 上面；点「符号」弹出的软键盘正好开在气泡所在的位置，会压在键盘上沿。
     tip_hide();
-    match LAYOUT[idx].0 {
+    match LAYOUT[idx] {
         Btn::Mode => {
             let next = !insert::chinese();
             if insert::set_chinese(next) {
@@ -723,6 +763,14 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        // 拖动到缩放不同的屏幕上：系统先告诉新 DPI，再让我们按新尺寸重排。
+        // 不处理的话窗口还按旧 DPI 的宽高，字会溢出按钮、高亮块错位。
+        WM_DPICHANGED => {
+            crate::dpi::update_for_window(h);
+            place(h, config::get().bar_follow);
+            let _ = InvalidateRect(Some(h), None, true);
+            LRESULT(0)
+        }
         // 绝不抢焦点
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
 
@@ -866,7 +914,7 @@ mod tests {
     /// 每个按钮都得有悬停说明——浮窗上没有第二处能写「这个按钮是干什么的」。
     #[test]
     fn every_button_has_a_tip() {
-        for (i, (b, _)) in LAYOUT.iter().enumerate() {
+        for (i, b) in LAYOUT.iter().enumerate() {
             assert!(!tip_for(*b).is_empty(), "第 {i} 个按钮没有悬停说明");
         }
         assert!(
@@ -914,10 +962,10 @@ mod tests {
     fn button_rects_are_contiguous() {
         let rects = button_rects();
         assert_eq!(rects.len(), LAYOUT.len());
-        assert_eq!(rects[0].1.left, PAD);
+        assert_eq!(rects[0].1.left, pad());
         for w in rects.windows(2) {
             assert_eq!(w[0].1.right, w[1].1.left, "按钮之间有缝或有重叠");
         }
-        assert_eq!(rects[rects.len() - 1].1.right, WIDTH - PAD);
+        assert_eq!(rects[rects.len() - 1].1.right, width() - pad());
     }
 }

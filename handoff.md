@@ -4682,3 +4682,97 @@ calc +3）；文档三份 + 验证清单（276 重排、281b/c、53b）同步。
 
 这个包里相对 0.3.13 的内容：设置窗「细胞词库…」（直接导入下载的 .scel）、
 设置窗滚动残影修复、快捷输入 `/v` 金额、二级简码全表进帮助文档。
+
+## 2026-11-06（续五）高 DPI 适配：自绘窗口按系统 DPI 放大
+
+自绘 UI 有一笔欠了很久的账：候选窗 / 状态浮窗 / 符号面板 / 设置窗的尺寸全是按
+96 DPI 写死的整数，150% 缩放的笔记本上整块界面小一半。这次补齐，**五个源文件 + 一个
+新模块**。
+
+### 为什么不能在 DLL 里调 `SetProcessDpiAwareness`
+
+DPI 感知是**进程级**状态，宿主（资源管理器 / 记事本 / Chrome）在我们被加载之前就
+定好了。从 DLL 里改它会把宿主整个界面打乱——那是不能碰的东西。所以这一层只做一件事：
+**问系统「这块屏多少 DPI」，然后按比例放大自己的度量**。感知模式跟随宿主。
+
+### unaware 宿主会双重放大
+
+老程序是 DPI unaware，系统把我们的窗口连同坐标一起「虚拟化」放大一遍；我们再按
+DPI 放大就是双重放大，窗口大出一圈。所以 `dpi::effective()` 里，感知模式不是
+PER_MONITOR / SYSTEM 的一律按 96 处理。这条如果写错，症状是「在高 DPI 的普通程序里
+特正常，在老程序里特别大」——很难联想到是感知模式的问题。
+
+### 缓存：`AtomicU32`，0 是「还没问过系统」的哨兵
+
+`dpi()` 每帧都会被命中判定和绘制同时调用，每次去问 `GetDpiForMonitor`（会问 DWM）
+太浪费。缓存一个值，在窗口创建 / `WM_DPICHANGED` / 每次按光标位置弹窗时刷新。
+
+**0 当哨兵**而不是「真的 0 DPI」：0 表示还没问过，按 96 处理。`scale(v, 0)` 返回
+`v` 本身，单测就是拿这个当「默认缩放」的。这一条先写错了（`scale(13,0)` 期望 1），
+被自己的单测抓住。
+
+### 单测不能写全局 DPI 缓存
+
+`candidate` / `softkbd` 的几何用例是按 96 DPI 的常数并排断言的，而且并行跑。
+只要有一个用例顺手 `DPI.store(144)`，别的用例随机假失败、而且时序相关、极难复现。
+所以：**测试路径只准调纯函数 `scale` / `unscale`，绝不准碰 `dpi()`**。
+
+### 32 位构建里 `AtomicIsize` 装不下 `(句柄 << 32) | dpi`
+
+`font.rs` 把字体句柄和 DPI 打包进一个原子量做缓存（句柄变了或 DPI 变了都要重建）。
+第一版用 `AtomicIsize` —— 在 x86 上它只有 32 位，`(dpi << 32)` 直接被 rustc 判成
+编译期溢出。0.3.14 首次出 x86 包就是这么挂的。改 `AtomicU64`，两个架构都够。
+
+### 每个窗口改了什么
+
+| 文件 | 关键改动 |
+|---|---|
+| `src/dpi.rs`（新） | `dpi/px/scale/unscale/update_for_point/update_for_window`，模块文档写清上面三条 |
+| `src/candidate.rs` | 常量改 `*_L` 逻辑值 + 访问函数（`pad/gap/row_h/...`）；`show()` 开头按光标刷新 DPI；`WM_DPICHANGED` **先抄参数、释放 STATE 锁再调 `show()`** |
+| `src/statusbar.rs` | `PAD/HEIGHT/BTN_INSET/BTN_W` 同名改造；`place()` 先 `update_for_point` 再算宽高 |
+| `src/softkbd.rs` | `CELL_W/CELL_H/PAD/TAB_H` 同名改造；`WM_DPICHANGED` 重算宽高 + `SetWindowPos` |
+| `font.rs` | 句柄缓存改 `AtomicU64` 打包 `(句柄, dpi)`，`ui/small/emoji` 按 DPI 比对重建 |
+| `src/settings.rs` | 见下 |
+
+**候选窗的 `WM_DPICHANGED` 有个死锁坑**：处理函数里要调 `show()` 重排，而 `show()`
+自己会去锁 `STATE`。如果 `WM_DPICHANGED` 分支是从「已经持有 `STATE` 锁」的路径上
+进来的，直接调就是自己等自己。所以先把新坐标抄进局部变量、把锁放掉，再调 `show()`。
+
+### 设置窗：换算只在边界做
+
+`settings.rs` 是这一批里最麻烦的——它同时有**逻辑布局**（`build()` 里几十行
+`y += 40`）和**物理尺寸**（客户区高度、滚动条位置、`SetWindowPos`）。
+
+定下的规矩：**布局代码全写逻辑值，换算只在 `mk()` / `window_size()` /
+`client_h()` / `want_client_h()` 四个边界上做**。反过来（每个 `y += 40` 后面跟一句
+`px()`）漏一个就在某个缩放下错位，而且很难看出来——这种漏法在 100% 缩放下完全正常。
+
+几个具体的量：
+
+- `want_client_h()`：`GetSystemMetrics(SM_CYSCREEN)` 给的是**物理**像素，先
+  `unscale` 回逻辑值再夹 `[460, 820]`。不换回来的话，150% 的 768p 屏物理高 768、
+  逻辑高只有 512，会以为屏幕很宽裕，结果窗口高过屏幕、底部按钮跑到屏幕外。
+  这和「1366×768 装不下 900 客户区」是同一个老问题换了副面孔。
+- `client_h()` / `view_h()`：留在**物理**坐标系。滚动相关的东西（`CONTENT_H`、
+  `SCROLL`、`SetWindowPos` 的 y）全在这一个坐标系里才比得了。
+- `CONTENT_H` 存 `px(content_h)`：跟滚动位置同坐标系。
+- 底部「关闭」按钮：`y = unscale(client_h(h), dpi()) - 40`，因为 `mk()` 还会再乘一次。
+  直接减 40 会得到「150% 下按钮浮在半空」。
+- `WM_DPICHANGED`：**重建子窗口**而不是就地挪。就地挪改不了已经下发的高度和字体
+  （字体句柄是按 DPI 缓存的），重建比「遍历子窗口 `SetWindowPos` + `WM_SETFONT`」
+  少一半代码，而且不会漏掉下拉框这类系统自绘的部分。
+
+### Android 侧不用改
+
+Android 全部用 `dp` / `sp`（`resources.displayMetrics.density`），系统本来就按密度
+换算，键盘高度、内边距、字号都已经是密度无关的。这次审计只确认了一件事：源码里没有
+漏网的裸像素值（`setPadding(12, ...)` 这种）。核对结果：`LayoutParams` / `setPadding`
+每一处都走 `dp()`。
+
+### 验证
+
+- `cargo test --workspace`：`133 passed`（新增 `unscale` 往返用例）+ `251 passed`。
+- `build_setup.ps1 -NoUserDict`：64 位 6431 KB / 32 位 6474 KB，`[test] 64 : PASS` /
+  `[test] 32 : PASS`，安装包 `dist\Feihe-Setup-0.3.14.exe` 2,648,415 字节。
+- 真机手感验证见 `docs/验证清单.md` **M3.57（376–384）**：100% 和 150% 两种缩放对着比，
+  含跨屏跟随、unaware 宿主不双重放大、设置窗换屏重排。

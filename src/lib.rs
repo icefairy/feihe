@@ -7,6 +7,7 @@ mod clsid;
 mod config;
 mod datadir;
 mod diag;
+mod dpi;
 mod dllcount;
 mod font;
 mod fullscreen;

@@ -48,13 +48,39 @@ const CLASS_NAME: PCWSTR = w!("FeiheCandidateWindow");
 /// 写字面值。这个值从 Win32 定义至今没变过。
 const MK_CONTROL: usize = 0x0008;
 
-const PAD: i32 = 10;
-const GAP: i32 = 16;
-/// 一行的行高。单行时窗口高 `ROW_H + 2`（= 30，和老版本一模一样），
-/// 多行时就是 `rows * ROW_H + 2`。
-const ROW_H: i32 = 28;
+/// 下面这些是 **100% 缩放（96 DPI）下的逻辑像素**。真机上要过一遍
+/// [`crate::dpi::px`] 换成当前显示器的物理像素——否则 150% 缩放的笔记本上，
+/// 候选窗只有别人的一半大（详见 `src/dpi.rs` 的模块注释）。
+const PAD_L: i32 = 10;
+const GAP_L: i32 = 16;
+/// 一行的行高。单行时窗口高 `row_h() + 2`（= 30，和老版本一模一样），
+/// 多行时就是 `rows * row_h() + 2`。
+const ROW_H_L: i32 = 28;
 /// 候选词和它后面那串读音小字之间的缝
-const HINT_GAP: i32 = 5;
+const HINT_GAP_L: i32 = 5;
+
+/// 留白、候选间距、行高、读音缝——全部按当前 DPI 放大。
+///
+/// 抽成函数而不是 `static`：DPI 会在运行中变（窗口拖到另一块屏、用户改缩放），
+/// 缓存成常量就永远停在第一次的值上。
+fn pad() -> i32 {
+    crate::dpi::px(PAD_L)
+}
+fn gap() -> i32 {
+    crate::dpi::px(GAP_L)
+}
+fn row_h() -> i32 {
+    crate::dpi::px(ROW_H_L)
+}
+fn hint_gap() -> i32 {
+    crate::dpi::px(HINT_GAP_L)
+}
+
+/// 选中高亮框在候选文字左右各放宽多少。命中区用同一个数——
+/// 画得比命中区宽，用户会点在高亮上却没选中。
+fn hit_pad() -> i32 {
+    crate::dpi::px(4)
+}
 
 /// 单个候选（含后面的读音小字）的**宽度上限**。
 ///
@@ -65,20 +91,28 @@ const HINT_GAP: i32 = 5;
 ///
 /// 所以这里先按 240px 一刀切：超过就截断加省略号，把「打不下」这件事
 /// 变得可见。
-const MAX_ITEM_W: i32 = 240;
+const MAX_ITEM_W_L: i32 = 240;
+
+/// 单个候选的宽度上限（物理像素）。
+///
+/// 上限本身也要跟着 DPI 涨：96 DPI 下 240px 能放 8 个中文字，不留神的话
+/// 在 200% 屏上还是 240 **物理** 像素，只够放 4 个字，明明是宽屏却截断。
+fn max_item_w() -> i32 {
+    crate::dpi::px(MAX_ITEM_W_L)
+}
 
 /// 窗口与屏幕左右边缘之间至少留出的距离。
 ///
 /// 贴边会盖住滚动条，而且看起来像「窗口卡在屏幕外了」。左右各留 8px 之后，
 /// 即使窗口宽度顶到上限，也还能看出这是一块浮在桌面上的窗。
-const SCREEN_MARGIN: i32 = 8;
+const SCREEN_MARGIN_L: i32 = 8;
 
 /// 窗口允许的最大宽度：屏幕宽减去两侧留白，且不小于一个字的宽度。
 ///
 /// 抽成函数是为了让 layout 和 show 用同一个数——两处各算一次的话，
 /// 迟早会出现「布局按 800 排、显示按 900 夹」这种半截候选。
 fn max_window_w() -> i32 {
-    unsafe { (GetSystemMetrics(SM_CXSCREEN) - 2 * SCREEN_MARGIN).max(160) }
+    unsafe { (GetSystemMetrics(SM_CXSCREEN) - 2 * crate::dpi::px(SCREEN_MARGIN_L)).max(crate::dpi::px(160)) }
 }
 
 /// 一页最多几个候选（数字键 1-9）
@@ -86,7 +120,7 @@ pub const PAGE_SIZE: usize = 9;
 
 /// 窗口高度：`rows` 行，上下各 1px 给边框
 fn height_of(rows: usize) -> i32 {
-    rows as i32 * ROW_H + 2
+    rows as i32 * row_h() + crate::dpi::px(2)
 }
 
 /// 第 `page` 页的那一段候选
@@ -114,7 +148,7 @@ struct CandState {
     y: i32,
     /// 每一行里每一项的横向命中区（相对客户区），由 `layout()` 算出
     spans: Vec<Vec<(i32, i32)>>,
-    /// 每一行里每一项**实际画出来的字**（超宽时是截断过的，见 [MAX_ITEM_W]）。
+    /// 每一行里每一项**实际画出来的字**（超宽时是截断过的，见 [max_item_w]）。
     ///
     /// 必须存下来而不是绘制时重算：重算要再量一遍字宽，而绘制是每次重绘都走的
     /// 热路径；更要紧的是「量出来多少宽」和「画了什么」得是同一份数据，
@@ -331,7 +365,7 @@ struct DrawnItem {
 /// 8 字词时，只截它仍然会把窗口撞出屏幕（其余八项也各占一截）。
 fn item_budget(window_w: i32, n: usize) -> i32 {
     let n = n.max(1) as i32;
-    ((window_w - 2 * PAD - (n - 1) * GAP) / n).max(40)
+    ((window_w - 2 * pad() - (n - 1) * gap()) / n).max(crate::dpi::px(40))
 }
 
 /// 把一个候选装进 `cap` 宽度里，顺序是「先丢读音、再截字」。
@@ -352,7 +386,7 @@ fn fit_item(
     let total = |b: &str, h: Option<&str>| {
         let main = measure(&format!("{prefix}{b}"), false);
         main + match h {
-            Some(h) => HINT_GAP + measure(h, true),
+            Some(h) => hint_gap() + measure(h, true),
             None => 0,
         }
     };
@@ -393,7 +427,7 @@ fn hit(st: &CandState, x: i32, y: i32) -> Option<usize> {
     if y < 0 {
         return None;
     }
-    let row = y as usize / ROW_H as usize;
+    let row = y as usize / row_h().max(1) as usize;
     let spans = st.spans.get(row)?;
     let col = spans.iter().position(|(l, r)| x >= *l && x < *r)?;
     Some((st.top + row) * PAGE_SIZE + col)
@@ -465,6 +499,32 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         // 自绘背景，避免闪烁
         WM_ERASEBKGND => LRESULT(1),
+        // 窗口被拖到缩放不同的屏幕上（少见，但 RDP / 切换缩放时会碰到）：
+        // 按新 DPI 重排一遍。候选窗的宽高、行高、字号都跟 DPI 绑着，
+        // 只重绘不重排的话字会溢出窗口。
+        WM_DPICHANGED => {
+            crate::dpi::update_for_window(hwnd);
+            // 先把要重排的参数抄出来，**必须放开 STATE 的锁**再调 show——
+            // show 自己也要锁它，重入会死锁。
+            let args = STATE.lock().ok().and_then(|st| {
+                if st.items.is_empty() {
+                    return None;
+                }
+                Some((
+                    st.items.clone(),
+                    st.selected,
+                    st.page,
+                    st.rows,
+                    st.x,
+                    st.y,
+                ))
+            });
+            if let Some((items, selected, page, rows, x, y)) = args {
+                let refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+                show(&refs, selected, page, rows, x, y);
+            }
+            LRESULT(0)
+        }
         // 点候选窗不抢焦点，否则应用会失焦、组合态被断掉
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
 
@@ -584,14 +644,14 @@ unsafe fn paint_content(hdc: HDC, rc: &RECT) {
         // 所以除了选中项那块底色，活动行整行的文字也用正常色，其余行压暗一档——
         // 多行摊开之后，用户得先知道「现在选的是哪一行」。
         let active = st.top + r == st.page;
-        let row_top = 1 + r as i32 * ROW_H;
-        let row_bottom = row_top + ROW_H;
-        let ty = row_top + (ROW_H - font_height(hdc)) / 2;
+        let row_top = crate::dpi::px(1) + r as i32 * row_h();
+        let row_bottom = row_top + row_h();
+        let ty = row_top + (row_h() - font_height(hdc)) / 2;
 
         // 画什么、占多宽，全部取自 layout 预先算好的结果（st.texts / st.hints）。
         // 这里**不能**重新 label(i, word) ——那样超宽截断就白做了，
         // 而且量出来的宽度会和 layout 里的命中区对不上。
-        let mut x = PAD;
+        let mut x = pad();
         for i in 0..items.len() {
             let text = st
                 .texts
@@ -605,16 +665,17 @@ unsafe fn paint_content(hdc: HDC, rc: &RECT) {
             let mut size = SIZE::default();
             let _ = GetTextExtentPoint32W(hdc, &wide, &mut size);
             let (_, hw) = measure(hdc, &text, hint);
-            let total = size.cx + if hint.is_some() { HINT_GAP + hw } else { 0 };
+            let total = size.cx + if hint.is_some() { hint_gap() + hw } else { 0 };
 
             // st.selected 是**活动页内**的序号，不是全表序号
             let chosen = active && i == st.selected;
             if chosen {
+                let hp = hit_pad();
                 let hi = RECT {
-                    left: x - 4,
-                    top: row_top + 2,
-                    right: x + total + 4,
-                    bottom: row_bottom - 2,
+                    left: x - hp,
+                    top: row_top + crate::dpi::px(2),
+                    right: x + total + hp,
+                    bottom: row_bottom - crate::dpi::px(2),
                 };
                 crate::font::fill(hdc, &hi, p.accent);
                 SetTextColor(hdc, p.accent_text);
@@ -630,13 +691,13 @@ unsafe fn paint_content(hdc: HDC, rc: &RECT) {
                 let old = SelectObject(hdc, crate::font::small());
                 SetTextColor(hdc, if chosen { p.accent_text } else { p.dim });
                 // 比主文字低 2px，视觉上挂在词的下沿，不跟序号抢同一行
-                let _ = TextOutW(hdc, x + size.cx + HINT_GAP, ty + 2, &hwide);
+                let _ = TextOutW(hdc, x + size.cx + hint_gap(), ty + crate::dpi::px(2), &hwide);
                 SelectObject(hdc, old);
                 // 小字画完要把颜色恢复给下一个候选用（SetTextColor 不随字体还原）
                 SetTextColor(hdc, if active { p.text } else { p.dim });
             }
 
-            x += total + GAP;
+            x += total + gap();
         }
     }
 }
@@ -664,7 +725,7 @@ pub fn refresh_theme() {
 /// 计算窗口宽度和每一行的横向命中区。
 ///
 /// 绘制（`paint`）和命中判定（`hit`）都依赖这里的几何：paint 按同样的
-/// `size.cx + GAP` 递增，高亮框左右各放宽 4px，所以命中区也用 ±4。
+/// `size.cx + gap()` 递增，高亮框左右各放宽 4px，所以命中区也用 ±4。
 /// 多行时宽度取**最宽那一行**——每行各自按自己的内容排，行内不错位。
 struct Layout {
     /// 窗口宽度（已夹到屏幕能装下的上限）
@@ -680,7 +741,7 @@ unsafe fn layout(items: &[String], top: usize, rows: usize) -> Layout {
     let hdc = GetDC(None);
     if hdc.is_invalid() {
         return Layout {
-            w: 320,
+            w: crate::dpi::px(320),
             spans: Vec::new(),
             texts: Vec::new(),
             hints: Vec::new(),
@@ -700,8 +761,8 @@ unsafe fn layout(items: &[String], top: usize, rows: usize) -> Layout {
         }
         // 每一项的宽度预算按「这一行有几项」均分。见 item_budget 的注释：
         // 只截超长那一项是不够的。
-        let cap = item_budget(window_w, list.len()).min(MAX_ITEM_W);
-        let mut x = PAD;
+        let cap = item_budget(window_w, list.len()).min(max_item_w());
+        let mut x = pad();
         let mut row = Vec::with_capacity(list.len());
         let mut row_texts = Vec::with_capacity(list.len());
         let mut row_hints = Vec::with_capacity(list.len());
@@ -710,20 +771,20 @@ unsafe fn layout(items: &[String], top: usize, rows: usize) -> Layout {
                 measure_plain(hdc, t, small)
             });
             let (mw, hw) = measure(hdc, &drawn.text, drawn.hint);
-            let total = mw + if hw > 0 { HINT_GAP + hw } else { 0 };
-            row.push((x - 4, x + total + 4));
+            let total = mw + if hw > 0 { hint_gap() + hw } else { 0 };
+            row.push((x - hit_pad(), x + total + hit_pad()));
             row_texts.push(drawn.text);
             row_hints.push(drawn.hint);
-            x += total + GAP;
+            x += total + gap();
         }
-        width = width.max(x - GAP + PAD);
+        width = width.max(x - gap() + pad());
         spans.push(row);
         texts.push(row_texts);
         hints.push(row_hints);
     }
     let _ = ReleaseDC(None, hdc);
     Layout {
-        w: width.max(80).min(window_w),
+        w: width.max(crate::dpi::px(80)).min(window_w),
         spans,
         texts,
         hints,
@@ -811,6 +872,10 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
 
     let pages = items.len().div_ceil(PAGE_SIZE).max(1);
 
+    // 按**光标所在那块屏**刷新 DPI：候选窗跟着光标走，主屏 150%、副屏 100%
+    // 是常见配置。必须在 layout 之前刷——宽度和行高都要用新的比例算。
+    crate::dpi::update_for_point(x, y);
+
     unsafe {
         let hwnd = ensure_window();
         if hwnd.is_invalid() {
@@ -821,7 +886,8 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
         // 屏幕放不下就砍行数：宁可少摊几行，也不能让窗口有一半在屏幕外
         // （在屏幕最下面打字是常态，候选只能往上长）。
         let sh = GetSystemMetrics(SM_CYSCREEN);
-        let fits = |n: usize| y + 6 + height_of(n) <= sh || y - 6 - height_of(n) >= 0;
+        let lift = crate::dpi::px(6);
+        let fits = |n: usize| y + lift + height_of(n) <= sh || y - lift - height_of(n) >= 0;
         let mut rows = rows.min(pages);
         while rows > 1 && !fits(rows) {
             rows -= 1;
@@ -855,8 +921,9 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
         // px + w > sw 一般只会在「光标靠右」时成立。但保留这个夹子
         // 仍然必要——屏幕可能在弹窗的瞬间被拔掉（RDP、投屏）。
         let sw = GetSystemMetrics(SM_CXSCREEN);
+        let lift = crate::dpi::px(6);
         let mut px = x;
-        let mut py = y + 6;
+        let mut py = y + lift;
         if px + w > sw {
             px = (sw - w).max(0);
         } else if px < 0 {
@@ -864,7 +931,7 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
         }
         if py + h > sh {
             // 下方放不下就翻到光标上方
-            py = (y - h - 6).max(0);
+            py = (y - h - lift).max(0);
         }
 
         let _ = SetWindowPos(
@@ -1014,7 +1081,7 @@ mod tests {
         assert_eq!(hit(&st, 30, 15), Some(1));
         assert_eq!(hit(&st, 54, 15), None, "右端点属于不存在的下一项");
         assert_eq!(hit(&st, 10, -1), None, "客户区上方不该命中");
-        assert_eq!(hit(&st, 10, ROW_H + 2), None, "只有一行时第二行是空白");
+        assert_eq!(hit(&st, 10, row_h() + 2), None, "只有一行时第二行是空白");
         st.spans.clear();
         assert_eq!(hit(&st, 10, 15), None);
     }
@@ -1043,8 +1110,8 @@ mod tests {
             pressed: None,
         };
         assert_eq!(hit(&st, 10, 15), Some(0), "第 1 行第 1 项 = 全表 0");
-        assert_eq!(hit(&st, 10, ROW_H + 2), Some(9), "第 2 行第 1 项 = 全表 9");
-        assert_eq!(hit(&st, 40, ROW_H * 2 + 2), Some(19), "第 3 行第 2 项 = 全表 19");
+        assert_eq!(hit(&st, 10, row_h() + 2), Some(9), "第 2 行第 1 项 = 全表 9");
+        assert_eq!(hit(&st, 40, row_h() * 2 + 2), Some(19), "第 3 行第 2 项 = 全表 19");
         // 滚过一屏之后 top 不为 0，下标要跟着带偏移
         st.top = 2;
         assert_eq!(hit(&st, 10, 15), Some(18), "top=2 时第 1 行是全表第 18 个");

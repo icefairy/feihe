@@ -24,16 +24,47 @@ use crate::theme;
 const CLASS_NAME: PCWSTR = w!("FeiheSoftKeyboard");
 
 const COLS: usize = 9;
-const CELL_W: i32 = 36;
-const CELL_H: i32 = 34;
-const PAD: i32 = 6;
 const ROWS: usize = 5;
+
+// ── 逻辑尺寸（96 DPI）─────────────────────────────────────────
+//
+// 一律是 100% 缩放下的基准值，真机经 `dpi::px` 换成物理像素。
+// 面板尺寸不算小数（见 `src/dpi.rs`）：按 36 逻辑像素的格子算，
+// 200% 屏上就是 72 物理像素一格，手指/鼠标都好点。
+const CELL_W_L: i32 = 36;
+const CELL_H_L: i32 = 34;
+const PAD_L: i32 = 6;
 
 /// 每页的格子数（一行 9 个、共 5 行）
 const CELLS: usize = COLS * ROWS;
 
-/// 底部页签的高度。只放两三个汉字，22px 够用，再高就喧宾夺主了。
-const TAB_H: i32 = 22;
+/// 底部页签的高度。只放两三个汉字，22 逻辑像素够用，再高就喧宾夺主了。
+const TAB_H_L: i32 = 22;
+
+fn cell_w() -> i32 {
+    crate::dpi::px(CELL_W_L)
+}
+fn cell_h() -> i32 {
+    crate::dpi::px(CELL_H_L)
+}
+fn pad() -> i32 {
+    crate::dpi::px(PAD_L)
+}
+fn tab_h() -> i32 {
+    crate::dpi::px(TAB_H_L)
+}
+/// 整个窗口的宽（两侧留白 + 9 列格子）
+fn width() -> i32 {
+    pad() * 2 + cell_w() * COLS as i32
+}
+/// 内容区高度（不含页签）
+fn body_h() -> i32 {
+    pad() * 2 + cell_h() * ROWS as i32
+}
+/// 含页签的总高度
+fn height() -> i32 {
+    body_h() + tab_h()
+}
 
 /// 一页内容。
 ///
@@ -88,10 +119,6 @@ const PAGE_EMOJI: Page = Page {
 
 const PAGES: [&Page; 2] = [&PAGE_SYMBOL, &PAGE_EMOJI];
 
-const WIDTH: i32 = PAD * 2 + CELL_W * COLS as i32;
-/// 内容区高度（不含页签）
-const BODY_H: i32 = PAD * 2 + CELL_H * ROWS as i32;
-const HEIGHT: i32 = BODY_H + TAB_H;
 
 static WND: AtomicIsize = AtomicIsize::new(0);
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -114,34 +141,38 @@ fn page() -> &'static Page {
 fn cell_rect(i: usize) -> RECT {
     let r = (i / COLS) as i32;
     let c = (i % COLS) as i32;
+    // 全部用「格宽 × 下标」算，不做累加：累加会把每一格的取整误差攒起来，
+    // 第 9 列可能差出 1~2px，最后一列格子就贴不齐右留白。
+    let (cw, chh, pd) = (cell_w(), cell_h(), pad());
     RECT {
-        left: PAD + c * CELL_W,
-        top: PAD + r * CELL_H,
-        right: PAD + (c + 1) * CELL_W,
-        bottom: PAD + (r + 1) * CELL_H,
+        left: pd + c * cw,
+        top: pd + r * chh,
+        right: pd + (c + 1) * cw,
+        bottom: pd + (r + 1) * chh,
     }
 }
 
 /// 页签的矩形
 fn tab_rect(i: usize) -> RECT {
-    let w = (WIDTH - PAD * 2) / PAGES.len() as i32;
-    let left = PAD + i as i32 * w;
+    let (pd, bh) = (pad(), body_h());
+    let w = (width() - pd * 2) / PAGES.len() as i32;
+    let left = pd + i as i32 * w;
     RECT {
         left,
-        top: BODY_H,
+        top: bh,
         // 最后一页吃掉除不尽的余数，右边不留缝
         right: if i + 1 == PAGES.len() {
-            WIDTH - PAD
+            width() - pd
         } else {
             left + w
         },
-        bottom: HEIGHT,
+        bottom: height(),
     }
 }
 
 /// 命中的格子编号（不含页签区）
 fn cell_at(x: i32, y: i32) -> Option<usize> {
-    if y >= BODY_H || x < PAD || x >= WIDTH - PAD {
+    if y >= body_h() || x < pad() || x >= width() - pad() {
         return None;
     }
     (0..CELLS).find(|&i| {
@@ -152,7 +183,7 @@ fn cell_at(x: i32, y: i32) -> Option<usize> {
 
 /// 命中的页签编号
 fn tab_at(x: i32, y: i32) -> Option<usize> {
-    if y < BODY_H {
+    if y < body_h() {
         return None;
     }
     (0..PAGES.len()).find(|&i| {
@@ -196,8 +227,8 @@ unsafe fn ensure_window() -> Option<HWND> {
         WS_POPUP,
         0,
         0,
-        WIDTH,
-        HEIGHT,
+        width(),
+        height(),
         None,
         None,
         Some(HINSTANCE(hinst.0)),
@@ -213,26 +244,28 @@ unsafe fn ensure_window() -> Option<HWND> {
 
 /// 显示在 (x, y)（屏幕坐标，通常是状态浮窗左下角）
 pub fn show_at(x: i32, y: i32) {
+    // 面板是从浮窗按钮点出来的，跟着**浮窗所在那块屏**的缩放走
+    crate::dpi::update_for_point(x, y);
     unsafe {
         let Some(h) = ensure_window() else { return };
         let sw = GetSystemMetrics(SM_CXSCREEN);
         let sh = GetSystemMetrics(SM_CYSCREEN);
         let mut px = x;
         let mut py = y;
-        if px + WIDTH > sw {
-            px = (sw - WIDTH).max(0);
+        if px + width() > sw {
+            px = (sw - width()).max(0);
         }
-        if py + HEIGHT > sh {
+        if py + height() > sh {
             // 下方放不下就翻到上方
-            py = (py - HEIGHT - 34).max(0);
+            py = (py - height() - crate::dpi::px(34)).max(0);
         }
         let _ = SetWindowPos(
             h,
             Some(HWND_TOPMOST),
             px,
             py,
-            WIDTH,
-            HEIGHT,
+            width(),
+            height(),
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
         let _ = InvalidateRect(Some(h), None, true);
@@ -297,11 +330,12 @@ unsafe fn paint(h: HWND) {
     SetBkMode(hdc, TRANSPARENT);
 
     // 内容区与页签之间画一条分隔线，让人看出下面是「切换」不是「第 6 行」
+    let bh = body_h();
     let divider = RECT {
-        left: PAD,
-        top: BODY_H - 1,
-        right: WIDTH - PAD,
-        bottom: BODY_H,
+        left: pad(),
+        top: bh - 1,
+        right: width() - pad(),
+        bottom: bh,
     };
     font::fill(hdc, &divider, p.border);
 
@@ -339,6 +373,25 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        // 面板尺寸全是 DPI 缩放的结果，换屏后必须按新 DPI 重算宽高再重排，
+        // 否则格子大小不变而窗口被系统拉伸，点击位置整体错位。
+        WM_DPICHANGED => {
+            crate::dpi::update_for_window(h);
+            let mut wr = RECT::default();
+            let _ = GetWindowRect(h, &mut wr);
+            let _ = SetWindowPos(
+                h,
+                Some(HWND_TOPMOST),
+                wr.left,
+                wr.top,
+                width(),
+                height(),
+                SWP_NOACTIVATE,
+            );
+            HOVER.store(-1, Ordering::Release);
+            let _ = InvalidateRect(Some(h), None, true);
+            LRESULT(0)
+        }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_MOUSEMOVE => {
             let (x, y) = (mx(), my());
@@ -419,7 +472,7 @@ mod tests {
     fn cells_tile_without_overlap() {
         for i in 0..CELLS {
             let a = cell_rect(i);
-            assert!(a.right <= WIDTH - PAD && a.bottom <= BODY_H);
+            assert!(a.right <= width() - pad() && a.bottom <= body_h());
             for j in (i + 1)..CELLS {
                 let b = cell_rect(j);
                 let apart = a.right <= b.left
@@ -434,14 +487,14 @@ mod tests {
     /// 页签铺满底部且首尾贴合，中间不留缝。
     #[test]
     fn tabs_cover_the_bottom_strip() {
-        assert_eq!(tab_rect(0).left, PAD);
-        assert_eq!(tab_rect(PAGES.len() - 1).right, WIDTH - PAD);
+        assert_eq!(tab_rect(0).left, pad());
+        assert_eq!(tab_rect(PAGES.len() - 1).right, width() - pad());
         for i in 1..PAGES.len() {
             assert_eq!(tab_rect(i).left, tab_rect(i - 1).right, "页签之间有缝");
         }
         for i in 0..PAGES.len() {
-            assert_eq!(tab_rect(i).top, BODY_H);
-            assert_eq!(tab_rect(i).bottom, HEIGHT);
+            assert_eq!(tab_rect(i).top, body_h());
+            assert_eq!(tab_rect(i).bottom, height());
         }
     }
 
@@ -465,7 +518,7 @@ mod tests {
     #[test]
     fn padding_is_inert() {
         assert_eq!(cell_at(0, 20), None);
-        assert_eq!(cell_at(WIDTH - 1, 20), None);
+        assert_eq!(cell_at(width() - 1, 20), None);
         assert_eq!(cell_at(20, 0), None);
     }
 

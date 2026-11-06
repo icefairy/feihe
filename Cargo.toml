@@ -56,6 +56,10 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     # 简繁转换：LCMapStringEx + LCMAP_TRADITIONAL_CHINESE（Windows 自带 NLS 映射表）
     "Win32_Globalization",
+    # 高 DPI：GetDpiForWindow / GetDpiForMonitor / GetThreadDpiAwarenessContext。
+    # 我们是进程内的 DLL，改不了宿主进程的 DPI 感知，只能「问系统现在多少 DPI
+    # 然后按比例放大自己的窗口」，见 src/dpi.rs。
+    "Win32_UI_HiDpi",
     # 全屏检测：SHQueryUserNotificationState（判断是否全屏游戏 / 演示模式）
     # 设置窗「从搜狗导入」还要 SHBrowseForFolderW（手动选目录）
     "Win32_UI_Shell",
