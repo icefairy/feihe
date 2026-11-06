@@ -50,6 +50,7 @@ pub mod pin;
 pub mod quick;
 pub mod segment;
 pub mod shuangpin;
+pub mod sogou;
 pub mod zhconv;
 
 /// core 的版本号，跟 `Cargo.toml` 走。

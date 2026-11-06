@@ -16,6 +16,89 @@
 - **构建发布**：32 位支持 · 安装包（NSIS）· UILess 测试宿主
 - **速查**：关键事实（实测确认，别再猜）· 待办 · 已知问题
 
+## 2026-11-06（续七）Android 能编了 + 搜狗词库导入
+
+### `build-android.ps1`：为什么非要有它
+
+本机 PATH 里的 `java` 是 1.8，AGP 8.5.2 要 17。直接 `gradlew.bat` 会在**配置阶段**
+就退出，报的那句还和真实原因无关。脚本把三处路径钉进**进程环境**（不写注册表、
+不改用户变量，退出即失效），顺带做四件事：
+
+1. 缺 `jniLibs/arm64-v8a/*.so` / `assets/asr/*` 就调 `tools/fetch_*` 补；
+2. Rust 侧自己设 NDK clang 当链接器和 `FEIHE_NO_USER_DICT=1`；
+3. `-UnitTest` / `-Debug` / `-Install` / `-ShellCheck` 四个开关，别再加；
+4. 编完**反查 APK**：引擎 `.so` 在不在、`model.int8.onnx` 是不是 STORED、v2 签名开没开。
+
+踩到的四个坑（都已修，别再踩）：
+
+| 现象 | 原因 | 修法 |
+|---|---|---|
+| `$javaVer` 把 `java -version` 的 stderr 当错误抛 | `$ErrorActionPreference='Stop'` + 原生命令 stderr | 临时降级到 `Continue` 取第一行（`build.ps1` 的 `Invoke-Native` 同理） |
+| 「libfeihe_android.so 181.51 MB」 | `DirSizeMB (Split-Path $so)` 把整个 release 目录（deps/incremental）算进去了 | 量单文件，用 `FileSizeMB $so` |
+| 「v2 签名未开启」 | `apksigner.bat` 的真实输出是 `Verified using v2 scheme …: true`，和文档里写的 `scheme v2: true` 对不上 | `java -jar lib/apksigner.jar verify -v --print-certs`，按真实输出匹配 |
+| 单测数报 `0 项` / 报 InvalidCast | `[xml]$x` 之后再 `.` 是成员访问不是 XPath | 两条路都别再试：`XmlDocument.Load` + `GetAttribute` 在 PS 5.1 里实测恒回 0。最后改成正则抠 `testsuite` 标签的 `tests`/`failures`/`errors` 三个属性 |
+
+另外别把 `$args` 当自己的数组用——那是 PowerShell 的自动变量（当前参数列表）。
+
+### 搜狗词库搬到 core（按 §11.1 当初说的「只拆解析」）
+
+`core/src/sogou.rs` 现在只有：`Kind` / `Job { label, data, kind, prio }` /
+`encode_jobs` / `encode_one` / `kind_for_ext`，以及 `Imported { files, scanned,
+encoded, added, skipped, from_base, from_char }` 和它的 `summary()`。
+
+**`Job` 里放的是字节，不是路径**——这是它能在 Android 上成立的关键：Windows 壳
+负责用注册表找目录再读盘，Android 壳从 SAF 的 Uri 读盘，两边读出来的是同一种东西。
+如果 `Job` 带路径，Android 那边就得先落地一个临时文件才能调用，等于把壳的活搬进 core。
+
+`Imported::summary()` 是两端共用的一句中文。**判据只有一条：`encoded == 0` 必须说
+「没能解析」**，不能说「导入成功」——这次用户报「导入后没有任何提示」的一半原因就是
+成功路径上只报了个数，零条也照报。
+
+### Android 的「从搜狗导入」
+
+- JNI：`android/jni/src/sogou_extra.rs`，`sogouImportNative(path)`，返回
+  `"OK|<多行摘要>|<新增条数>"` / `"ERR|<原因>"`（`|` 不会出现在中文摘要里）。
+- Kotlin：`NativeEngine.sogouImport(path)` 解析成 `SogouImport(ok, message, added)`；
+  `SettingsActivity.sogouTransfer(uri)` 先按 `DISPLAY_NAME` 取**扩展名**再落临时文件
+  ——临时文件叫 `dict-in.tmp` 的话引擎按扩展名判格式会失败，这是这一块最容易漏的一步。
+- **结果用 AlertDialog 显示**。Toast 一长就截断，多行摘要走 Toast 等于没说。
+
+### 另一个坑：`cargo test` 在这台机器上跑不起来
+
+`.cargo/config.toml` 把 gnullvm 的 linker 钉成 `x86_64-w64-mingw32-gcc`，而 WSL 里
+`/usr/bin/x86_64-w64-mingw32-gcc` 是**Linux ELF**，Windows 侧的 cargo 找不到
+`x86_64-w64-mingw32-gcc.exe`（PATH 里那个 `/bin` 的 shim 干扰）。实测临时把
+`linker` 改成 `clang` / `x86_64-w64-mingw32-clang` 也不行（`cargo` 说找不到）。
+
+可靠的办法是**拷一份到 Windows 盘**再跑（WSL 的 `/tmp` 下 incremental 会报
+`os error -2147024895`）：
+
+```bash
+mkdir -p /mnt/d/tmpfc && cp -r core/src core/Cargo.toml core/build.rs /mnt/d/tmpfc/
+mkdir -p /mnt/d/tmpfc/src_data && cp src/*.txt /mnt/d/tmpfc/src_data/
+sed -i 's|"../src/|"src_data/|g; s|join("../src")|join("src_data")|g' /mnt/d/tmpfc/build.rs
+mkdir -p /mnt/d/src && cp src/*.txt /mnt/d/src/   # dict 的 repo_src() 读 ../src
+cd /mnt/d/tmpfc && CARGO_TARGET_DIR=/mnt/d/tmpfc/target CARGO_INCREMENTAL=0 cargo test --lib
+```
+
+实测结果：**282 passed / 0 failed / 5 ignored**（含新增 2 项 sogou 测试）。
+`cargo check` 和 `cargo check --target aarch64-linux-android`（jni 包）都是零 warning。
+
+### 实编结果（2026-11-06 17:1x，这台机器上真编过的数）
+
+| 项 | 结果 |
+|---|---|
+| `build-android.ps1`（release） | BUILD SUCCESSFUL，`app-release.apk` **116.11 MB** |
+| `build-android.ps1 -UnitTest` | **76 项 / 9 个测试类全过** |
+| APK 内 `lib/arm64-v8a/libfeihe_android.so` | 6,024 KB |
+| APK 内 `assets/asr/model.int8.onnx` | STORED（未压缩，78.0 MB） |
+| 签名 | v2 ✓ v3 ✓，`CN=Feihe Input Method`（自签名，debug/release 同 key） |
+
+> 76 项、不是 33 项：33 是 2026-11-05 骨架期的数，之后加了输入辅助、分词状态、
+> 联想策略、语音标点等一批。以后写文档别再抄 33。
+
+`cargo` 那侧跑测试的坑见上；**Android 侧真机验证仍然没做**（这次交付的是包）。
+
 ## 当前状态
 
 0.2.5 的功能全部落地，只有组合串下划线未做。这里只列「哪一块在哪、有什么讲究」，

@@ -342,3 +342,4 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_reloadAllNative<'l
 // 越离越远。子模块只用到父模块里的 make_string / read_string。
 mod dict_extra;
 mod quick_extra;
+mod sogou_extra;

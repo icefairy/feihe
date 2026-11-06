@@ -203,6 +203,11 @@ class SettingsActivity : Activity() {
             actionRow("导出词库", "把全部词库导出成文本，可带回电脑端用") { dictExport() },
         )
         dictBox.addView(
+            actionRow("从搜狗导入", "下载来的 .scel 细胞词库，或者搜狗导出的 .bin / .txt") {
+                importSogouDict()
+            },
+        )
+        dictBox.addView(
             actionRow(
                 "编译个人词库",
                 "把导入的文本编译成 user.bin，让查询走映射而不是文本回退",
@@ -508,6 +513,82 @@ class SettingsActivity : Activity() {
             .onFailure { toast("这台设备上没有能打开文件的应用") }
     }
 
+    /**
+     * 从搜狗词库文件导入：`.scel` 细胞词库 / `.bin` / `.txt`。
+     *
+     * 和 [dictImport] 是两条路：那边只收「词 + Tab + 全拼」的文本，这边收的是
+     * 搜狗自己的格式（词是二进制里抠出来的，拼音要现场注）。用户从搜狗词库网站
+     * 下载下来的就是 `.scel`，所以这个入口必须单独存在。
+     *
+     * MIME 依然放开（不写死类型）：`.scel` 在文件管理器里普遍被报成
+     * `application/octet-stream`，写死类型会让文件变灰选不中。
+     */
+    private fun importSogouDict() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf(
+                    "application/octet-stream",
+                    "application/x-sogou-scel",
+                    "text/plain",
+                ),
+            )
+        }
+        runCatching { startActivityForResult(i, REQ_SOGOU_IMPORT) }
+            .onFailure { toast("这台设备上没有能打开文件的应用") }
+    }
+
+    /**
+     * 搜狗词库导入的 Uri → 临时文件 → 引擎。
+     *
+     * 结果**必须用对话框显示**，不能只弹 Toast：摘要有好几行（读入 N 个文件、
+     * 解析 N 条、新增 N 条）。Toast 一长就被截断，用户看到的是半句话。
+     * 这也是 2026-11-06 那个「导入后没有任何提示」的一半原因——提示走的是
+     * 单行 Toast，且成功路径上没有摘要。
+     */
+    private fun sogouTransfer(uri: Uri) {
+        // 扩展名要保住：引擎按扩展名选解析器（.scel / .bin / .txt），
+        // 临时文件叫 dict-in.tmp 的话会被判成「不认识的扩展名」。
+        val name = queryDisplayName(uri) ?: "dict.scel"
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val tmp = File(cacheDir, "sogou-in" + if (ext.isEmpty()) "" else ".$ext")
+        toast("导入中…")
+        Thread {
+            val result = runCatching {
+                val input = contentResolver.openInputStream(uri)
+                if (input == null) {
+                    NativeEngine.SogouImport(false, "打不开这个文件", 0)
+                } else {
+                    input.use { src -> tmp.outputStream().use { src.copyTo(it) } }
+                    NativeEngine.sogouImport(tmp.absolutePath)
+                }
+            }.getOrElse { NativeEngine.SogouImport(false, it.message ?: "导入失败", 0) }
+            tmp.delete()
+            runOnUiThread {
+                AlertDialog.Builder(this)
+                    .setTitle(if (result.ok) "导入完成" else "没能导入")
+                    .setMessage(result.message)
+                    .setPositiveButton("好", null)
+                    .show()
+                // 导入成功就要让「当前：…」那行小字和开关状态跟上
+                if (result.ok) {
+                    cfg = NativeEngine.settings()
+                    setContentView(buildUi())
+                }
+            }
+        }.start()
+    }
+
+    /** 从 SAF 的 Uri 里问出文件名（带扩展名）。取不到就返回 null。 */
+    private fun queryDisplayName(uri: Uri): String? = runCatching {
+        contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (i >= 0 && c.moveToFirst()) c.getString(i) else null
+        }
+    }.getOrNull()
+
     /** Uri 与临时文件互转，然后交给引擎。返回给用户看的那句话由引擎给。 */
     private fun dictTransfer(uri: Uri, import: Boolean) {
         val tmp = File(cacheDir, if (import) "dict-in.txt" else "dict-out.txt")
@@ -553,6 +634,7 @@ class SettingsActivity : Activity() {
             REQ_EXPORT -> runBusy { Backup.export(this, uri) }
             REQ_DICT_EXPORT -> dictTransfer(uri, import = false)
             REQ_DICT_IMPORT -> dictTransfer(uri, import = true)
+            REQ_SOGOU_IMPORT -> sogouTransfer(uri)
             REQ_IMPORT -> {
                 // 导入是**破坏性**的（先清后写），必须确认一次再动手。
                 AlertDialog.Builder(this)
@@ -669,5 +751,6 @@ class SettingsActivity : Activity() {
         const val REQ_IMPORT = 1002
         const val REQ_DICT_EXPORT = 1003
         const val REQ_DICT_IMPORT = 1004
+        const val REQ_SOGOU_IMPORT = 1005
     }
 }

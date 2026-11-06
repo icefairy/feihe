@@ -272,6 +272,40 @@ object NativeEngine {
     fun dictSource(): String =
         if (ensureLoaded()) runCatching { dictSourceNative() }.getOrElse { "" } else ""
 
+    /**
+     * 从搜狗词库文件导入（`.scel` 细胞词库 / `sgim_gd_usr*.bin` / 导出的 `.txt`）。
+     *
+     * 和 [dictImport] 的区别是**输入格式**：那边只要「词 + Tab + 全拼」的文本，
+     * 这边认的是搜狗自己的二进制格式，词是解析出来之后再自动注音的（注音在
+     * `feihe_core::sogou`，和 Windows 端共用同一份）。
+     *
+     * 返回 [SogouImport]：成功给一段多行摘要和新增条数，失败给原因。
+     */
+    fun sogouImport(path: String): SogouImport {
+        val raw = if (ensureLoaded()) {
+            runCatching { sogouImportNative(path) }.getOrElse { "ERR|引擎未就绪" }
+        } else {
+            "ERR|引擎未就绪"
+        }
+        // 引擎返回 `"OK|<多行摘要>|<新增条数>"` 或 `"ERR|<原因>"`。
+        // 摘要里本来就有换行，所以只能用第一个 `|` 和最后一个 `|` 切。
+        val parts = raw.split('|')
+        return when (parts.firstOrNull()) {
+            "OK" -> {
+                // 末尾那个字段是新增条数；不是数字就当摘要本身（防止老 .so 少给字段）
+                val added = parts.last().trim().toIntOrNull()
+                val body = if (added == null) parts.drop(1) else parts.subList(1, parts.size - 1)
+                SogouImport(true, body.joinToString("|"), added ?: 0)
+            }
+            "ERR" -> SogouImport(false, parts.drop(1).joinToString("|"), 0)
+            // 引擎没按约定返回（老版本 .so）：原样显示，总比吞掉强
+            else -> SogouImport(false, raw, 0)
+        }
+    }
+
+    /** [sogouImport] 的结果。 */
+    data class SogouImport(val ok: Boolean, val message: String, val added: Int)
+
     // ── 原生方法 ────────────────────────────────────────────────────────
     //
     // 方法名 + 包名 + 类名拼起来就是 .so 里的符号名：
@@ -316,4 +350,6 @@ object NativeEngine {
     private external fun dictCompileNative(): String
 
     private external fun dictSourceNative(): String
+
+    private external fun sogouImportNative(path: String): String
 }

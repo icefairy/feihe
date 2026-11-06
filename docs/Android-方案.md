@@ -553,6 +553,13 @@ Android 输入法的功能面很容易失控——青简的 shell 有 237 个文
 搬过去等于在 core 里放一段永远走不到的代码，还得为它维护跨平台测试。真要做
 「从文件导入词库」时，把解析部分单独拆成 `wordlist` 模块比现在整包搬干净得多。
 
+> **2026-11-06 改判。** 上面第 2 条「文件从哪来没有答案」被现实推翻了：用户在手机上
+> 装完输入法第一件事就是从搜狗词库网站下 `.scel` 再导入。所以按当初说的那样**只拆
+> 解析部分**——`core/src/sogou.rs` 现在只有「字节 → 词 → `词<TAB>全拼`」，接口是
+> `Job { label, data, kind, prio }` + `encode_jobs` / `encode_one`；注册表发现、目录
+> 扫描、写 `user_dict.txt` 全部留在壳里（Windows 是 `src/sogou.rs` 的 `import_auto`
+> 等，Android 是 `android/jni/src/sogou_extra.rs`）。见 11.7。
+
 ### 11.2 「这串按键是双拼码还是全拼」为什么必须在 core 里判
 
 Windows 端从来不需要回答这个问题：TSF 一个键一个键喂进来，`textservice` 攒的就是码。
@@ -602,6 +609,21 @@ Android 的 26 键键盘不一样——用户按的是字母，屏幕上没有�
 - 导出是**先写临时文件、成功了才搬到用户选的位置**，失败不留空文件。
 - 编译不是必做的：没编也能查（走文本回退），编了才走映射。`CompileOutcome::NoSource`
   不算失败——给「先导入一份」的人话，不抛 ERR。
+
+### 11.7 搜狗词库（`.scel`）在 Android 上怎么导
+
+Windows 端三件套是「自动发现搜狗目录 / 细胞词库…（选一个 .scel）/ 从搜狗导入」。
+Android 上只有中间那件有意义，另外两件没有对应的东西（没有注册表、没有安装目录）。
+
+- **解析在 core**：`feihe_core::sogou`（`Job` + `encode_jobs`）。Windows 和 Android
+  共用同一份 `extract_scel` / `extract_bin_*` / 注音逻辑——各写一遍迟早会有一边不认
+  新版本的 `.scel`，而那种错是「导入 0 条、界面还说过成功」。
+- **Java 侧只传递文件路径**：`sogouImportNative(path)` 读盘、判扩展名、调 core、
+  最后 `dict::merge_text` 并进个人词库（会顺手编译 `user.bin`）。
+- **返回串带摘要**：`"OK|<多行摘要>|<新增条数>"` 或 `"ERR|<原因>"`。摘要里必带
+  「解析 N 条 / 新增 M 条」——只有「导入成功」四个字的话，碰上「格式变了、一条都没
+  解析出来」用户完全无从判断。
+- **界面必须用对话框，不能用 Toast**：摘要是多行的，Toast 会截断。
 
 ### 11.4 数据备份：清单在 core，容器在壳
 
@@ -705,13 +727,32 @@ DP 于是认为整串就是一个词、`codes.len() >= 2` 不成立、退回逐�
 
 ### 12.3 构建
 
-```bash
-export JAVA_HOME="D:/soft/jdk17"
-export PATH="/d/soft/jdk17/bin:$PATH"
-cd android
-./gradlew.bat assembleDebug
-# 产物：android/app/build/outputs/apk/debug/app-debug.apk（骨架期 2.0 MB）
+**用仓库根的 `build-android.ps1`**，别直接 `gradlew.bat`：本机 PATH 里的 java 是 1.8，
+AGP 8.5.2 要 17，直接调会报一句和真实原因无关的错就退出。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build-android.ps1            # release APK
+powershell -ExecutionPolicy Bypass -File build-android.ps1 -Debug     # debug APK
+powershell -ExecutionPolicy Bypass -File build-android.ps1 -UnitTest  # 只跑 JVM 单测
+powershell -ExecutionPolicy Bypass -File build-android.ps1 -ShellCheck # 只查环境
+powershell -ExecutionPolicy Bypass -File build-android.ps1 -Install   # 编完直接 adb install
 ```
+
+脚本把三处路径钉在**进程环境**里（不写注册表、不改用户变量）：
+
+| 变量 | 值 | 为什么 |
+|---|---|---|
+| `JAVA_HOME` / `PATH` | `D:\soft\jdk17` | AGP 8.x 硬性要求 |
+| `ANDROID_HOME` / `ANDROID_SDK_ROOT` | `D:\soft\asdk` | 顺手写 `local.properties` |
+| Gradle | `D:\soft\gradle-8.7\bin\gradle.bat` | 不用 wrapper：它要联网下 8.7 发行包 |
+
+另外两件脚本替你做的事：缺 `jniLibs/arm64-v8a/lib*.so` 时调
+`tools/fetch_sherpa_libs.py`、缺 `assets/asr/*` 时调 `tools/fetch_asr_model.py`；
+Rust 侧自己设 `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` 和 `FEIHE_NO_USER_DICT=1`
+（**绝不能**把本机个人词库编进要分发的包）。
+
+编完脚本会反查 APK 里三件事，任何一条不过就等于白打包：`lib/arm64-v8a/libfeihe_android.so`
+在不在、`assets/asr/model.int8.onnx` 是不是 **STORED**、v2 签名有没有开。
 
 `android/local.properties` 里写 `sdk.dir=D:/soft/asdk`（正斜杠，不转义），这个文件
 不进版本库。

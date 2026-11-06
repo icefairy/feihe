@@ -137,10 +137,14 @@ python tools/fetch_asr_model.py       # 79 MB paraformer 离线模型
 python tools/fetch_sherpa_libs.py     # 4 个 arm64 .so + silero_vad.onnx
 python tools/fetch_sherpa_libs.py --verify
 
-cd android
-JAVA_HOME=D:/soft/jdk17 ./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+powershell -ExecutionPolicy Bypass -File build-android.ps1            # release
+powershell -ExecutionPolicy Bypass -File build-android.ps1 -Install   # 编完直接装进手机
 ```
+
+`build-android.ps1` 把 JDK 17（`D:\soft\jdk17`）/ SDK（`D:\soft\asdk`）/
+Gradle 8.7（`D:\soft\gradle-8.7`）钉在进程环境里，缺模型或原生库会自己调
+`tools/fetch_*` 补齐，编完还会反查 APK 里「引擎 .so 在不在、模型是不是 STORED、
+v2 签名有没有开」。命令清单见 `docs/Android-方案.md` §12.3。
 
 装完：系统设置 → 输入法 → 启用「飞鹤输入法」→ 切换过去。设置页有三个入口：
 键盘状态条右侧齿轮、系统设置里的「设置」、以及桌面图标（输入法默认不出现在桌面，
