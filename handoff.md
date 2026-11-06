@@ -1,182 +1,21 @@
 # 飞鹤输入法 · 交接文档
 
-> 记录**实测确认过**的事实和踩过的坑。凡是标「实测」的都是在本机跑出来的结论，
+> 记录**实测确认过**的事实和踩过的坑。凡是标「实测」的都是本机跑出来的结论，
 > 不要再凭直觉推翻。文档里没写「实测」的，都是待验证的推测。
 >
-> 这份文档只记「为什么这么设计」和「怎么走过来的」。**已完成的功能不再逐条复述行为**
-> ——那属于 README 和 `docs/验证清单.md`；代码在改之前先读这里，能避开所有已经踩过的坑。
+> **这份文档只记两件事**：① 为什么这么设计；② 踩过什么坑。
+> 已完成功能的行为描述归 README 和 `docs/验证清单.md`；开发过程归 git log。
+> 改代码之前先读这里，能避开所有已经踩过的坑。
 
-**导航**（按主题，不是目录顺序）
+**导航**
 
-- **TSF 与窗口**：自绘窗口架构 · 中英切换 · 不弹窗模式 · TSF UILess · 调试手段
+- **状态**：当前状态 · 开发纪事 · 待办 · 已知问题
+- **TSF 与窗口**：自绘窗口架构 · 全屏检测 · TSF UILess · 安装注册 · 修复工具
 - **按键与上屏**：标点键位 · 回车 vs 空格 · 分词模式 · 手动分隔 · 音节切分
-- **候选**：候选窗点选 · 候选数衰减 · 一级简码 · 手动置顶
-- **词库**：词库架构 · 前缀排序 · 辅助码 · 全拼模式 · 简繁切换
-- **学习类**：动态词频（含配置迁移的坑）· 自造词 · 删除类操作不能合并磁盘
-- **构建发布**：32 位支持 · 安装包（NSIS）· UILess 测试宿主
-- **速查**：关键事实（实测确认，别再猜）· 待办 · 已知问题
-
-## 2026-11-07 Win 端「导入细胞词库后没反应」的三个真因
-
-用户报的是 **Windows** 设置窗点「细胞词库…」选完文件什么都没发生。查下来是三个
-独立问题叠在一起，任何一个单独存在都会让结果看起来像「没反应」：
-
-1. **`extract_scel` 一遇不合法记录就 `break`。** 老写法「严格按记录走」，只要有一条
-   解析失败就把文件剩下的全丢。现在的搜狗 `.scel` 在词条区和列表区之间有一段不认识
-   的格式，于是解析出 0 条。
-   → 改成「成功就前进一条、失败跳 2 字节重试」（搜狗自己的解析器也是这个思路）。
-   误判出来的半截词注不出音，会在 `Encoder::encode` 那步被丢掉。
-2. **`extract_bin_loose` 的词长下限**：`blen` 是字节数，4 字节 = 2 个汉字。看着没
-   问题，但按 2 字节游标扫的时候，「拼音长度」字段常落在 4..=32、且后面紧跟的字节能
-   凑出两个汉字，于是匹配到的是半个拼音串，真正的两字词被跳过。
-3. **解析出 0 条照样返回 `Ok`**：设置窗显示「已解析1个文件（0条），没有新词——都已在
-   词库里」，和「成功但本来就有」一模一样。这是最要命的一条。
-
-### 现在的结构（别再写第三份）
-
-「一个文件 → `Imported`」只有 `feihe_core::sogou_import::import_file` 一份实现，
-Windows 的「细胞词库…」和 Android 的 JNI 都调它。**解析出 0 条 = `Err`**，
-`Imported::summary()` 会说明是「扫了 N 条但一条都没解析出来」。
-
-`src/sogou.rs`（Windows 壳）现在只剩：注册表找搜狗目录、目录扫描、读盘。
-`Imported` / `Kind` / `MAX_LEN` 全部改成 `pub use feihe_core::sogou::…`——
-两个 crate 各存一份定义，编译器不会报错，但会在某天悄悄分叉。
-
-### 错误必须弹框
-
-`show_import_error()`：长错误 / 多行错误走 `MessageBoxW`。`ID_NOTE` 那条静态标签
-只有 428px，超过一行的部分直接被裁——「点了没反应」的另一半原因就是错误被裁没了。
-
-### 本机 `cargo test` 的办法（这次终于跑通了）
-
-`.cargo/config.toml` 钉的 gnullvm 链接器 `x86_64-w64-mingw32-gcc` 在 WSL 里解析到的
-是 Linux ELF，Windows 侧 cargo 找不到 `.exe`（PATH 里 `/bin` 的 shim 干扰）。临时改
-`linker` 也没用（cargo 直接说找不到）。唯一可靠的路：用 PowerShell 起一个干净 PATH，
-把 llvm-mingw 的 bin 放最前面：
-
-```powershell
-$env:PATH = 'C:\llvm-mingw\llvm-mingw-20260908-ucrt-x86_64\bin;C:\Users\<你>\.cargo\bin;' + $env:PATH
-Set-Location D:\codes\feihe
-cargo test --lib
-```
-
-实测：壳 107 passed + 3 ignored，core 286 passed + 5 ignored。
-
-### 0.3.15 重打（不出新版本号）
-
-这次修的是「导入根本用不了」，属于 bug 修复、没有新功能，所以**没有升版本号**，
-只把 `dist\Feihe-Setup-0.3.15.exe` 覆盖重打了（`installer/build_setup.ps1`，
-2,651,402 字节，2.53 MB）。安装包内容与源码一致，但版本号仍写 0.3.15。
-下次有用户能感知的新东西时再一起升 0.3.16。
-
-## 2026-11-06（续七）Android 能编了 + 搜狗词库导入
-
-### `build-android.ps1`：为什么非要有它
-
-本机 PATH 里的 `java` 是 1.8，AGP 8.5.2 要 17。直接 `gradlew.bat` 会在**配置阶段**
-就退出，报的那句还和真实原因无关。脚本把三处路径钉进**进程环境**（不写注册表、
-不改用户变量，退出即失效），顺带做四件事：
-
-1. 缺 `jniLibs/arm64-v8a/*.so` / `assets/asr/*` 就调 `tools/fetch_*` 补；
-2. Rust 侧自己设 NDK clang 当链接器和 `FEIHE_NO_USER_DICT=1`；
-3. `-UnitTest` / `-Debug` / `-Install` / `-ShellCheck` 四个开关，别再加；
-4. 编完**反查 APK**：引擎 `.so` 在不在、`model.int8.onnx` 是不是 STORED、v2 签名开没开。
-
-踩到的四个坑（都已修，别再踩）：
-
-| 现象 | 原因 | 修法 |
-|---|---|---|
-| `$javaVer` 把 `java -version` 的 stderr 当错误抛 | `$ErrorActionPreference='Stop'` + 原生命令 stderr | 临时降级到 `Continue` 取第一行（`build.ps1` 的 `Invoke-Native` 同理） |
-| 「libfeihe_android.so 181.51 MB」 | `DirSizeMB (Split-Path $so)` 把整个 release 目录（deps/incremental）算进去了 | 量单文件，用 `FileSizeMB $so` |
-| 「v2 签名未开启」 | `apksigner.bat` 的真实输出是 `Verified using v2 scheme …: true`，和文档里写的 `scheme v2: true` 对不上 | `java -jar lib/apksigner.jar verify -v --print-certs`，按真实输出匹配 |
-| 单测数报 `0 项` / 报 InvalidCast | `[xml]$x` 之后再 `.` 是成员访问不是 XPath | 两条路都别再试：`XmlDocument.Load` + `GetAttribute` 在 PS 5.1 里实测恒回 0。最后改成正则抠 `testsuite` 标签的 `tests`/`failures`/`errors` 三个属性 |
-
-另外别把 `$args` 当自己的数组用——那是 PowerShell 的自动变量（当前参数列表）。
-
-### 搜狗词库搬到 core（按 §11.1 当初说的「只拆解析」）
-
-`core/src/sogou.rs` 现在只有：`Kind` / `Job { label, data, kind, prio }` /
-`encode_jobs` / `encode_one` / `kind_for_ext`，以及 `Imported { files, scanned,
-encoded, added, skipped, from_base, from_char }` 和它的 `summary()`。
-
-**`Job` 里放的是字节，不是路径**——这是它能在 Android 上成立的关键：Windows 壳
-负责用注册表找目录再读盘，Android 壳从 SAF 的 Uri 读盘，两边读出来的是同一种东西。
-如果 `Job` 带路径，Android 那边就得先落地一个临时文件才能调用，等于把壳的活搬进 core。
-
-`Imported::summary()` 是两端共用的一句中文。**判据只有一条：`encoded == 0` 必须说
-「没能解析」**，不能说「导入成功」——这次用户报「导入后没有任何提示」的一半原因就是
-成功路径上只报了个数，零条也照报。
-
-### Android 的「从搜狗导入」
-
-- JNI：`android/jni/src/sogou_extra.rs`，`sogouImportNative(path)`，返回
-  `"OK|<多行摘要>|<新增条数>"` / `"ERR|<原因>"`（`|` 不会出现在中文摘要里）。
-- Kotlin：`NativeEngine.sogouImport(path)` 解析成 `SogouImport(ok, message, added)`；
-  `SettingsActivity.sogouTransfer(uri)` 先按 `DISPLAY_NAME` 取**扩展名**再落临时文件
-  ——临时文件叫 `dict-in.tmp` 的话引擎按扩展名判格式会失败，这是这一块最容易漏的一步。
-- **结果用 AlertDialog 显示**。Toast 一长就截断，多行摘要走 Toast 等于没说。
-
-### 另一个坑：`cargo test` 在这台机器上跑不起来
-
-`.cargo/config.toml` 把 gnullvm 的 linker 钉成 `x86_64-w64-mingw32-gcc`，而 WSL 里
-`/usr/bin/x86_64-w64-mingw32-gcc` 是**Linux ELF**，Windows 侧的 cargo 找不到
-`x86_64-w64-mingw32-gcc.exe`（PATH 里那个 `/bin` 的 shim 干扰）。实测临时把
-`linker` 改成 `clang` / `x86_64-w64-mingw32-clang` 也不行（`cargo` 说找不到）。
-
-可靠的办法是**拷一份到 Windows 盘**再跑（WSL 的 `/tmp` 下 incremental 会报
-`os error -2147024895`）：
-
-```bash
-mkdir -p /mnt/d/tmpfc && cp -r core/src core/Cargo.toml core/build.rs /mnt/d/tmpfc/
-mkdir -p /mnt/d/tmpfc/src_data && cp src/*.txt /mnt/d/tmpfc/src_data/
-sed -i 's|"../src/|"src_data/|g; s|join("../src")|join("src_data")|g' /mnt/d/tmpfc/build.rs
-mkdir -p /mnt/d/src && cp src/*.txt /mnt/d/src/   # dict 的 repo_src() 读 ../src
-cd /mnt/d/tmpfc && CARGO_TARGET_DIR=/mnt/d/tmpfc/target CARGO_INCREMENTAL=0 cargo test --lib
-```
-
-实测结果：**282 passed / 0 failed / 5 ignored**（含新增 2 项 sogou 测试）。
-`cargo check` 和 `cargo check --target aarch64-linux-android`（jni 包）都是零 warning。
-
-### 实编结果（2026-11-06 17:1x，这台机器上真编过的数）
-
-| 项 | 结果 |
-|---|---|
-| `build-android.ps1`（release） | BUILD SUCCESSFUL，`app-release.apk` **116.11 MB** |
-| `build-android.ps1 -UnitTest` | **76 项 / 9 个测试类全过** |
-| APK 内 `lib/arm64-v8a/libfeihe_android.so` | 6,024 KB |
-| APK 内 `assets/asr/model.int8.onnx` | STORED（未压缩，78.0 MB） |
-| 签名 | v2 ✓ v3 ✓，`CN=Feihe Input Method`（自签名，debug/release 同 key） |
-
-> 76 项、不是 33 项：33 是 2026-11-05 骨架期的数，之后加了输入辅助、分词状态、
-> 联想策略、语音标点等一批。以后写文档别再抄 33。
-
-`cargo` 那侧跑测试的坑见上；**Android 侧真机验证仍然没做**（这次交付的是包）。
-
-## 2026-11-07 仓库根目录瘦身：下载缓存全部挪进 `cache/`
-
-以前仓库根目录躺着 8 个 `_` 前缀的大文件（合计约 29 MB）：雾凇拼音词表、Unihan 包、
-以及几个早已没人引用的死文件。它们和 `Cargo.toml` / `src/` / `README.md` 混在
-一起，`ls` 一眼分不清哪些是产品的一部分。
-
-现在统一在 `cache/`：
-
-| 文件 | 谁读（引用已改） |
-|---|---|
-| `cache/_icebase.yaml` | `tools/gen_dict.py`、`tools/gen_next.py` |
-| `cache/_ice8105.yaml` | `gen_dict.py`、`gen_next.py`、`tools/import_sogou.py` |
-| `cache/_pinyin_data.txt` | `gen_dict.py` |
-| `cache/_unihan.zip` | `tools/gen_assist.py` |
-| `cache/_ids.txt`、`_luna.yaml`、`_kmandarin.txt`、`_enc.py` | 无人引用（死文件，留着没删） |
-
-改法是把 `os.path.join(ROOT, "_xxx")` 换成 `os.path.join(ROOT, "cache", "_xxx")`，
-一共 4 个脚本 6 处。**文件名保留 `_` 前缀**——`gen_dict.py` 下载时就是按这个名字
-落盘的，改名要连着改下载逻辑和一堆文档，不值。
-
-`.gitignore` 加了 `/cache/`（整个目录忽略），同时保留原来的 `/_*.yaml` 等规则，
-防止哪天又把缓存下到根目录时误提交进历史。
-
-验证：`import gen_dict` 打出来的路径都指向 `cache/`；`python tools/gen_next.py`
-正常跑完（它读 `_icebase.yaml` + `_ice8105.yaml`）。
+- **候选**：候选窗点选 · 候选数不设上限 · 前缀排序 · 一级/二级简码 · 手动置顶
+- **词库**：词库架构（v3）· 动态词频 · 自造词 · 易错词提示 · 搜狗导入
+- **构建发布**：32 位支持 · 安装包（NSIS）· Android 构建
+- **速查**：关键事实（实测确认，别再猜）· 调试手段
 
 ## 当前状态
 
@@ -205,6 +44,47 @@ cd /mnt/d/tmpfc && CARGO_TARGET_DIR=/mnt/d/tmpfc/target CARGO_INCREMENTAL=0 carg
 实测数据：安装包 1.83 MB、装完约 7.9 MB、64 位 DLL 4009 KB / 32 位 4048 KB、
 `base.bin` 46493 条 / 2895 KB（发布构建，`-NoUserDict`）、298 项单测。
 
+## 开发纪事（已完成，只留结论）
+
+2026-11-07 精简：原来按日期串下来的 33 小节（约 2000 行）只留**一句话结论**。
+每条背后的「为什么这么设计」如果还对着现有代码，已经写进正文对应章节；
+已经改掉的旧实现不再保留过程记录——git log 里有。
+
+| 批次 | 结论 |
+|---|---|
+| 2026-11-07 Win 端「导入细胞词库后没反应」的三个真因 | Win「细胞词库…」选完文件没反应：`.scel` 早已不是 `SougouPY` 老格式，解析出 0 条却当成功。新解析器按 412 条音节表 + 词条结构对齐（实测 1269 条），0 条一律当错误并弹框。 |
+| 2026-11-06（续七）Android 能编了 + 搜狗词库导入 | `build-android.ps1` 接管 JDK17/SDK/Gradle 三处路径并反查 APK（.so / STORED / v2 签名）；搜狗解析搬进 `core/src/sogou.rs` + `sogou_import.rs` 两端共用。 |
+| 2026-11-07 仓库根目录瘦身：下载缓存全部挪进 `cache/` | 根目录 8 个下划线前缀的下载缓存（约 29 MB）挪进 `cache/`，`.gitignore` 加 `/cache/`。 |
+| 2026-10-28 两件事：启动默认模式设置 + `ykwf` 被 3 键直出吞掉 | 中英状态语义改成「启动默认模式」（不再记住上次 Shift）；`ykwf` 被 3 键直出吞掉的修复。 |
+| 2026-10-28（下午）四件事：行号归零 / 全角语义 / 完整辅助码精确出字 / user.bin 溯源 | 候选窗行号归零、全角语义、完整辅助码精确出字、`user.bin` 溯源（mtime 判新旧）。 |
+| 2026-10-28（傍晚）使用帮助补「辅助码」专章 + 设置窗加「关于」 | 使用帮助补「辅助码」专章，设置窗加「关于」。 |
+| 2026-10-28（晚）自然码 1 键打满却精确不出字：个人词库把核心词库挤出了候选 | 自然码 1 键打满不出字：个人词库把核心词挤出候选——用户词库不能无条件置顶。 |
+| 2026-10-28（夜）"不是去掉所有限制了吗，为啥还有 limit" —— 把探测和取候选分开 | 显示路径无上限（`CANDIDATE_LIMIT = usize::MAX`），剩下的 `1` 全是探测用途，两者要分开。 |
+| 2026-10-28（夜二）`wfjm` 带出 178 条「文件X」：前缀匹配没有远近概念 | `wfjm` 带出 178 条长词：前缀匹配没有「远近」概念，按码长分层截断。 |
+| 2026-10-28（夜三）「词频调整好像失效了」：数字键/鼠标选词根本不记次数 | 词频失效：数字键 / 鼠标选词根本没记次数——记次数要在**上屏**处统一，不能只认空格。 |
+| 2026-10-29「vhmu 打不出账目，中间多个空格」：装的是旧 DLL，3 键直出老 bug 复发 | 「打不出账目」是装了旧 DLL（时间戳 10-28 vs 源码 10-29）。装完先看 DLL 时间戳。 |
+| 2026-10-29「关掉三键直出才能打账目；打新词候选不在第一行」 | 同上，旧 DLL。0.3.9 起 `lookup("vhmu")` 第一位就是「账目」。 |
+| 2026-10-29 全角/半角快捷键 + 浮窗悬停提示 | 给全角/半角挂 `Ctrl+Shift+F` + 浮窗按钮 hover 提示；下一节就撤了。 |
+| 2026-10-29 把 `tools/import_sogou.py` 搬进设置窗（`src/sogou.rs`） | 搜狗导入从「作者跑脚本重编 DLL」变成设置窗一个按钮（结构见 `src/sogou.rs`）。 |
+| 2026-10-29 撤掉 `Ctrl+Shift+F`（全角 / 半角只留浮窗按钮） | 全角/半角不常用，撤掉热键，只留浮窗按钮（热键撤了，开关留了）。 |
+| 2026-10-29 全屏游戏里「能敲键盘，屏幕上什么都没有」 | 一个布尔量把两件相反的事揉一起：`covers_popup` 把「全屏」和「该不弹」混为一类。拆开即可。 |
+| 2026-10-29（下午）全项目复查：十个会实际出错的逻辑问题 | 十个会实际出错的逻辑问题（含一处修法自身引入的反转）。教训：修完要再想一遍「这修法会不会引入新错」。 |
+| 2026-10-29（下午二）按官方资料复查小鹤双拼 / 音形 / 自然码 | 小鹤双拼/音形与官方逐条一致；自然码辅助码按官方手册校正。零声母三条规则见「关键事实」。 |
+| 2026-11-04 借鉴青简（第一批）：模糊音 + 设置窗滚动 | 借「做什么」不借代码（青简 GPL-3.0，飞鹤 MIT）：模糊音 + 设置窗滚动。 |
+| 2026-11-04（二）借鉴青简第二批：计算模式 + 码点 + 自定义短语 | 计算模式 / 码点 / 自定义短语。`v` 不能当表达式前缀（双拼里 `v` 是 zh/ui）。 |
+| 2026-11-04（三）借鉴青简第三批：拼写纠错 | 拼写纠错：双拼里不存在「结构非法的音节」，判据要换成「打满仍筛空」。 |
+| 2026-11-04（四）中文态 Shift+4 出 ￥ + 候选降权（鼠标） | 中文态 Shift+4 出 `￥`（U+FFE5）而非 `$`；候选降权改成鼠标操作，不用快捷键。 |
+| 2026-11-05（夜）Android 后续功能：逐段选择 / 上档锁定 / 数字选词 / 语音面板 | Android 逐段选择 / 上档锁定 / 数字选词 / 语音面板；纯函数 + JVM 单测先行。 |
+| 2026-11-05（夜·续）联想打磨 + 文档口径统一为「替换搜狗」 | 联想打磨：候选给联想让位；文档口径统一为「替换搜狗」。 |
+| 2026-11-06 联想补齐「任何长度的词」：根因是生成器把长头词挤掉了 | 联想只出 2 字头的根因在**生成器**把长头词挤掉了，不是查表逻辑。 |
+| 2026-11-06 0.3.11 → 0.3.12 打包（联想覆盖任何长度） | 升 patch 号走 `build_setup.ps1 -SelfTest`；版本号以 `Cargo.toml` 为唯一真相。 |
+| 2026-11-06（续）性能优化：P0~P3 全做 | P0~P3：联想表 309 KB 文本 → 323 KB 二进制；先建 `core/examples/bench.rs` 再改，改前后都有数。 |
+| 2026-11-06（续二）词库扩充 4.7 万 → 7.5 万 + 0.3.13 打包 | 收录 4.7 万 → 7.5 万：长度上限 2~4 字 → 2~8 字（和联想 is_word 的 8 字对齐）。 |
+| 2026-11-06（续三）细胞词库导入 + 滚动残影 + /v 金额命令 + 二简全表 | 设置窗加「细胞词库…」（选单个 .scel，不依赖装没装搜狗）+ 滚动残影 + `/v` 金额 + 二简全表。 |
+| 2026-11-06（续四）release 0.3.14：细胞词库导入 + 滚动残影 + /v 金额 + 二简全表 | 上一批功能进包：三处 crate + nsi + 两个 lock + 文档版本引用同步。 |
+| 2026-11-06（续五）高 DPI 适配：自绘窗口按系统 DPI 放大 | `src/dpi.rs`：候选窗/浮窗/符号面板/设置窗按显示器 DPI 缩放 + 跨屏跟随；**不改进程 DPI 感知**（进程内 COM 组件改了会打乱宿主）。 |
+| 2026-11-06（续六）release 0.3.15：高 DPI 适配 | 高 DPI 进包（五处版本号 + 文档体积引用同步）。 |
+| 2026-11-07 快捷输入搬进 core + Android 接线 + 个人词库导入导出 | `quick.rs` 搬进 core，两端共用命令表；Android 接上 `/` 快捷输入与个人词库导入导出。 |
 
 ## 自绘窗口架构（v2 新增）
 
@@ -1296,7 +1176,6 @@ WM_LBUTTONUP => {
 坐标，Windows 已经记好了（也可以用 `SendMessage` 精确构造，测试才跑得起来）。
 
 
-
 `Ctrl+数字` = 置顶该候选并上屏，对已置顶的那个再按一次 = 取消。
 存在 `<安装目录>\pinned.txt`（`编码<TAB>词`）。
 
@@ -1751,7 +1630,6 @@ in-proc COM 的位数必须和宿主一致。同一个 CLSID 背后挂两个文�
 编译通过 ≠ 能被宿主加载——依赖 DLL 缺失、DllMain 崩溃、导出名写错，全都只在
 `LoadLibrary` 那一刻才暴露。
 
-
 ## 安装包（NSIS）
 
 `installer\feihe.nsi` + `installer\build_setup.ps1`。
@@ -1819,6 +1697,247 @@ powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
 
 安装包未签名，首次运行撞 SmartScreen。要消掉得买代码签名证书（EV 证书可即时过）。
 
+## 装不上 / 看不见：注册的三层坑
+
+用户报过三种症状：装完语言列表里没有飞鹤、「设置里多一个不可用的输入法」、
+记事本里能上字但一个窗口都没有。前两个都在 `install_tip.ps1` 的注册顺序上，
+第三个是 UILess 判断的问题。
+
+### 第一层：清理代码把自己刚写的东西删了
+
+清理旧残留那段被放在注册**之后**：刚写完 `CTF\TIP\{CLSID}`，下一个 `if` 就
+`Remove-Item -Recurse`，脚本还照样 exit 0。结果 `InprocServer32` 在、TIP 定义没了。
+32 位那份因为后一步才写而幸免 → 现场是「32 位视图有、64 位没有」，而 explorer /
+记事本 / 浏览器都是 64 位。
+
+> 任何「清理」步骤都要先问一句：**它要清的东西，我是不是刚写过。**
+
+修法：清理段前移到第 0 步，两个视图都清；脚本末尾加硬校验（CLSID /
+`Category\Item` / `LanguageProfile` 含 32 位镜像逐个 `Test-Path`，缺一个 `exit 1`），
+安装器把非 0 退出码变成弹窗——不再静默成功。
+
+### 第二层：`InstallLayoutOrTip` 会把刚写好的 TIP 定义删掉
+
+加检查点看到：
+
+```text
+[dbg] before InstallLayoutOrTip: 64=True 32=True
+[dbg] after  InstallLayoutOrTip: 64=False 32=True
+```
+
+`input.dll!InstallLayoutOrTip`（当初为修「Ctrl+Shift 切不到飞鹤」引入的）会把
+**它不认可的 TIP 定义整棵删掉**，只清当前进程视图那份。它清的是孤儿 CLSID 键：
+只要这个 profile 没走过 `ITfInputProcessorProfileMgr::RegisterProfile`，在它眼里就是垃圾。
+
+修法：**把 TIP 定义写到它后面**。现在顺序是
+
+```text
+清旧定义 → 写 CLSID（64/32）→ InstallLayoutOrTip → 写 TIP 定义（64/32）
+        → 补 User Profile / SortOrder → 重启 ctfmon → 硬校验
+```
+
+`Register-TipView` 拆成 `Register-Com`（只写 CLSID）和 `Register-TipDef`（只写
+Category / LanguageProfile），两个函数头都写了「为什么必须这个顺序」。
+
+> 「注册」和「交给系统 API 确认」是两件事。遇到「我明明写了，读出来却没有」，
+> 先怀疑中间那个 API，别只怀疑自己的赋值。
+
+### 第三层（真根因）：注册写在了 `HKCU`
+
+前两层修完，硬校验全绿、`CoCreateInstance` 也成功——但用户看到的仍是「不可用的输入法」，
+`Win+Space` 里也没有。把机器上能用的输入法摊开对比：
+
+| 输入法 | `CTF\TIP\{CLSID}` 位置 |
+|---|---|
+| 搜狗 / 小狼毫 / 微软拼音 | **HKLM** |
+| 飞鹤 0.3.8 及以前 | **HKCU** ← 全机器唯一一个 |
+
+两个 API 的读法不同：`ITfInputProcessorProfiles::GetLanguageProfileDescription`
+**只查 HKLM**（HKCU 那份读不到名字 → 退化成「不可用的输入法」）；`Win+Space` 的列表
+同样只来自 HKLM。而 `CoCreateInstance` 走 `HKCU\Software\Classes\CLSID`（优先级更高），
+所以 DLL 能加载、对象能创建——「一切看起来都对，但用户就是看不见」。
+
+以前能用是因为 0.3.0 之前的**管理员安装**在 HKLM 留过一份；改成用户级安装后只写 HKCU，
+脚本里那段「尽力清理旧版本的机器级条目」又把 HKLM 那份删了。
+
+修法：`feihe.nsi` 的 `REQ_LEVEL` 改 `admin`（`SELFTEST` 分支仍 `user`）；
+`Register-Com` / `Register-TipDef` 根键全改 HKLM；第 0 步清理 **HKLM/HKCU × 64/32 四个位置**
+（HKCU 那两份必须清，它是幽灵项来源且优先级更高）；删掉「清理机器级条目」整段
+（它会把刚写的 HKLM 删掉，同一类错误犯第二次）；脚本开头非管理员 `exit 2`。
+`User Profile` 和 `SortOrder` 仍写 HKCU——那是「当前用户的偏好」，本来就不该是机器级。
+
+> 「用户能看见的输入法列表」和「注册表里有没有这一项」是两件事。自检要问的是
+> 「系统 UI 从哪个 hive 读」，不是「我写进去的那份在不在」。
+
+代价：装 / 卸 / 修复各弹一次 UAC（HKLM 必须管理员，绕不过）。安装目录仍在
+`%LOCALAPPDATA%\Feihe`（运行期写配置和词频，不能放 Program Files）。
+
+### DLL 改名兜底：不要依赖随机源
+
+现场：`feihe.dll.old-` 和 `feihe.dll.old--b`——数字是空的。`System::Call
+'kernel32::GetTickCount()'` 在这台机上返回空，随机源失效 → 名字退化成固定串 → 下次撞
+同名（还被映射着）→ `Rename` 失败 → 「DLL 部署失败」。问题不是随机性不够，是**随机压根
+没生效，而且只试一次**。
+
+现在：`feihe.dll` → `backup-<n>.bak`（文件名和扩展名都不沿用，顺带避开杀软），
+`n` 从 1 往上取第一个不存在的——唯一性由 `FileExists` 保证，不依赖任何随机源；
+`Rename` 仍失败就换下一个名字，最多 5 次；`Delete` 通配同步加 `backup-*.bak` 三处。
+（`$PID` 不是 NSIS 内置变量，写了会 `unknown variable` 警告。）
+
+### `Feihe-Repair.exe`：一个文件都不动的「体检 + 应急」
+
+注册搬去 HKLM 之后它也要 UAC，原来「不用提权」的卖点没了。它和重装剩下的硬差异只有
+一条：**一个文件都不动**。所以「浏览器还映射着旧 DLL、注册却坏了」这个场景只有它无痛
+（重装必然换 DLL，必然要用户关掉重开程序）。
+
+后来加了一件安装包做不到的事：**先体检**。`install_tip.ps1 -CheckOnly` 只读不写，
+退出码 `0` 正常 / `3` 需要修复（1/2 留给真正的失败）。体检项比硬校验多三条，都是
+「键都在但用不了」的真实故障：
+
+1. **`InprocServer32` 指的 DLL 是不是当前这份**（换过安装目录、盘符变了 → 键全在、路径是旧的，症状和没注册一模一样）；
+2. **当前用户键盘列表里有没有我们**（注册全对但缺 `0804:{CLSID}{PROFILE}`，Win+Space 就是不列）；
+3. **`HKCU\...\CTF\TIP\{CLSID}` 有没有残留**（幽灵项来源，且优先级更高会盖住 HKLM）。
+
+顺手的好处：体检只读 HKLM，**不需要管理员**。
+
+> 坑：脚本开头那个「32 位实例切到 `Sysnative` 重跑」的自愈，必须透传 `-CheckOnly`。
+> 漏了的话 32 位入口会起一个**正常注册**的子进程——「体检」变成「悄悄改一遍」。
+
+### 记事本「能上字但一个窗口都没有」：别无条件相信 UILess
+
+记事本（WinUI3）激活 TSF 时**带着 `TF_TMAE_UIELEMENTENABLEDONLY`**，于是
+`ui_less = true` → `statusbar::hide()`（浮窗没了）+ 候选塞给 `uielement::Session`，
+`BeginUIElement` 返回 `show = FALSE`（协议语义是「宿主自己画」）→ 我们放弃自绘，
+**而它其实什么都没画**。
+
+错不在协议，在**无条件相信它**：那个 flag 只说明「宿主愿意接 UIElement」，不等于
+「我们自己开的窗口画不出来」。判断要加上「宿主真的画了」的证据（详见 `uielement.rs`
+注释和「关键事实」表里 UILess 那几条）。
+
+## Android 那一侧的边界（为什么这样拆）
+
+Android 端全程只有一条主线：**把平台无关的引擎搬进 `feihe-core`，壳只做搬运**。
+起因见 `docs/Android-方案.md`——`windows` crate 在 `aarch64-linux-android` 上编不过，
+只要引擎还挂在同一个 crate 里，Android 一行都复用不了。
+
+### 布局为什么是「根包 + `core/`」
+
+根 `Cargo.toml` 同时是 workspace 根和 Windows 侧的包（`feihe` = TSF shell），平台无关的
+东西在 `core/`（`feihe-core`）。**不**把 Windows 侧挪进 `crates/win`：
+`installer/build_setup.ps1` / `build.ps1` / `repair.nsi` 里到处是
+`target\<triple>\release\feihe.dll` 和 `src\*.txt` 的路径，挪一下要改五个脚本，
+换不来任何收益。**目录形状服从工具链，不服从审美。**
+
+### 搬家不动调用点
+
+```rust
+// src/lib.rs
+pub use feihe_core::{assist, brief, brief2, calc, correct, dict, freq, …};
+```
+
+老路径 `crate::shuangpin::encode(…)` 一个字都不用改。这是刻意的：搬家若不动调用点，
+将来真出回归才能确定问题在搬家本身，而不是顺手改的那几行。代价是 core 里的模块对外
+全部 `pub`。
+
+### 搬之前必须先开的钩子
+
+| 能力 | Windows 原来 | core 里 |
+|---|---|---|
+| 数据目录 | 安装目录优先、不可写回落 `%APPDATA%` | `paths::set_resolver` 注册策略，core 只存 |
+| 日志 | `diag`（写 `feihe.log` + 问前台窗口类名） | `core::log`（只写文件）；壳的 `diag` 只剩 `fg_class`；`dlog!` 宏在 core 侧 `macro_export` |
+| 时钟 | `GetLocalTime` | `core::clock`，壳可注册 provider；没注册就用 `SystemTime` + 偏移分钟（Android 用）。日期分解是 Hinnant 的 `civil_from_days`，纯整数 |
+| 个人词库映射 | `CreateFileMappingW` + `MapViewOfFile` | 读进内存再 `Box::leak`。**行为等价**：原来映射的视图也从不解除 |
+| 剪贴板（`/fc`） | `GetClipboardData` | `fancha::set_clipboard_reader` |
+| 简繁转换 | NLS `LCMapString` | `zhconv::set_converter` |
+
+`dictbin::map_file` 有个借用检查器的坑：**必须先 leak 再校验**。写成「先 `Bin::try_new(&data)`
+校验、再 `leak(data)`」过不了——校验拿到的 `Bin<'a>` 会和后面 `'static` 的那份被统一成
+同一个生命周期，`data` 再也 move 不走。代价是损坏文件会泄漏自身大小的一块（每进程只解析
+一次，可接受）。
+
+### 三条会安静咬人的规则
+
+1. **`base.bin` 跟着 crate 走。** `include_bytes!(concat!(env!("OUT_DIR"), "/base.bin"))`
+   里的 `OUT_DIR` 是**所在 crate** 的构建目录，所以生成搬到了 `core/build.rs`；
+   词库**源文件**仍在仓库根 `src/`（`tools/gen_*.py` 写在那里），`core/build.rs` 和 core
+   测试都用 `../src` 前缀。
+2. **core 里读词库文件的测试不许用相对路径。** CWD 是 `core/`，`read_dir("src")` 读到的是
+   `core/src`（一个词库文件都没有）。有些测试有 `assert!(files.len() >= 10)` 会红，
+   没有断言的就会**空跑变绿**——所以统一用 `repo_src()`，`dictenc` 那条扫不到文件时直接 panic。
+3. **`cfg!(test)` 不能拿来区分「壳 / core」。** 被 root 当依赖编进来时它永远是 false，
+   所以凡是两边都要用的守卫函数，就得是真的 `pub fn`，不能挂 `#[cfg(test)]`。
+
+### 明确不搬的
+
+- `sogou` 的**自动发现**（注册表找搜狗目录）：Android 没有注册表。但解析和注音搬了
+  （`core/src/sogou.rs`），因为用户会从搜狗词库网站下 `.scel` 再导入——见 `docs/Android-方案.md` §11.1/§11.7。
+- `dllcount`：COM 引用计数，Android 没有 COM，放进去是撒谎。
+
+### 真机上踩到的（2026-11-05 realme RMX5080 / Android 16，全链路跑通）
+
+`nihao`→`nihc`→「你好」→空格上屏、`sanguo`→`sjgo`→「三国」、上屏后联想出现。
+四个操作坑：
+
+1. **`adb install` 装 84 MB 会超时**（7 分钟没结束被 SIGTERM）→ `adb push` + `pm install -r`（push 11 秒，装 20 秒）。
+2. **MSYS 会改写 `adb push` 的目标路径**（`/data/local/tmp/y` → `D:/.../tmp/y`，报 `remote secure_mkdirs() failed`）→ 命令前加 `MSYS_NO_PATHCONV=1`。
+3. **装完不会自动启用**：`ime enable` + `ime set` 都要手动做；`ime list -s` 只列**已启用**的，要用 `ime list -a -s` 才看得到新装的。
+4. **判断配色不要看缩略图，要读像素。** 我一度以为键盘样式没生效，实际键缝 `#D9DCE1`、功能键 `#B9BEC6`、字母键 `#FFFFFF` 全对。
+
+设备：realme RMX5080 / Android 16（API 36）/ arm64-v8a / `wm size 1080x2376` / density 480 / adb 走 WiFi。
+
+### 真机抓到的 bug：联想顺序是反的
+
+「三国」上屏后联想是「时代 / 时期 / 演义 / 群英传」——完全倒序。原因：`parse_builtin`
+给内置表的权重也套了 `n.min(500)`，内置权重最大 19260817 被压成全 500，`sort_by`
+退化成按字符串比。
+
+**为什么 313 项测试没抓到**：`builtin_tail_is_sorted_by_weight` 断言「权重序列降序」，
+而**全相等也满足降序**。这已经是第三次栽在「测试绿得没有意义」上。
+
+> **通用教训：排序类测试必须断言「顺序能区分」，不能只断言「有序」。**
+> 全相等的序列对任何比较器都是有序的。
+
+修法：内置表解析不再截断（`MAX_COUNT` 只留给用户表的 +1 计数），加
+`builtin_weights_are_not_flattened`（断言首尾严格不等且最大值 ≥ 1000）。
+
+### 分段函数的「必须整词对齐」，别拿前缀探测当分词
+
+Android 上长串（`vhsjli`）要给整句候选时，第一版直接复用 `dict::any`，立刻现原形：
+`any` 是**前缀**匹配，词库里有「张三李四」（码 `vhsjlisj`），于是 `any("vhsjli")` 命中，
+DP 认为整串是一个词，退回逐音节。
+
+修法是新增 `any_aligned` / `first_aligned`：**字数必须等于音节数**。两个细节：
+
+1. **用字数，不用码长字段。** 码长要从 `collect` 透出来，而那条流水线后面还挂着一简 /
+   二简 / 自定义短语 / 置顶一堆插入，它们只塞词不塞长度，长度数组会失配。
+   字数（`w.chars().count()`）是候选自己的属性，谁也改不到一半。
+2. **扫描上限只 12 条，有依据。** 双拼码长 = 2 × 音节数，字数对得上的那一档恰好是码长
+   最短的一档（`collect` 按码长升序），而且 `any_aligned` 在 DP 里被调 O(n²) 次。
+
+任何一段查不到字就**整句放弃**：混着段码的整句（`面ap`）上屏只会让人莫名其妙。
+
+### 键盘布局：三个不能省的决定（数字页 3×3）
+
+1. **多一排但不长高。** 字母页 4 排 × 46dp + 间距 = 211dp，数字页 5 排 × 36dp = 212dp。
+   不做这一步，每次切页整块键盘长出 50dp，输入框和候选条都跳一下。算式钉在 `SymbolLayoutTest`。
+2. **符号单独一页。** 3 列 × 5 行装不下「10 数字 + 中文标点 + 功能键」，硬塞就得把某排
+   做成 6 个小键，等于把刚争取到的键宽还回去。两页**形状完全相同**（5 行、每行总权重 6）。
+3. **`KeyKind.SYMBOL`（布尔）换成 `KeyKind.PAGE` + `Page` 三态**：`123` / `ABC` / `符`
+   要去三个地方，布尔值装不下。
+
+权重老坑：`KeyboardView` 按**每行自己的** `weightSum` 分宽度，各行合计必须一致，
+同一个 `weight=1` 在不同行才有相同物理宽度（单测逐行断言 6.0）。
+
+### 关键事实（Android 侧）
+
+| 事项 | 结论 |
+|---|---|
+| AGP / Gradle / JDK | 8.5.2 / 8.7 / **17**。本机 PATH 的 java 是 1.8，直接 `gradlew` 会在配置阶段就挂，报的还和真实原因无关 → 用 `build-android.ps1` |
+| 编译签名 | `android/keystore/` 跟着仓库走（自签名、不是机密）。debug 和 release 必须**同一把 key**，否则换包要卸载，一卸载用户词库全没 |
+| 语音模型 | paraformer-zh-small 走 `newFromAsset`（不拷 81 MB 到 filesDir）；`noCompress` 必须含 `onnx`，被压缩就丢掉连续 fd，冷启动翻倍 |
+| 原生库 | `tools/fetch_sherpa_libs.py` 拉，不进版本库；SHA256 钉住版本（`.so` 的 JNI 符号名硬编码 `com/k2fsa/sherpa/onnx/…`） |
+| `RECORD_AUDIO` | 输入法 Service 不是 Activity，弹不出授权框 → 在设置页申请 |
+| 真机 | realme RMX5080 / Android 16 验过装包、`ime enable/set`、`nihao`→你好、语音、联想；`adb install` 84 MB 会超时，用 push + pm install |
 
 ## 关键事实（实测确认，别再猜）
 
@@ -2017,320 +2136,6 @@ fn assist_should_fold_back(auto: bool, code: &str, assist: &str, hit: bool) -> b
 `empty_assist_folds_back_even_when_whole_code_is_unknown`（纯函数）、
 `unknown_four_char_word_folds_back_then_segments`（真表，整条链路钉住）。
 
-## 装完「语言列表里看不到飞鹤、添加键盘也没有」
-
-用户报：装完 0.3.8，系统语言列表里找不到飞鹤，点「添加键盘」也没有这一项。
-
-**根因是一段自删代码。** `install_tip.ps1` 里清理旧残留那段，被放在了注册**之后**：
-
-```text
-Register-TipView ... HKCU\SOFTWARE\Microsoft\CTF\TIP ...   # 刚写好 TIP 定义
-$hkcuTip = "HKCU:\SOFTWARE\Microsoft\CTF\TIP\$Clsid"
-if (Test-Path $hkcuTip) { Remove-Item $hkcuTip -Recurse -Force }   # 立刻整棵删掉
-```
-
-写完就删，脚本还照样 exit 0。结果 `CLSID\...\InprocServer32` 在、`CTF\TIP\{CLSID}`
-整棵没了 → 语言列表里没有注册项 → 既看不见也添加不了。
-
-32 位那份（`Wow6432Node\...\CTF\TIP`）因为在后一步才写，反而幸免，所以现场是
-「32 位视图有、64 位视图没有」。explorer / 记事本 / 浏览器都是 64 位，读不到。
-
-**为什么长期没暴露**：旧的管理员安装（0.3.0 之前）在 HKLM 留过一份 TIP，HKCU 缺了
-会回落到 HKLM。脚本第 6 步「尽力清理旧机器级条目」一旦拿到权限把它删干净，或者换机
-重装，就再也没有回落可用——这个隐患一直是随包发出去的。
-
-**修法**（只动安装脚本，DLL 源码零改动）：
-
-- 清理段移到 `Register-TipView` **之前**（第 0 步），两个视图都清，语义从「建好再拆」
-  改成「先拆旧的再建新的」。
-- 脚本末尾加硬校验：CLSID、`Category\Item`、`LanguageProfile`（含 32 位镜像）逐个
-  `Test-Path`，缺一个就 `exit 1`。安装器 `RunPs` 会把非 0 退出码变成弹窗——「装完没有
-  输入法」从此当场报错，不再静默成功。
-  > 记住：任何「清理」步骤都要先问一句「它要清的东西，我是不是刚写过」。
-
-**顺带修：DLL 改名兜底彻底化（用户提出）**
-
-用户原话：「对写入失败的 dll 重命名请更彻底一点，包括文件名和后缀都要重命名，现在
-很容易新名字的也是被占用的」。
-
-现场证据：`C:\soft\Feihe` 里躺着 `feihe.dll.old-` 和 `feihe.dll.old--b`——**数字是空
-的**。老逻辑：
-
-```nsis
-System::Call 'kernel32::GetTickCount()i.r2'
-StrCpy $R2 "$R9.old-$R2"        ; 取不到 → "feihe.dll.old-"
-${If} ${FileExists} "$R2"
-  StrCpy $R2 "$R2-b"            ; 再撞 → "feihe.dll.old--b"
-${EndIf}
-```
-
-`System::Call` 在这台机上返回空（插件/环境问题），随机源失效 → 名字退化成固定串 →
-下一次安装撞同名，而那份还被映射着（删不掉也覆盖不了）→ `Rename` 失败 → 用户看到
-「DLL 部署失败」。所以问题不是「随机性不够」，是**随机压根没生效，而且只试一次**。
-
-现在：
-
-- 名字完全换掉：`feihe.dll` → `backup-<n>.bak`（文件名和扩展名都不沿用，顺带避免
-  杀软把 .bak 再当组件扫）；
-- `n` 从 1 往上数，**取第一个不存在的**——唯一性由 `FileExists` 直接保证，不依赖任何
-  随机源，也就不存在「随机源失效」这回事；
-- `Rename` 仍失败就换下一个名字重试，最多 5 次（起始序号跟着重试次数走，不会反复试
-  同一个名字）；
-- `Delete` 通配同步加 `backup-*.bak`（安装段 / ProgramData 清理 / 卸载段三处）。
-- 注：`$PID` 不是 NSIS 内置变量，写了会 `unknown variable` 警告。
-
-验证清单：M3.34。
-
-### 第二层：`InstallLayoutOrTip` 会把刚写好的 TIP 定义删掉
-
-把清理段前移之后，安装**仍然**报「注册项没有写全」，缺的正是 64 位那两条
-（`Category\Item` 和 `LanguageProfile`）。加检查点定位到：
-
-```text
-[dbg] before InstallLayoutOrTip: 64=True 32=True
-[dbg] after  InstallLayoutOrTip: 64=False 32=True
-```
-
-`input.dll!InstallLayoutOrTip`——就是当初为修「Ctrl+Shift 切不到飞鹤」加的那个
-API——会把它**不认可的 TIP 定义整棵删掉**，而且只清当前进程视图（64 位）那份，
-32 位那份不动。它清的是孤儿 CLSID 键：只要这个 profile 没走过 TSF 的正式注册
-（`ITfInputProcessorProfileMgr::RegisterProfile`），在它眼里就是垃圾。
-
-所以「写完就删」有两处，一处是我们自己的代码，一处是系统 API。修法只有一个：
-**把 TIP 定义写到它后面**。现在的顺序是
-
-```text
-清旧定义 → 写 CLSID（64/32）→ InstallLayoutOrTip → 写 TIP 定义（64/32）
-        → 补 User Profile / SortOrder → 重启 ctfmon → 硬校验
-```
-
-`Register-TipView` 因此拆成 `Register-Com`（只写 CLSID）和 `Register-TipDef`
-（只写 Category / LanguageProfile），调用顺序一眼可见。两个函数头都写了「为什么
-必须这个顺序」，免得以后有人图省事合并回去。
-
-> 通用教训：**「注册」和「交给系统 API 确认」是两件事，顺序错了就会被系统清理掉。**
-> 遇到「我明明写了，读出来却没有」，先怀疑中间那个 API 调用，别只怀疑自己的赋值。
-
-### 第三层（真正的根因）：注册写在了 `HKCU`
-
-前两层修完，脚本末尾硬校验全绿、`CoCreateInstance(CLSID)` 也成功返回
-`System.__ComObject`——但用户看到的仍然是
-
-> 设置里多出来一个「**不可用的输入法**」，飞鹤没法用，`Win+Space` 里也没有。
-
-把机器上所有能用的输入法摊开对比，答案很干脆：
-
-| 输入法 | `CTF\TIP\{CLSID}` 位置 |
-|---|---|
-| 搜狗 `{CC43AF26}` | **HKLM** |
-| 小狼毫 weasel `{A3F4CDED}` | **HKLM** |
-| 微软拼音 `{9D2B2E2B}` | **HKLM** |
-| 飞鹤 `{70CB823D}`（0.3.8 及以前） | **HKCU** ← 全机器唯一一个 |
-
-原因是两个 API 的读法：
-
-- `ITfInputProcessorProfiles::GetLanguageProfileDescription` **只查 HKLM**；
-  HKCU 那份的 `Description` 读不到 → 设置页拿不到名字，退化成「不可用的输入法」；
-- `Win+Space` 的切换列表同样只来自 HKLM → 根本不列出飞鹤。
-
-而 `CoCreateInstance` 走的是 `HKCU\Software\Classes\CLSID`（**优先级高于 HKLM**），
-所以 DLL 能加载、对象能创建——这就是「一切看起来都对，但用户就是看不见」的原因。
-
-**为什么以前能用**：0.3.0 之前是管理员安装，往 HKLM 写过一份。后来改成用户级安装
-（`RequestExecutionLevel user`），只写 HKCU；脚本里又有一段「尽力清理旧版本留下的
-机器级条目」把 HKLM 那份删了。于是「能用的原因」（残留）被主动清掉，只留下「不能用的
-原因」（HKCU）。三个版本一直带着这个雷。
-
-**修法**：
-
-1. `feihe.nsi` 的 `REQ_LEVEL` 改成 `admin`（`SELFTEST` 分支仍是 `user`，自检跳过注册）；
-2. `install_tip.ps1` 的 `Register-Com` / `Register-TipDef` 根键全改 `HKLM`；
-3. 第 0 步清理**四个位置**：HKLM/HKCU × 64/32 位视图。HKCU 的两份必须清——它是
-   「不可用」幽灵项的来源，而且 `HKCU\Software\Classes` 优先级更高，留着会盖住新写的
-   HKLM 路径；
-4. **删掉**「尽力清理旧版本留下的机器级条目」整段（它会把刚写的 HKLM 删掉，同一类
-   错误犯第二次）；
-5. 脚本开头加管理员检查，非管理员 `exit 2` 并说明原因——半套注册比不注册更难查；
-6. `repair.nsi` 同步改 `admin`；
-7. 硬校验改成验 HKLM。
-
-`User Profile`（键盘列表）和 `SortOrder` 仍然写 HKCU —— 那是「当前用户的偏好」，
-本来就不该是机器级。
-
-> 通用教训：**「用户能看见的输入法列表」和「注册表里有没有这一项」是两件事。**
-> 自检要问的是「系统 UI 从哪个 hive 读」，不是「我写进去的那份在不在」。
-
-**代价**：装 / 卸 / 修复各弹一次 UAC。这是硬约束——HKLM 必须管理员，绕不过去。
-安装目录仍在 `%LOCALAPPDATA%\Feihe`（运行期写配置和词频，不能放 Program Files）。
-
-## 「修复安装状态」小工具（Feihe-Repair.exe）
-
-用户要求：安装目录里放一个 exe，双击就能修好注册状态，不用重装。
-
-`installer/repair.nsi` → `dist\Feihe-Repair.exe`（约 107 KB），随主安装包装到
-`$INSTDIR`。行为：
-
-1. 读 `HKCU\...\Uninstall\FeiheIME\InstallLocation` 定位安装目录，读不到就用
-   exe 自己所在目录（用户把 exe 拷进安装目录双击的常见姿势）；
-2. 找不到 `feihe.dll` 直接报错退出，不猜；
-3. **内嵌一份 install_tip.ps1**（不用安装目录里那份——那份可能被删、被改、或本身
-   是旧版本），解到 `$PLUGINSDIR` 跑；
-4. **一个文件都不动**：不覆盖 DLL、不碰 config.ini / freq.txt / phrases.txt。所以
-   它在「DLL 正被浏览器映射着」时照样能跑，也不会有任何数据风险；
-5. 结果用 MessageBox 明确告知：成功 / 失败（带退出码）。静默结束等于让用户自己猜。
-
-编译顺序：先 `repair.nsi`（产物进 dist），再 `feihe.nsi`（用
-`!if /FILEEXISTS` 保护，缺了也不至于编不过）。
-
-验证清单：M3.35。
-
-## 修复工具为什么还留着：从「免重装」改成「体检 + 应急」（0.3.8 内改）
-
-注册搬去 HKLM 之后，`Feihe-Repair.exe` 也要弹 UAC 了，它原来最大的卖点（不用提权）
-没了。用户直接问了：「那单独的修复程序是不是就没啥必要了」。
-
-**诚实盘点**：现在它和重装的差别只剩一条硬差异——**一个文件都不动**。
-
-| | 重装安装包 | Feihe-Repair.exe |
-|---|---|---|
-| UAC | 要 | 要（一样了） |
-| 文件 | `CopyOrReplace` 换 DLL，目录多一个 `backup-N.bak` | 不碰任何文件 |
-| 正在跑的程序 | DLL 换了，浏览器/微信还映射旧的，要关掉重开 | 不用关 |
-| 流程 | 向导几页 | 一次点击，秒级 |
-
-关键在于：**修注册根本不需要换 DLL**。重装必然换 DLL，于是必然产生备份文件、
-必然要让用户关掉重开程序。所以「应用开着的时候注册坏了」这个场景，只有修复工具
-是无痛的。
-
-但它原来的说法（「不用重装」）已经站不住了，而且用户遇到问题时第一反应是重装，
-根本想不到双击它。所以给它加了一件安装包做不到的事：**先体检**。
-
-### `-CheckOnly`
-
-`install_tip.ps1` 加 `[switch]$CheckOnly`：只读，不写。退出码 `0` = 正常、`3` = 需要修复
-（1/2 留给真正的失败，别混用）。`Feihe-Repair.exe` 先跑它，`0` 就弹「不需要修复」直接
-退出，非 0 才真的修，并把 `[need]` 行留在日志里。
-
-体检项比末尾的硬校验多三条，都是「键都在但用不了」的真实故障：
-
-1. **`InprocServer32` 指的 DLL 是不是当前这份**。换过安装目录、或者把目录整个搬走
-   之后再搬回来（盘符变了），键全在、路径是旧的，宿主加载失败——症状和「没注册」
-   一模一样。这是硬校验查不出来的。
-2. **当前用户键盘列表里有没有我们**（`User Profile\zh-Hans-CN` 下的 `0804:{CLSID}{PROFILE}`）。
-   注册全对但这一条缺了，Win+Space 就是不列出来，用户照样用不了。
-3. **`HKCU\...\CTF\TIP\{CLSID}` 有没有残留**。它是「设置里多出一个不可用的输入法」
-   的来源；而且 `HKCU\Software\Classes` 优先级比 HKLM 高，留着会盖住新路径。
-
-顺带一个意外的好处：**体检不需要管理员**（读 HKLM 谁都能读）。所以「我只是想看看
-正不正常」的人不用点 UAC。
-
-### 坑：32 位入口必须透传 `-CheckOnly`
-
-脚本开头有个自愈：检测到 32 位实例就切到 `Sysnative` 重跑，把参数拼成数组传给子进程。
-**漏掉 `-CheckOnly` 的话，32 位入口会起一个正常注册的子进程——「体检」变成「悄悄改
-一遍」，比不做体检更糟。**
-
-### 实测（本机，非管理员）
-
-```
-[ok] 注册状态正常，无需修复（CLSID / TIP 定义 / LanguageProfile / 键盘列表都在，且指向当前 DLL）
-```
-
-也就是说用户已经自己把新版装上并注册成功了。另一条分支也验了（把两份 DLL 复制到
-临时目录再体检）：
-
-```
-[need] 需要修复，共 2 项：
-       64 位 COM 注册指向别的 DLL：注册表里是 "C:\soft\Feihe\feihe.dll"，应为 "...\feihe-check\feihe.dll"
-       32 位 COM 注册指向别的 DLL：...
-```
-
-验证清单：M3.37（244-249）。
-
-## 记事本里「能上字但一个窗口都没有」：UILess 交给宿主的锅（0.3.8 内改）
-
-用户报：导入搜狗词库、在设置里编译成二进制之后，重开记事本打字——**空格能上字，
-但候选框和状态浮窗都不见了**。
-
-### 为什么先排除词库
-
-候选窗（`candidate`）和浮窗（`statusbar`）是两个独立模块，各自 `create()` 自己的
-窗口，唯一的共同前置判断就是「该不该弹」。而「能不能算出候选」只影响前者。
-两个一起消失，一定是那个共同判断，不是词库。
-
-共同判断只有两条，而且**症状完全一样**：
-
-1. `config::no_popup()` —— `popup=auto` 时问 `fullscreen::active()`（QUNS）
-2. `self.ui_less` —— 宿主声明 UILess，候选交给它画；`ActivateEx` 里同时
-   `statusbar::hide()`（理由写的是「全屏时画了也看不见」）
-
-### 定位到第 2 条
-
-Windows 11 的记事本不是老 Win32 编辑器，它的文本控件（WinUI3）激活 TSF 时**带着
-`TF_TMAE_UIELEMENTENABLEDONLY`**。于是：
-
-```
-ActivateEx(dwflags 带 UIELEMENTENABLEDONLY)
-  → ui_less_requested() = true
-  → self.ui_less = true
-  → statusbar::hide()                        ← 浮窗没了
-  → candidate::show 把候选塞给 uielement.Session
-      BeginUIElement 返回 show = FALSE（=「我来画」）
-      → 我们返回 true，不弹自绘窗              ← 候选窗没了
-      → 而它其实什么都没画
-```
-
-`BeginUIElement` 的 `show = FALSE` 语义是「宿主自己画」，我们据此放弃自绘——这是
-协议规定的，没错。错的是**无条件相信它**：`TF_TMAE_UIELEMENTENABLEDONLY` 只说明
-「宿主愿意接 UIElement」，不等于「我们自己开的窗口画不出来」。
-
-### 修法：加一道「真全屏」的闸
-
-```rust
-fn ui_less_allowed(requested: bool, fullscreen: bool) -> bool {
-    requested && fullscreen
-}
-```
-
-判据直接复用 `fullscreen::active()`（QUNS）：真全屏（D3D 全屏游戏 / 演示模式 /
-全屏 UWP）时自绘窗口确实上不了屏，交给宿主是唯一的路；窗口化宿主 DWM 正常，
-自绘一定能显示——那就该我们画。
-
-注意全屏时 `no_popup()` 也为真，所以我们本来就不弹窗，`ui_less` 这条通道仍然只在
-「全屏」这一种场景下有用。加了闸之后行为不变，只是不再误伤窗口化宿主。
-
-### 顺带：加诊断日志（这次真的需要）
-
-「没有候选窗」这句话背后至少四种成因（no_popup / UILess / 密码框误判 / 按键通道
-没挂上），**从外面看一模一样**。这次靠读代码猜了两轮，代价太大。
-
-新增 `src/diag.rs`，写 `<安装目录>\feihe.log`：
-
-- 只在**生命周期**和**状态变化**时写（每种拒绝原因只记第一次，用 `AtomicU8` 槽位），
-  按键路径上不刷盘；
-- 上限 256 KB，超了停写；写失败一律静默——诊断不许影响输入；
-- 打点：`Activate`（tid / chinese / no_popup / fullscreen / 前台窗口类名）、
-  `AdviseKeyEventSink` 结果、`Deactivate`、`ActivateEx`（dwflags / requested /
-  fullscreen / 最终 ui_less）、密码框误命中、`candidate::show` 与 `statusbar::show`
-  的拦截原因码。
-
-**读法本身就是结论**：记事本里打字之后
-
-- `feihe.log` 有 `Activate` 行 → TIP 被调用了，看后续哪一行拒绝；
-- 文件根本不存在 / 没有新行 → TIP 压根没被激活，问题在系统侧（键盘列表、ctfmon），
-  跟 DLL 无关。
-
-这条判据比任何猜测都硬，以后「输入法不工作」先看它。
-
-### 顺手修：一条测试违反了「不依赖真实词库」
-
-用户导入搜狗词表之后，`unknown_four_char_word_folds_back_then_segments` 红了：
-它断言 `dict::lookup("lmhdi")` 查不到，而用户的个人词库里正好有 `lmhdi`
-（联海创智的简拼）。词库内容不是代码契约——改成全用假闭包（`p == "lm" && "h".starts_with(a)`、
-`matches!(p, "lm" | "hd" | "il" | "vi")`），和项目里其它词库相关单测保持一致。
-
-验证清单：M3.38（250-256）。
-
 ## 已知问题
 
 - `sgim_gd_usr.bin` 的宽松提取会带少量噪声词（字节错位产物），只在恰好打到对应码时出现
@@ -2364,1249 +2169,6 @@ fn ui_less_allowed(requested: bool, fullscreen: bool) -> bool {
   （满了按 (次数, 最久没动) 淘汰 1/8）。这两个是容量上限，不是筛选。
 - **`move_selection`（`←`/`→`）只在当前页内移动**，到页末不自动翻页；跨页要用
   `-` / `=`。改起来不难，但和「左右键进分词模式」的优先级要先想清楚。
-
-## 2026-10-28 两件事：启动默认模式设置 + `ykwf` 被 3 键直出吞掉
-
-### 中英状态不再「记住上次」，改成「启动默认」设置项
-
-用户：「这次好了，能看到浮窗，然后发现默认是英文模式」——上一版把 Shift 切换结果
-落盘（v9 的 `chinese=`），用户哪次按过 Shift 都被永久记住，自己根本不知道。
-
-改成：`config.chinese` 语义变为「启动默认模式」（设置窗「启动默认」单选，默认中文），
-`insert::set_chinese` 只改进程内原子量、**不再落盘**；`config::set_chinese` 整个删除。
-
-迁移 v9→v10：`ver < 10` 时一次性 `chinese = true`。旧文件里的 `chinese=0` 是按 Shift
-的残留，不是用户对「默认」的选择，不能拿它当新设置初值。**阶段判断写 `ver < 10`**
-（老规矩），重置只发生一次，之后用户在设置窗选了英文就不会再被动。
-
-设置窗加了第二行控件（`ID_DEF_CN/EN`），CLIENT_H 752→810，下面所有控件整体下移 58px。
-
-### `ykwf`（英文）出不来：并回判据补上「整串是个词」
-
-现象：勾了 3 键直出，打 `ykwf`，出来的是「赢」和几个赢字头的词，翻页翻不到「英文」，
-分词模式也进不去（`assist_active` 挡着 `try_segment`）。
-
-链路：第 3 键 `ykw` 被拆成 `yk`+`w`（恰好筛出「赢」，且第一项是单字 → 通过
-`assist_hit_single`），第 4 键 `f` 进辅助码 → `yk`+`wf` **仍然筛得出「赢 x」**。
-上一版的并回判据是「筛空才并回」——这里永远不空，而「英文」被筛选挡在外面：
-**筛选是过滤不是排序，翻页多少页都不会出现**。
-
-修法：`assist_should_fold_back` 加第 5 参 `merged_hit`，条件从 `!hit` 变 `(!hit || merged_hit)`。
-「并回整串是一个有候选的完整码」也是退回理由——第 4 键把两字词的码补完整了，
-用户要的显然是词。**注意这不是退回旧规则**：旧规则把「整串查得到」当必要条件
-（`lmhdilvi` 词库里没有 → 筛空了也并不回去，锁死在空候选窗）；现在是充分条件之一，
-两条逃生路取或，`lmhdilvi` 走筛空那条、`ykwf` 走整串那条。
-
-`merged_hit` 必须查**不带筛选**的整串（`dict::lookup`），带筛选查等于没并。
-
-**教训**：上一条教训（「筛空就并回」）只修了一半——筛空是「猜错了」的一种信号，
-「并回去有更好的东西」是另一种，只认前者会把另一种锁死。两个互补的回退条件要用
-取或，不能此消彼长。
-
-新测试 `two_syllable_word_folds_back_even_when_filter_still_hits`（纯逻辑，不碰词库）；
-`wrong_auto_split_folds_back` 等 4 处调用补了第 5 参。
-
-212 项单测；版本仍 0.3.8；DLL 3811/3855 KB（与上版持平）；安装包 1.67 MB。
-
-## 2026-10-28（下午）四件事：行号归零 / 全角语义 / 完整辅助码精确出字 / user.bin 溯源
-
-### 1. 候选窗「初始行号不归零」
-
-两个状态漏复位：
-
-- `expanded` 只在 `clear_state` 复位，**组合内翻页摊开后，继续打字母还停在摊开态**。
-  修：`refresh()` 普通路径（排除分词/快捷两个早退分支）开头 `expanded.set(false)`。
-  翻页走 `turn_page` 不经过 refresh，所以「翻着看」不受影响。
-- 分词态打新字母重新分段后，`seg_idx` 停在旧段上，refresh 的「选中项对齐本段已选
-  词」把 page 对齐到旧段翻了很多页才选中的词——表现就是「打了新字母还在 6 行开外」。
-  修：重新分段成功后 `seg_idx` 跟到**最后一段**（打字永远是在延长句子尾部），
-  同时收起 expanded。
-
-### 2. 全角/半角语义重做
-
-旧实现：`fullwidth` 开关同时管「中文标点 vs 英文标点」——关掉它中文态出半角逗号
-句号，用户以为在控制宽度，实际在换语言。
-
-新模型（对照搜狗百科/百度百科的通行定义，全角=占一个汉字宽的独立码位）：
-
-- **用哪套标点跟中英切换走**：中文态恒出中文标点（`chinese_punct_for`，原
-  `fullwidth_punct_for` 改名并去掉开关判断）；英文态恒半角。
-- **全角开关只管宽度**：英文态开着时标点键自己插**全角英文标点**
-  （`fullwidth_ascii_for`：`．`FF0E、`，`FF0C、`；`、`＇`、`［］`、`＼`、`－＝／`）。
-  注意句号是「．」不是中文「。」——两个不同的字符。
-- 英文态要拦键就得 `OnTestKeyDown` 认账（经典宿主不派发），两处都改了。
-- 字母数字不受影响；Shift 组合照旧交给应用。
-- `quick_list`/`prefix_literal` 仍用 fullwidth（`／` 前缀），语义兼容。
-
-### 3. 完整辅助码精确出单字（`jmvo` → 简）
-
-筛选只按「首字形码是前缀」、排序只看词频，「简单」比「简」常用 → 形码打满后第一
-候选还是词。修：`dict::search` 在 `freq::rank` 之后加 `promote_exact_shape`——
-辅助码打满（自然码 1 键 / 小鹤 2 键）时，首字形码与输入**完全相等**的单字稳定置顶。
-只重排不插入；形码没打满仍是前缀语义不动排序；置顶仍在最后执行照赢。
-用 `assist::code_of` 判等（多音字 `|` 分隔任一段全等即可）。
-
-手动 Tab 和 3 键直出都吃到这条；不带辅助码的查询完全不走这段。
-
-### 4. user.bin 到底用没用：把答案亮在设置窗
-
-机制上一直是「优先 mmap user.bin，bin 比 txt 旧或读不出才退回文本」
-（`probe_user_bin`）。用户无从确认，所以 `dict::user_source_label()` 把实际生效的
-来源（user.bin 已启用 / txt 文本回退 / 未导入）拼进设置窗的词库统计行。
-
-实测本机 `%LOCALAPPDATA%\Feihe`：user.bin(4.9MB) 与 user_dict.txt 同 mtime → bin 在用。
-
-214 项单测；0.3.8；安装包 1.67 MB；自检通过。
-
-## 2026-10-28（傍晚）使用帮助补「辅助码」专章 + 设置窗加「关于」
-
-### 1. 文档：新增第四节「辅助码：给『音』再加一道『形』」
-
-用户直接问：帮助里没有一处讲清小鹤音形、自然码辅助码到底怎么用。旧内容全塞在
-「设置窗能改什么」的二级列表里（8 条子弹），既讲不透也不容易找到。
-
-新章按「为什么要用 → 怎么进（三步）→ 小鹤音形 → 自然码 → 怎么选 → 五条坑 →
-和 3 键直出什么关系」展开，每个方案配 2~3 组真实例子。
-
-**例子里的形码全部是查表得到的，不是推理的**（`assist.txt` + `dict.txt` 反算双拼码）：
-`打`=fd/`s`、`带`=fj/`j`、`机`=mj/`m`、`记`=yj/`y`、`计`=yu/`y`、`玑`=wj/`y`、
-`简`=vo/`z`、`大`=un/`d`、`代`=ry/`r`。写文档时**不要凭「首末部件声母」自己推**
-——独体字和特殊字根是官方另定的（`简`=vo、`明`=oo、`及`=pn），推出来就是错的，
-而错的码在文档里比没有更糟（用户照着敲，候选空窗）。
-
-顺手改掉的：
-- 章节编号整体后移（旧四~十二 → 新五~十三），全文没有「第 X 节」式交叉引用，安全。
-- 设置窗那 8 条子弹压成 3 条 + 指向新章，避免两处描述打架。
-- 体积/测试数四处对齐：README 1.62→1.67 MB、210→214 项；index.html 1.61→1.67 MB；
-  使用帮助 1.61→1.67 MB。
-- README 顶部「用户级安装，不需要 UAC」是上一轮改 admin 之前的残留，改成
-  「安装需要管理员（注册写 HKLM）」；`build_setup.ps1` 结尾那句同样的提示也改了。
-
-### 2. 设置窗底部加「关于」
-
-一行自述（开源输入法 · Rust + windows-rs · 不联网/不弹窗/无账号）+ 一行可点的
-`GitHub：https://github.com/icefairy/feihe` + 一个「打开项目主页」按钮。
-
-- 地址写成 `const ABOUT_URL`：它是产品身份，不该被一次失败的写盘改掉。
-- 打开浏览器用 `ShellExecuteW("open", url)`，由系统决定默认浏览器；不校验返回值
-  （浏览器打不开不该弹错误框）。
-- 那行地址用**静态控件 + `SS_NOTIFY`（0x100）**做「看起来像文字的链接」：点一下发
-  `STN_CLICKED`，`WM_COMMAND` 的 code 正好是 0，和普通按钮点击走同一条处理路径，
-  所以不用另开一套消息。windows-rs 0.62 没导出 `SS_NOTIFY`（放在哪个模块都没有），
-  只能写数值——静态控件的样式是稳定 ABI。
-- 客户区 810 → 900（多了两行 + 一个按钮）。`debug_assert` 守住「关于」不压到
-  「关闭」：内容高度是算出来的、`CLIENT_H` 是写死的，这俩迟早会漂，而漂了只在
-  高 DPI 下才显形。
-
-DLL 3814/3858 KB（+3 KB，ShellExecuteW 的导入表）；安装包 1.67 MB 不变；
-214 项单测；安装器自检通过。验证清单新增 M3.39（257-259）/ M3.40（260-265）。
-
-### 3. index.html 补一节「辅助码」（导航也加了入口）
-
-落地页原来只在 footer 一句「已经能用的」里提了一句辅助码，等于没讲。新加
-`<section id="assist">`（放在「键位」和「开始用」之间，导航加「辅助码」）：
-
-- 三步示例（`ji` → `Tab` → `m j`，加一行「先连打再 Tab」）；
-- 六张卡：自然码 1 键、小鹤音形 2 键（官方码）、形码打满置顶、键数上限/过滤不是排序、
-  词只按首字筛、和「3 键直出」的关系；
-- 一张 7 行对照表（机/计/记/玑/打/简/代·词，两套方案并列 + 说明）；
-- 三个小格：怎么记、什么时候用、和分词的关系。
-
-全部复用既有 CSS（`.grid .card` / `.tablewrap` / `pre .c .p` / `.zero`），没加一条新样式。
-顺手把 hero 里那个过时的 `1.56 MB` 改成 `1.67 MB`。
-
-## 2026-10-28（晚）自然码 1 键打满却精确不出字：个人词库把核心词库挤出了候选
-
-### 现象
-
-用户开了 3 键直出 + 自然码辅助码，打 `iam`（`ia`=cha，`m`=查的木）第一候选是
-**「查明」**，不是「查」。按 3 键直出的设计，自然码只有 1 个辅助键，第 3 键就是
-形码**打满**，应该直接出「查」。
-
-### 根因：`collect` 的「用户词库收满就返回」在 limit 小的路径上把核心词库饿死
-
-链路是这样的：
-
-1. `assist_hit_single` 判断「第 3 键能不能拆」时调 `lookup_filtered(prefix, assist, mode, 1)`
-   —— **limit = 1**；
-2. `collect` 老逻辑是「用户词库优先，`out.len() >= limit` 就 `return`」；
-3. 用户导入了搜狗个人词表（5.5 万条），`ia` 前缀下个人词库命中上千条，**1 条就把
-   额度占满**，核心词库一条都没被扫；
-4. 于是 `ia` + `m` 的第一候选是个人词库里的两字词「查看」——**单字「查」根本不在
-   候选里**（不是排在后面，是被过滤掉了）；
-5. `assist_hit_single` 要求「第一项必须是单字」→ 不成立 → 拒绝拆分；
-6. `iam` 被当成整串双拼码去查，正好 `iam` 是「查明」（cha ming = `iamk`）的前缀 →
-   用户看到「查明」。
-
-用真实个人词库复现（把 `C:/soft/Feihe/user_dict.txt` 拷到测试配置目录再查）：
-
-```text
-改前  lookup_filtered("ia", "m", Ziranma, 1)  -> ["查看"]
-改前  lookup_filtered("ia", "m", Ziranma, 45) -> ["查询","查看","查的",...]（没有「查」）
-改后  lookup_filtered("ia", "m", Ziranma, 1)  -> ["查"]
-```
-
-### 修法：带辅助码时两个词库都收，按码长归并
-
-`put_candidate`：按**码长**插进同一个序列（同码长保持先来的，用户词库天然在前）。
-两段各自已经按 `(码长, 行号)` 有序（`top_by_rank`），所以插入就是归并，不用全排序。
-
-- 用户词库：照旧追加，额度满了 `break`（不再 `return`）；
-- 核心词库：带着同样的过滤条件继续扫，按码长插队，`limit` 条为止；
-- 只在 **`assist_prefix` 非空**时归并。不带辅助码时 `limit` 是 `usize::MAX`
-  （候选不设上限），用户词库填不满、核心词库本来就会被扫到，而且 `out` 有几千条，
-  逐条 `insert` 是 O(n²)。
-
-### 教训
-
-**「候选不设上限」这个前提在判定路径上不成立。** 项目里到处是
-`lookup(..., 1)` / `lookup(..., limit)` 这种「只问有没有」的小 limit 调用，它们
-共享 `collect`。凡是给 `collect` 传小 limit 的地方，都要问一句：过滤之后还剩几条？
-个人词库会不会一个人把额度占光？
-
-这和上一次 `scan = usize::MAX`（「带辅助码时必须先扫全量再截断」）是同一类坑的
-第二层：那次修的是「`top_by_rank` 先挑 limit 条→过滤后为空」，这次修的是
-「用户词库先填满 limit 条→核心词库没机会」。**同一个 `limit` 参数，两处不同的
-截断位置，各自饿死一个词库。**
-
-### 验证
-
-真实个人词库（5.5 万条）下：`ia`+`m` → 查 / 察 / 杈；`da`+`s` → 打；`dd`+`j` → 带；
-`jm`+`vo` → 简；`yk`+`wf` → 赢（第 4 键并回 `ykwf` → 英文）。
-
-新增单测 `merged_candidates_keep_short_code_from_static_dict`（只断言 `put_candidate`
-的归并语义，**不碰真实词库内容**——个人词库随用户导什么而变，这条已经踩过两次）。
-
-215 项单测（带/不带个人词库两种配置都绿）；版本仍 0.3.8；安装包 1.67 MB；自检通过。
-
-### 顺带发现：用户装的是旧 DLL
-
-`C:/soft/Feihe/config.ini` 里 `config_ver=9`（当前是 10），`feihe.log` 里还有
-`Activate: chinese=false` —— 说明「记住上次 Shift 状态导致默认英文」那版的 DLL
-还在跑。让用户装新包即可，v10 迁移会把 `chinese` 一次性重置回中文。
-
-## 2026-10-28（夜）"不是去掉所有限制了吗，为啥还有 limit" —— 把探测和取候选分开
-
-用户看到代码里还有 `lookup_filtered(..., 1)` 就问了。查下来他的疑问指向一个真 bug。
-
-### 先回答：显示路径确实没有上限
-
-`CANDIDATE_LIMIT = usize::MAX`，`refresh` 查候选用的就是它，翻页翻到天荒地老都有。
-剩下的 `1` 全部是**探测**：`assist_hit`（筛出东西没有）、`assist_hit_single`（第一名
-是不是单字）、`undo_auto_assist`（筛空没有 / 并回去有没有）、分词默认字。
-
-### 但这些 `1` 是真的错，不只是名字难读
-
-本想「加个 `first()` 把意图写清楚」就收工，顺手加了一条不变量单测
-（`first(c) == lookup(c, 上限)[0]`），它**当场就红了**：
-
-```text
-`ji`：left: Some("级")   right: Some("奇")
-```
-
-原因：第一名是完整流水线的产物——词库归并 → `freq::rank` 动态词频置换 →
-`promote_exact_shape` → 自造词。只取 1 条时，收集器在**词频置换之前**就截断了，
-用户学过的词根本没进这条数据，置换自然提不上来。
-
-也就是说 `lookup(..., 1)` 的「第一名」和候选窗的「第一条」会不一致。对
-`assist_hit_single` 这种「第一项是不是单字」的判定，这不只是理论问题：学过一次
-「查看」之后，`ia`+`m` 的候选第一项会变成词，而探测还报「查」→ 继续拆 → 用户看到
-的第一项是词。`iam` 那次的表因（个人词库挤出核心词库）修好之后，这是同一处代码的
-第二层问题。
-
-### 修法：按语义分成三组入口，`limit` 不再出现在调用点上
-
-`dict` 里新增：
-
-- `any(prefix)` / `any_filtered` / `any_pinyin(_filtered)` —— **存在性**。存不存在与
-  顺序、上限无关，所以允许收集器一条命中就停（最便宜）。`assist_hit`、
-  `undo_auto_assist`、分词切分的 `has` 闭包都走这组。
-- `first(prefix)` / `first_filtered` / `first_pinyin(_filtered)` —— **第一名**，
-  内部跑完整流水线（`usize::MAX` 再取头），保证与候选窗第一条一致。
-  `assist_hit_single`、分词默认字、`merge_segments` 走这组。
-- `lookup*(..., limit)` —— 取**候选列表**，只给显示路径和测试用。
-
-`textservice` 侧对应 `lookup_any_has(code)`（存在性）和 `lookup_any_first(code)`
-（真实头部），调用点上再也看不到裸 `1`。切分用存在性那组，是因为 `plan_segments`
-每一步都在问「这段码成不成立」，与前缀顺序无关，没必要付全量排序的代价。
-
-### 教训
-
-**「只问有没有」和「问第一名是谁」是两件事，前者便宜、后者昂贵，共用一个 limit 参数
-必然有人用错。** 参数本身不带语义，调用点也不会写注释；函数名带语义，改名的时候
-编译器会把所有调用点逼一遍。以后凡是「探测」需求，先问一句：我要的是存在性，还是
-头部？二者不同就开两个入口。
-
-顺带：`CANDIDATE_LIMIT` 的说明里那句「候选不设上限」是对的，但**上限只是显示路径
-的属性**，不是 `collect` 的属性——`collect` 随时可能被小 limit 调用。这次把这句话
-落到函数签名上。
-
-216 项单测（带/不带个人词库两种配置都绿）；新增 `first_agrees_with_full_lookup`
-（只比自己和自己，不假设词库内容）。版本仍 0.3.8；DLL 3815/3859 KB；安装包 1.67 MB；
-自检通过。
-
-## 2026-10-28（夜二）`wfjm` 带出 178 条「文件X」：前缀匹配没有远近概念
-
-用户问「`wfjm` 出现的候选里一堆『文件预览』这类长词，只有打满 `wfjmyulj` 时才该出现吧，
-双拼两个音节不是最多出两个字吗？先评估一下是否合理」。
-
-### 评估结论：不合理，但病根不是「两个字」
-
-前缀匹配的方向是「**输入串是词码的前缀**」（`wfjm` ⊂ `wfjmyulj`），这是增量输入必需
-的：打 `wfjmyulj` 的过程中，前 6 键必须能看见「文件预览」，否则这个码永远打不出来。
-所以「词码比输入长」本身是合法的。
-
-病根是**没有远近上限**。前三个字节已经实测：`wfjm` 返回 **178 条**，全部来自用户的
-搜狗个人词库（「文件吗」「文件里」「文件预览」都只在那份表里，`src/dict.txt` 里没有），
-码长按 4 → 6 → 8 排下去，用户要的「文件」只在第一条。
-
-### 尺度：一个音节
-
-`reach_cap(prefix_len, pinyin) = prefix_len + {双拼 2 / 全拼 4}`。双拼一个音节 2 键，
-全拼按最常见的 4 个字母估。`collect` 里按码长升序迭代，超过直接 `break`（不是
-`continue`：后面的只会更长），不额外排序、不额外分配。
-
-为什么不是「打满才出现」：`wfjmyul`（7 键）时既没有 7 键的词、四字词（8 键）又被藏，
-候选窗**空**；`wfjmyulj` 才回来。用户看到的是「打着打着字没了」。留一个音节既保住
-「快到手的长词现在就能看见」（`wfjmyu` → 文件预览），又不会让两音节输入被四字词淹掉。
-
-效果：`wfjm` 178 → 22 条（文件、稳健、文件名、文件夹、文件吗…），`wfjmyu` 只剩
-「文件预览」，`wfjmyulj` 是「文件预览 / 文件预览的」。辅助码那条链路一条都没动：
-`ia`+`m`→查、`dd`+`j`→带、`jm`+`vo`→简。
-
-### 连带影响：单键不再列两字词
-
-`n` 这种单键（半个音节）收窄后只剩码长 ≤ 3 的单字，原来「单键几千条」的
-`single_key_returns_every_candidate` 随之作废，改成 `single_key_shows_every_single_char`
-（只断言单字上百个、不截断）。**注意一简次选会刻意往单键候选里插一个两字词**
-（`n` → 「内容」放第二位），所以 textservice 层不能断言「没有词组」——那条留给
-dict 层。
-
-### 教训
-
-**「候选不设上限」只说了同码内有多少条，没说什么长度的词该进来。** 两件事都往
-「候选太多」的方向使劲，但一个是数量、一个是距离。上一轮把数量放开是对的（生僻字
-得能翻到），这一轮补的是距离——放开数量之后，距离的缺失才显形。
-
-218 项单测（两种词库配置都绿）；新增 `reach_allows_one_extra_syllable`（纯函数边界）和
-`two_syllable_input_has_no_long_words`（只断言上界，不假设词库里有哪条长词）。
-版本仍 0.3.8；DLL 3815/3859 KB；安装包 1.67 MB；自检通过。
-
-## 2026-10-28（夜三）「词频调整好像失效了」：数字键/鼠标选词根本不记次数
-
-用户：「输入 `zirjma` 选了『自然码』好几次，但下次再输入第一位依然是『自然吗』。」
-
-### 现场：两张表、两个洞
-
-`%安装目录%\freq.txt` 里只有 `zirjma	自然吗	4`，**没有 `zirjma	自然码`**——而这台机器
-的运行时个人词库里「自然码」有 8 条（`自然码` / `自然码的` / `自然码方案`…），它确实是
-候选之一。也就是说：用户「选了好几次」，一次都没记上。
-
-两个原因叠在一起，缺一个都不会有这症状：
-
-1. **`pick_index`（数字键 / 鼠标点选）不调 `freq::bump`。** 只有 `commit_with`
-   （空格 / 默认候选）会学。越是「翻页、按数字键、点鼠标去找那个对的词」，越是学不到——
-   学习表里于是只剩「空格上屏的第一个候选」。用户按了 4 次空格（都上屏成「自然吗」），
-   表里就有了 4 次「自然吗」；他真正想要的那个词一次都没有。
-2. **自造词无条件插到 0 号位。** `自然吗` 是他早前一次分词上屏时自动学出来的自造词
-   （`phrases.txt` 里那条 `自然吗	zi ran ma`），插在 `freq::rank` **之后**，所以
-   「自然吗」永远是第一位——正因为他想要「自然码」，他每次都按空格，于是每按一次
-   就给「自然吗」加一次分。这是个自我强化的循环。
-
-### 修法一：选词就学（主因）
-
-`pick_index` 里补 `freq::bump(query_code(code), word)`，`/rq` 这类快捷输入的生成串跳过。
-数字键、鼠标点击和空格是同一件事——「我选了这个词」，学习路径不该有三个。
-
-### 修法二：两个学习者用同一把尺子
-
-自造词本身也是学来的（`commit_segments` 每分词上屏一次就记一次，用户并没有「造词」的
-意思），它没有理由压过用户显式选择的词。现在：
-
-1. `dict::search` 在 `freq::rank` **之前**把 `phrase::words_for()` 的结果当普通候选
-   塞进 `out`/`lens`（码长 = 输入长度，即最短那一档，和词库里打满的词平级）；
-2. `textservice::remember_phrase` 造词时顺手 `freq::bump(code, word)` 一次——
-   刚造的词 1 次、对手 0 次，「造完立刻能出」这个原始需求不变；
-3. 删掉原来那段「倒着 promote 到 0 号位」的代码。
-
-一简字 / 二简 / 置顶仍然是 `rank` 之后的显式插队，语义没变。
-
-### 连带修掉：`bump` 的码和 `rank` 的码不是同一个
-
-`commit_with` / `commit_literal` 以前 `bump(&self.code.borrow(), ...)`——原始组合串，
-可能带手动分隔符（`ni'hao`）。而排序那边 `dict::search` 拿到的是 `query_code` 去过
-分隔符的码。两边键不一样，那条学习记录永远命中不了，等于白记。现在两处都过
-`query_code`。
-
-### 教训
-
-**「谁后插队谁赢」只在插队者是显式表达时才成立。** 置顶是 `Ctrl+数字` 钉的、一简字是
-打字人的肌肉记忆，都够格插队；自造词是自动记的，把它也放进插队队列，等于让两条学习
-路径互相抢，抢的方式还是「后写的压先写的」，没有任何仲裁。凡是自动学的东西，最终都
-该落到同一张计数表上，用次数说话。
-
-**另一个：学习路径必须和「选词」一一对应。** 空格、数字键、鼠标点、分词确认、回车原样
-上屏——五条出口里当初只接了一条，剩下四条默默丢数据，而且丢的正好是「用户费劲找出来
-的那个词」。以后加新的选词入口，先问一句：它调 `bump` 了吗？
-
-> 用户机器上的历史数据（`自然吗 4`）不会自己消失，但他**清空一下自造词 + 重置动态调频**
-> 就是干净状态；此后再用数字键选「自然码」，第一次就能记上。
-
-220 项单测（两种词库配置都绿）；新增 `learned_candidate_beats_auto_phrase`
-（词面从词库自己取，不写死）和 `auto_phrase_still_listed_after_ranking`。
-版本仍 0.3.8；DLL 3816/3860 KB；安装包 1.68 MB。
-
-## 2026-10-29「vhmu 打不出账目，中间多个空格」：装的是旧 DLL，3 键直出老 bug 复发
-
-用户报：`vhmu` 打「帐目」打不出来，输入过程中 `vh` 和 `mu` 之间冒出空格，像被切割，
-也进不了组词。
-
-### 现场
-
-安装目录 `C:/soft/Feihe/feihe.dll` 时间戳 **10-28 19:11**，而当前源码构建是 10-29 10:29；
-用户 `config.ini` 还是 `config_ver=9`（现在是 10）。**跑的是旧 DLL。**
-
-旧 DLL 的 `undo_auto_assist` 只有「筛空才并回」这一条：
-
-1. 第 3 键 `vhm` → `auto_assist_split` 剥出 `vh`+`m`。`assist_hit_single("vh","m")`
-   的第一名是单字「张」→ 判定拆得对，组合串变成 `vh m`（**那个空格**）；
-2. 第 4 键 `u` → `vh`+`mu` 的第一名**还是**「张」（实测 `lookup_filtered("vh","mu")`
-   = `[张, 樟, 樟脑]`）→ 筛选没空，「筛空才并回」永远不触发；
-3. 于是用户被锁在辅助码态：候选只有「张/樟/樟脑」，`assist_active` 为真时
-   `try_segment` 直接返回 false —— **分词也进不去**，正好对上「无法进入组词」。
-
-当前代码里 `assist_should_fold_back` 是 `!hit || merged_hit`，`merged_hit`（整串
-`vhmu` 在词库里查得到）是充分条件之一，第 4 键会并回。实测 `lookup("vhmu")` =
-`["账目", "丈母娘"]`。
-
-### 本轮只加回归测试
-
-`vhmu_folds_back_and_finds_the_word`（真表）：断言第 3 键确实拆成 `vh`+`m`、
-第 4 键 `mu` 之后 `assist_should_fold_back` 必须为真。纯逻辑测试
-`two_syllable_word_folds_back_even_when_filter_still_hits` 已经覆盖规则本身，
-这条额外把「词库里真有 `vhmu` 这个词」也钉住——否则规则对但索引查不到，一样白搭。
-
-验证清单加 M3.41（266–268），**第 268 条是反证**：敲完 4 键还停在 `vh mu` 就是旧 DLL。
-221 项单测；版本 0.3.9。
-
-### 顺带一个词库事实
-
-词库里只有 **「账目」**（`dict.txt:20472`），没有「帐目」。「帐」单字在 `vh` 候选第 3 位。
-想要「帐目」这个写法只能分词造词：`vhmu` → `←` → 首字换成「帐」→ 空格逐段确认。
-
-## 2026-10-29「关掉三键直出才能打账目；打新词候选不在第一行」
-
-### 第一条：还是旧 DLL
-
-用户确认关掉「三键直出」才能打出「账目」——这正好是旧版 `fold_back` 只有
-「筛空才并回」的表现（`vh`+`mu` 筛得出「张」，永远不空）。装 0.3.9 后不用关。
-`lookup("vhmu")` = `["账目", "丈母娘"]`，第一位就是他要的词。
-
-### 第二条：三处「页 / 摊开」状态泄漏
-
-用户：「输入新的字母开始输入，好像还不是第一行，按了好几下 `-` 才到第一行。」
-
-`refresh` 的**普通路径**一直有 `page.set(0) + selected.set(0) + expanded.set(false)`，
-但另外三条路各缺一半：
-
-1. **`refresh` 的分词路径**（`segments` 非空时）完全不碰 `expanded`。上一轮按 `=`
-   摊成 5 行没被清，下一轮一进分词态窗口就是 5 行、活动页压在最底下——用户看到
-   的「不在第一行」其实是「窗口还在摊开态」，按 `-` 要先把页退完才轮到收起。
-2. **`confirm_segment` 前进到下一段**：`refresh` 会把页对齐到这一段「已选的词」
-   （`position(word) / PAGE_SIZE`），那个词是自动分段时给的默认候选，靠后就是第
-   2、3 页。换段 = 重新挑字，应该从第一行开始。
-3. **分词态里按编码键延长编码**：`try_segment` 之后焦点跟到最后一段，但没有归零
-   页和选中项。
-
-三处都补上归零。注意 1 不会伤害翻页：`turn_page` 自己 `expanded.set(true)` 并且
-只调 `show_candidates`，不走 `refresh`；`←/→` 移段保留「对齐到该段已选词」的
-原逻辑（同段内左右移动不该跳回第一项）——只有「确认后进入下一段」才归零。
-
-221 项单测全绿；0.3.9；DLL 重编、安装包 1.68 MB、自检通过。
-
-## 2026-10-29 全角/半角快捷键 + 浮窗悬停提示
-
-用户问：「全角和半角切换有啥快捷键吗？最近误操作切到全角好几次。如果有，可能只能
-切一次，请修复。快捷键应该显示到浮窗对应小按钮的鼠标指向提示里。」
-
-### 原来根本没有快捷键
-
-全角/半角**只有**点浮窗上那个「全 / 半」按钮这一条路。浮窗是可拖动的，按下后移动
-不到 3px 就松手会被判成点击（`WM_LBUTTONUP` 里 `moved == false`）——想挪一下浮窗，
-手一抖就把模式切了。这大概是「误操作」的来源。
-
-### 加 `Ctrl+Shift+F`
-
-- 判定 `is_width_hotkey(vk) = vk == 'F' && ctrl_only() && shift_down()`：只按 Ctrl+Shift，
-  `Ctrl+Alt+F` / `Ctrl+F` 不认（IDE 的全局搜索不能被吞）。
-- **必须在 `OnTestKeyDown` 的 `modifiers_down()` 早退之前认**：经典宿主（记事本、Word）
-  里 Test 返回 FALSE 就不派发 `OnKeyDown`，热键等于不存在。`Ctrl+Shift+U` 当初就漏了
-  这一层（它只在 OnKeyDown 里拦）。
-- **「按住只切一次」= `width_key_down` 锁**：键盘自动重复会连发 `OnKeyDown`，没有锁
-  按住半秒就在全角/半角之间来回跳。`OnKeyUp` 松锁，`clear_state` 兜底复位。
-- 切换后 `statusbar::repaint()`，浮窗上的字当场变。
-
-### 悬停提示：自己画一个小气泡，不用 `tooltips_class32`
-
-系统 tooltip 要 `TOOLINFOW` + `TTM_ADDTOOL` 一整套，字体配色还对不上候选窗（会冒出
-一个 Win98 黄条）。自己在 `statusbar.rs` 里建了 `FeiheStatusTip` 窗口：`WS_POPUP |
-WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`，跟着 `theme::current()` 换肤。
-
-- 文案在 `tip_for(btn)` 里，**快捷键就写在这**——浮窗 30px 高，没有第二处能放说明。
-- 定位：与按钮左边缘对齐、贴在浮窗下方；屏幕底部放不下就翻到上方；横向夹在屏幕内。
-- 显隐靠**轮询**（复用浮窗那个 300ms 定时器，`tip_follow_mouse`），因为
-  `TrackMouseEvent` 在 windows-rs 0.62 里没导出（和 `SS_NOTIFY` 一个待遇）。
-  顺带修掉「鼠标甩出去、按钮高亮还残留」——hover 也在定时器里对齐。
-- 幂等：`TIP_IDX` 记当前显示的是哪个按钮，同一按钮重复调用直接返回，不然 300ms 一次
-  `SetWindowPos` 会让气泡原地抖。
-- 拖动中不出气泡；浮窗隐藏（`no_popup` / 非前台）时强制收起。
-
-223 项单测（新增 `every_button_has_a_tip_with_its_shortcut`（提示里必须带快捷键）
-和 `button_rects_are_contiguous`（按钮无缝，气泡不会飘到隔壁））。版本 0.3.9。
-
-## 2026-10-29 把 `tools/import_sogou.py` 搬进设置窗（`src/sogou.rs`）
-
-用户要：「把 tools 里 import_sogou.py 的逻辑做到设置窗里，加一个从搜狗导入的功能。」
-
-原来这条路只有作者能走：跑脚本 → 重建 `src/user_dict.txt` → 重新编译 DLL → 替换。
-用户装的是发布包（`-NoUserDict`），等于「从搜狗迁移」完全没有入口。
-
-### 结构
-
-`src/sogou.rs`，和脚本一一对应：
-
-| 脚本 | Rust | 说明 |
-|---|---|---|
-| `read_install_path` / `candidate_roots` | `roots()` + `reg_install_dir()` | 注册表 `SogouInput` 默认值 → Program Files → APPDATA 三路 |
-| `find_user_data_dirs` / `find_scel_dirs` | `discover()` | 三层相对路径都试；`root` 自己就是用户目录的版本也认 |
-| `extract_bin_strict/loose/scel/txt` | 同名函数 | **输入是 `&[u8]` 而不是路径**，纯函数，可单测 |
-| `load_base_codes` / `load_char_pinyin` | `Encoder::new()` | 数据源换成**编进 DLL 的 `base.bin`**（运行期没有 `dict.txt`） |
-| `collect` | `tally_words()` | `词 → (优先级, 次数)` |
-| 写 `src/user_dict.txt` | `dict::merge_text()` | 复用「导入词库…」的合并 + 编译，不写第二份 |
-
-### 三个值得记的点
-
-1. **运行期没有 `src/dict.txt`**。脚本靠它做「词 → 全拼」，DLL 里只有编好的
-   `base.bin`，但 `dictbin::Bin` 有 `word(i)` / `pinyin(i)`——按原顺序遍历就是
-   「词 → 全拼」，而同一个字的多条读音是按词频排的，`or_insert` 取第一条就是
-   最常用读音。等价于脚本那份 8105 字典，还不用额外带数据。实测
-   `重庆→chong qing`、`银行→yin hang`、`鸸鹋→er miao`。
-2. **优先级的数字方向原来拧着**。脚本里 `usrbg=1 / usr=2 / scel=3`，排序用
-   `-prio` 升序 → **细胞词库排在打字历史前面**，一直没人发现（词都在，只是顺序
-   反了）。Rust 里改成「数字大 = 更优先」，`tally` 的 `max` 和排序的 `Reverse`
-   就同向了。
-3. **合并只能有一份实现**。`dict::import_from` 里那段「读已有 → 按词去重 → 追加
-   → 编译」抽成了 `dict::merge_text(text)`，文件导入和搜狗导入共用。各写一份的话
-   迟早变成「文件导入去重、搜狗导入不去重」。
-
-### UI
-
-按钮行从三个变四个（96+116+90+98 + 8px 间隔 = 428，正好铺满），没有加新行，
-所以 `CLIENT_H` 不用动（`debug_assert` 那条「关于不压关闭」仍然成立）。
-点下去换沙漏光标（`with_wait_cursor`），成功后结果写进原来的灰字；自动发现失败走
-`MessageBoxW` 问一句，再 `SHBrowseForFolderW` 手选目录。
-
-不用 `IFileOpenDialog + FOS_PICKFOLDERS`：要走 COM 初始化，而我们可能在前台宿主的
-STA 里，`RPC_E_CHANGED_MODE` 的边界得处理一堆；老 API 丑但没有这些坑。
-`SHGetPathFromIDListW` 只吃 `[u16; 260]` 定长缓冲（`MAX_PATH`），传 1024 编译不过。
-
-新开两个 windows feature：`Win32_System_Registry`（读安装目录）、
-`Win32_UI_Shell_Common`（`BROWSEINFOW` / `ITEMIDLIST` 的类型定义）。
-
-### 体积
-
-DLL 3816/3860 → **3882/3922 KB**（+66/+62 KB），安装包 1.68 → **1.73 MB**。
-主要是 sogou 模块的路径拼接、注册表调用和一串错误文案。文档里的体积数字
-四处一起改了（README 表格、index.html 表格与正文、使用帮助头部）——之前
-README 还写着 1.39 MB，已经和实物差 0.3 MB 了。
-
-230 项单测（新增 7 条：严格解析认校验和 / 校验位不对必须丢 / scel 认魔数 /
-txt 只留 CJK / UTF-16 与 UTF-8 都解得出 / 词表合并优先级 / 排序三级键）。
-版本仍 0.3.9。
-
-## 2026-10-29 撤掉 `Ctrl+Shift+F`（全角 / 半角只留浮窗按钮）
-
-上一版给全角/半角挂了 `Ctrl+Shift+F`，理由是「浮窗可拖动、3px 内松手算点击，容易误触」。
-用户用了一轮后要求去掉——**这个开关本来就不常用**，占一个全局组合键不值。
-
-撤的是热键，不是那个开关：
-
-- `textservice.rs`：删 `is_width_hotkey`、`width_key_down` 字段（连同它的
-  「按住只切一次」锁）、`OnTestKeyDown` 的提前认领、`OnKeyDown` 的切换块、
-  `OnKeyUp` 的解锁、`clear_state` 的复位。`ctrl_only()` / `shift_down()` 保留，
-  `Ctrl+数字`、`Ctrl+Shift+U` 还在用。
-- `statusbar.rs`：`tip_for(Btn::Width)` 改成「全角 / 半角（点一下切换）」。
-- 文档：README 的「三个例外」回到「两个例外」，浮窗表的快捷键列写「点这个按钮」，
-  使用帮助、index.html 同步。验证清单 M3.43 只剩悬停提示（272–274），
-  新增 275 条**反证**：`Ctrl+Shift+F` 必须什么都不发生、IDE 里照常是全局搜索；
-  后面 M3.44 的编号顺移（276–281）。
-
-### 教训
-
-**「可发现性」不该靠占用全局组合键来解决。** 当初加它的真实动机是「让这个开关能被
-找到」，而可发现性其实已经被悬停气泡解决了——气泡能写清楚「这个按钮是干什么的」，
-而且不占键位、不和任何宿主抢。快捷键是给**高频**操作配的，低频开关挂组合键，
-用户记不住、还白白让出一个键。
-
-顺带修掉一条历史笔误：验证清单 124 条写着「繁体模式（`Ctrl+Shift+F` 或设置里切繁体）」，
-繁体从来没有热键，一直是笔误——把两个不同的东西记混了。
-
-231 项单测（新增 `width_button_has_no_shortcut`：提示里出现 `Ctrl` 就说明键被加回来了）。
-版本仍 0.3.9；DLL 3882/3922 KB；安装包 1.73 MB；自检通过。
-
-## 2026-10-29 全屏游戏里「能敲键盘，屏幕上什么都没有」
-
-用户：昨晚全屏游戏里输入框打不了字、没有候选框。把「候选窗」设成「始终弹出」后能显示
-候选窗、也能正常输入，只是**第一次**弹候选时游戏画面闪一下。
-
-### 根因：一个布尔量把两件相反的事揉成了一类
-
-`fullscreen::active()` 原来是 `covers_popup(state) = matches!(state, 3 | 4 | 7)`，
-三种状态一视同仁地「收起」，于是 `config::no_popup()`（Auto 档）在全屏游戏里为真：
-
-1. `candidate::show` 被拦 → 候选窗不弹；
-2. `no_popup_hint` 把候选塞进组合串当替代 → **游戏是自绘 UI，根本不画 IME 组合串**；
-3. 结果就是「能敲键盘，屏幕上什么都没有」。
-
-真正的错在于**候选窗和状态浮窗被同一个条件管着**，而它们的性质相反：
-
-- 候选窗是「按了键才出现、选完就消失」的临时窗口，全屏游戏里正是要它；
-- 状态浮窗是常驻窗口，全屏时只会一直压在画面上挡视线。
-
-演示 / 投影模式又确实两个都该收（屏幕在给别人看）。所以判据必须分三层，不是两层。
-
-### 改法
-
-`fullscreen.rs` 里 `active(): bool` → `scene(): Scene`（`Normal / Game / Presentation /
-Uwp`），保留 `active()` 当 `scene() != Normal` 的便利封装。然后：
-
-| 场景 | 候选窗 | 状态浮窗 |
-|---|---|---|
-| Game / Uwp | 弹 | 不显示 |
-| Presentation | 不弹（写组合串） | 不显示 |
-| Normal | 弹 | 显示 |
-
-- `config::no_popup()` 的 Auto 档改成 `scene() == Presentation`；
-- `statusbar::show` 单独再判 `scene().hides_statusbar()`——它和候选窗不是一个待遇。
-
-### 那「闪一下」是什么，能消掉吗
-
-**消不掉，但只发生一次。** 机理：DWM 发现有置顶窗口盖在全屏程序上，就退出「全屏优化」
-状态，游戏要重建交换链 → 一次黑帧。任何置顶小窗（QQ 消息提示也算）都会引起这一次。
-之后系统已经不在「全屏优化」状态里，再显示就不再闪——这正好对上用户说的「只有第一次」。
-
-试过的方向都不成立：预创建窗口（`CreateWindowEx` 不 Show）省不掉 DWM 那一步；把窗口
-放屏幕外再移进来，移进来的瞬间照样触发；一直可见地留在角落又会永久退出全屏优化，
-等于让游戏一直以窗口化跑。所以只能接受，并写清楚「选始终不弹可以完全避免，代价是盲打」。
-
-顺带在 `candidate::show` 里加了一行**一次性**日志（`FS_FIRST` 去重）：
-`candidate::show 全屏下首次弹窗（scene=game），画面可能闪一次`。以后用户报「闪」，
-看一眼 `feihe.log` 就知道是不是我们弹的窗。
-
-### 顺带修掉一条会偶发失败的测试
-
-`slash_is_prefix_and_backslash_is_dunhao` 里 `assert!(is_code_key(VK_OEM_2))` 依赖
-`GetKeyState` 读到的**真实键盘状态**：跑测试时要是有人按着 Shift（比如一边等编译一边
-按着快捷键），`/` 会被判成「交给应用」，断言当场红。改成 `if !shift_down() { … }`——
-映射是死的不假，但断言不该依赖物理键盘。
-
-233 项单测（全屏场景 3 条：状态码→场景、只有演示收候选窗、任何全屏都收浮窗）。
-版本仍 0.3.9；DLL 3882/3922 KB；安装包 1.73 MB；自检通过。
-
-## 2026-10-29（下午）全项目复查：十个会实际出错的逻辑问题
-
-用户问「有没有可以优化的地方或者逻辑错误」。逐模块读一遍 + 四个子代理分头审
-（`statusbar` / `settings` / `freq+phrase+pin`），报上来的逐条核实过代码再修。
-**方法论上值得记的一条：修完必须自己再想一遍「这个修法会不会引入新的错」。**
-本轮最后一条就是这么抓到的一倍反转——见第 8 条。
-
-### 1. 浮窗定时器绕过全屏 / 不弹窗闸，把该藏的浮窗又放出来（最严重）
-
-`WM_TIMER` 的「自己是前台 && 当前隐藏」分支**直接 `ShowWindow(SW_SHOWNA)`**，
-不问 `config::no_popup()`、也不问 `scene().hides_statusbar()`。而所有外部
-`hide()` 路径都发生在「宿主进程正是前台」的时候，于是 300ms 后定时器一律把窗口
-放回来，之后再没有东西收它：
-
-- 全屏游戏里激活输入法 → `show()` 被 `hides_statusbar` 拦下并 `hide()` →
-  游戏窗口是前台、pid 相同 → 300ms 后浮窗重新弹出，一直挂在游戏画面上；
-- 设置里选「一律不弹」→ `settings` 里 `statusbar::hide()` → 设置窗是同进程模态
-  窗口并抢前台 → 300ms 后浮窗又出来，该设置对状态浮窗完全失效；
-- `Ctrl+Shift+U` 临时切「不弹」同理，快捷键看起来毫无作用。
-
-修法：那个分支改调 `show()`。它幂等、含全部闸门（该收起时自己会 `hide()`），
-顺带让定时器成为场景变化的重新评估点。**教训：「隐藏」有 N 个入口，「显示」
-也必须过同一道闸**，否则任何一个直接 `ShowWindow` 的入口都是洞。
-
-### 2. 删掉 `freq.txt` 不能重置，文件还会被旧数据「复活」
-
-`refresh()` 开头**先 `flush()`** 再判文件存在。用户删掉 `freq.txt` 后：运行中的
-进程内存表原封不动；随后任意一次选词触发 `flush_inner(true)`，把整张旧表写回
-磁盘——文件几秒内复活，重置被完全撤销。`pin` / `phrase` 都有「文件没了就清内存」
-的分支，`freq` 是三者里唯一漏的。
-
-修法：存在性检查**提到 `flush()` 之前**，文件缺失时清内存表、`LAST_MTIME` 置
-`None`、不主动写空文件（删掉就是删掉，下次选词自然重建）。顺序是关键——反过来的
-话 `flush()` 先把文件重建，缺失分支永远进不去。
-
-### 3. `flush_inner` 先清脏标记再写盘，写失败静默丢数据
-
-`DIRTY.swap(false)` 发生在写盘**之前**，而 `freq.txt` 是用户会拿编辑器开着的
-文件——多数编辑器不以 `FILE_SHARE_DELETE` 打开，`rename` 直接
-`ERROR_ACCESS_DENIED`。后果：普通场景丢自上次成功写盘以来的全部学习（不止承诺的
-3 秒）；`clear()` 场景更糟，内存已空、磁盘还是旧内容、`DIRTY=false`，之后任意一次
-`bump` 的 `merge_disk=true` 把旧内容原样灌回空表——「点了重置什么都没发生」。
-
-修法：写盘成功才清 `DIRTY`，失败留着下一轮重试；另加 `PENDING_CLEAR` 标志，
-让「清空后还没写成功」的重试继续不合并磁盘（否则重试本身就把旧内容搬回来）。
-
-### 4. 三个模块共用一个确定性临时文件名，多进程并发写会写坏数据文件
-
-`freq.txt.tmp` / `phrases.txt.tmp` / `pinned.txt.tmp` / `config.ini.tmp` /
-`user.bin.tmp` 都不含进程标识。两个宿主进程同时写盘时交叉落在同一个 tmp 上，
-后 rename 上去的是两份内容的混合体——用户看到「学习记录莫名其妙少几条、还冒出
-乱码行」，完全无法复现。`freq` 有 3 秒节流但窗口仍可能重合；`phrase`/`pin` 每次
-`learn`/`set` 都整写。
-
-修法：`config::tmp_path()` 统一生成 `原名.<pid>.tmp`，`config::write_atomic()`
-统一「写 tmp → rename」（返回 `io::Result`，因为 rename 失败是常态路径不是异常）。
-`dict::merge_text` 也顺势从直接 `write` 改成原子写——半截的 `user_dict.txt`
-就是用户几年的词库。代价：崩溃会留下一个几百 KB 的 `.tmp` 垃圾，忽略不计。
-
-### 5. `CBN_SELCHANGE` 和 `STN_DBLCLK` 都是 1，双击链接打开三个浏览器
-
-`WM_COMMAND` 的过滤条件是 `code == 0 || code == CBN_SELCHANGE`，只看 code 不看
-发送者。设置窗底部那条「GitHub」链接是带 `SS_NOTIFY` 的静态控件，双击时依次发来
-两条 `STN_CLICKED`(0) 和一条 `STN_DBLCLK`(1)——三条全进 `on_command`，
-`ShellExecuteW` 开三个标签页。修法：`CBN_SELCHANGE` 按 id 收窄到唯一的下拉框
-（`id == ID_ROWS && code == CBN_SELCHANGE`）。
-
-**同类坑预警**：任何「按通知码过滤」的窗口过程都会遇到码值撞车，Windows 的通知码
-是**按控件类各编各的**。要区分控件类型，唯一可靠的是 `lParam` 里的子窗口句柄。
-
-### 6. 「重置」的确认文案被函数尾部的 `sync(h)` 立刻覆盖
-
-`ID_LEARN_RESET` / `ID_PIN_RESET` 写「已清空 N 条词频」后没有 `return`，落到
-`on_command` 尾部的 `sync(h)`，而 `sync` 又把那两个静态文本重写成统计文案。两次写
-在同一次 `WM_COMMAND` 内、中间没有绘制 → 用户永远看不到确认消息，那两行是死代码。
-修法：分支末尾 `return`（和 `ID_CLOSE` 一样）。
-
-### 7. 悬停气泡点完按钮不消失 + 拖动状态丢失捕获后不复位
-
-两条都在 `statusbar`：
-- `on_click` 从不调 `tip_hide()`，而 `tip_show` 有幂等早退。点「设置」→ 模态设置
-  窗弹出并抢前台，光标通常还停在按钮上 → 气泡一直浮在设置窗上面；点「符号」→ 软
-  键盘正好开在气泡的位置，压在键盘上沿。修法：`on_click` 开头 `tip_hide()`。
-- 拖动中本线程弹模态框（`ask_yes_no`）或别的窗口抢捕获，`WM_LBUTTONUP` 不再来，
-  `DRAG` 停在「已在拖动」→ 之后**不按任何键**移动鼠标，窗口也跟着走。修法：加
-  `WM_CAPTURECHANGED | WM_CANCELMODE` 分支清 `DRAG`（候选窗对同类场景早有处理）。
-
-### 8. 第 7 条的修法本身差点变成新 bug：`ReleaseCapture` 会同步发 `WM_CAPTURECHANGED`
-
-`WM_LBUTTONUP` 里原来是**先 `ReleaseCapture()` 再取 `DRAG`**。加上第 7 条那个分支
-之后，`ReleaseCapture` 会**同步**给本窗口发一条 `WM_CAPTURECHANGED`，把 `DRAG` 清掉
-→ 取到 `None` → **所有点击失效，而且不报任何错**。`candidate.rs` 的
-`WM_LBUTTONUP` 注释里早就写着这个坑（「顺序不能反」），浮窗这边没看。修法：先取
-状态再释放捕获。
-
-**这条是本轮最值得记的**：给「清状态」加一个消息分支时，必须先问「这个状态正常
-流程里是怎么被消费的」。`WM_CAPTURECHANGED` 不是只会在异常时来——正常松手也会来。
-
-### 9. 点击按「抬起位置」分发，按钮零间隙 + 3px 阈值 = 误触隔壁按钮
-
-四个按钮的矩形连续无间隙（`button_rects_are_contiguous` 钉住了），拖动阈值 3px。
-在「中/英」右缘 x=39 按下、向右抖 2px 到 x=41 抬起：按下点还算「中/英」，抬起点
-已经落到「全/半」→ 中英没切、全半角被翻了。候选窗早就要求「按下/抬起同一项」，
-浮窗没有。修法：`Drag` 里记按下时命中的按钮，抬起时要求一致（`click_idx` 纯函数
-+ 单测）。
-
-### 10. 多显示器下用主屏 metrics 钳位，副屏上的浮窗被拽回主屏
-
-`place()` 和 `tip_show()` 都用 `SM_CXSCREEN/SM_CYSCREEN`（**主屏**）。把浮窗拖到
-主屏右侧的副屏（x=2500），之后任何一次设置变更（`settings` 末尾无条件调
-`statusbar::refresh()`）都把它钳回 1752——**浮窗跳回主屏**；跟随模式下在副屏打字，
-浮窗离光标半个屏；副屏在主屏左侧（负坐标）时被钳到 0，直接消失。气泡同理。
-修法：`monitor_work()` + `MonitorFromRect(MONITOR_DEFAULTTONEAREST)` +
-`GetMonitorInfoW` 取**所在显示器**的工作区，拿不到才退主屏。
-
-### 顺带修的小项
-
-- `phrase::parse` 不按词去重：手改出重复行后 `learn` 只删得掉最后一条、`len()`
-  虚高、`words_with_code` 返回重复词。改成同词留一条、次数取大。
-- `freq` 老格式次数只并进**第一条**按码记录（`legacy.remove` 第二次返回 `None`），
-  多音字同一个词挂多条读音时另一条白白丢份额、拿到与否纯由行序决定。改成每条都并。
-- `pin::word_for` 查询侧不小写化，而 `parse`/`set`/`remove` 都小写化——不变量靠
-  调用链远端的 `textservice` 维持，太脆。入口处统一小写（常见输入本就小写，先扫一眼
-  有大写才分配）。
-- `fullscreen::covers_popup` 是死代码，`config::no_popup` 的 Auto 档重复实现了同一
-  规则。改成调用它——「什么时候该收候选窗」只能有一个出处。
-- 设置窗最小化后点浮窗「设置」用 `SW_SHOW` 唤不回来（对最小化窗口无效），改
-  `SW_RESTORE`。
-- 「从搜狗导入」双击会跑两次完整导入（窗口过程同步执行，排队两条 `WM_COMMAND`），
-  界面冻结两次、第二次必然报「没有新词」，用户以为功能坏了。加 5 秒时间去抖
-  （禁用按钮挡不住已排队的消息——那会儿窗口过程还压在导入里）。
-- 导入结果文案约 55 个全角字，`ID_NOTE` 只有 428px（13px 字体 ≈ 32 个全角字），
-  后半句直接被裁掉。改短，细节本来就在 `feihe.log` 里。
-
-### 复核过、确认没问题的部分
-
-- **锁与死锁**：`bump`/`rank`/`flush`/`clear` 的锁顺序没有「持 RwLock 再拿写锁」
-  的升级路径；跨模块（dict→phrase→freq）无锁嵌套；三模块的 `with_table` 都
-  `into_inner()` 兜底毒化。
-- **淘汰与减半**：`keep = 50000/8*7 = 43750` 精确整除，`t.len() - keep` 有前置保护；
-  `halve` 后 `seq` 不需要重置（它是「最近使用」与次数无关）。但 `(n+1)/2` 会把
-  相邻计数碾平（`2,1`→`1,1`），注释里原来写「相对顺序完全保留」是过于乐观，已改。
-- **`dict::search` 的 `lens`**：自造词按「等于输入」的码长参与排序，和词库里打满的
-  那个词平级，符合「码长=完整度」的排序键定义。
-- **`merge_text`**：文件导入和搜狗导入共用一份去重与校验，没有第二个实现。
-- **`sogou.rs` 的注音**：先整词查基础词库（多音字正确），查不到才逐字取第一条
-  读音；`base.bin` 是源文件顺序（`dictenc::build` 不排序），「第一条 = 最常用」
-  依赖 `dict.txt` 按语料词频排这个前提，仅影响基础词库没有的词，可接受。
-
-237 项单测（新增 4 条：按下/抬起同一按钮、老格式次数并进每条按码记录、
-phrase 同词去重、`tmp_path` 带 pid）；DLL 3885/3928 KB；安装包 1.73 MB；
-双架构 release 编过。**未打包、未安装**（等用户发话）。
-
-## 2026-10-29（下午二）按官方资料复查小鹤双拼 / 音形 / 自然码
-
-用户要求「搜官方资料，检查项目里有没有相关问题」。查了 flypy.cc（小鹤官方入门 +
-规则页）、自然码2000 使用手册、以及流传最广的那份自然码辅助码教程，逐条对代码。
-
-### 结论先说：小鹤这一侧是对的
-
-- **小鹤双拼韵母表**（`shuangpin.rs` 的 `XIAOHE_FINALS`）与官方键位图逐条一致，
-  含 `r` 同时担 `uan/üan/er`、`k` 担 `ing/uai`、`l` 担 `iang/uang`、`v` 担 `zh/ui/ü`。
-  拿词库里 **412 个真实音节**跑了一遍编码，**零漏编**。
-- **零声母三档**与官方一致（`a`→`aa`、`ai`→`ai`、`ang`→`ah`），
-  `xiaohe_button_is_annq` 那条钉子还在。
-- **小鹤形码**（`assist.txt` 第三列）与 `xhup_cache.txt` 官方缓存**逐条相同**
-  （7866 条两位码，141 字官方查不到）。没有漂移。
-- **一简字 26 个**与官方口诀「去我二人他 / 一是出哦平 / 啊三的发个 / 和就可了 /
-  在小才这 / 不你没」完全一致；**二简词 370 条**总数对得上。
-
-### 改掉的三处
-
-1. **`is_syllable` 把 `ong` 当成独立音节**
-
-   零声母分支原来只判「首字母是 a/e/o」，而 `ong` 也满足 → `os` 被当成合法码。
-   可 `ong` 在普通话里永远跟声母走（d-ong、zh-ong），没有独立成音节的时候。
-   后果是全拼智能分隔会多切出假边界。改成**白名单 12 个零声母韵母**
-   （啊哦额爱诶熬欧安恩昂鞥儿）。查过词库，没有任何一行把 `ong` 当音节用，改完不影响真实数据。
-
-2. **`promote_exact_shape` 在自然码下「每敲一个辅助码字母都算打满」**
-
-   判定用的是 `mode.max_keys()`，而自然码只有 1 键 → 敲第一个字母就等于打满，
-   于是**所有同部首的单字被提到词组前面**。用户打 `nihc` + `Tab` + `r`（你 是 亻）
-   想找「你好」，出来的第一位是「你」——每打一个两字词都被它自己的首字顶掉。
-   修法：加一道**「查询只有一个音节」**的闸（双拼按「两键」，全拼复用 `is_syllable`）。
-   单音节查询 = 我在指定这个字；多音节查询 = 我在筛这个词。
-
-3. **二简词首选/次选计数与文档差 1**
-
-   文件实际是 **272 首选 + 98 次选**（总数 370 对得上），文档和测试消息写的 273/97。
-   以文件为准改文档——总条目有测试钉着，拆分数没有官方第二来源可核，不去动数据。
-
-### 没改、但写进文档的：自然码辅助码是「简版」
-
-`assist.txt` 第二列取的是 **Unihan 康熙部首的拼音首字母**，而自然码官方辅助码是
-一套 **26 键部件表**（自然码2000 手册 + 那份流传最广的教程都是这个）。两者差得不小：
-
-| 部首 | 官方键 | 现在的简版 | 说明 |
-|---|---|---|---|
-| 日 月 曰 目 | `o` | `r` `y` `y` `m` | 官方口诀「圆圆的 o」 |
-| 扌 | `f` | `s` | 扶手 |
-| 车 虫 臣 辰 赤 齿 厂 川 | `i` | `c` `c` `c` `c` `c` `c` `c` `c` | ch 的双拼键 |
-| 豸 止 至 舟 爪 隹 竹 | `v` | `z` | zh 的双拼键 |
-| 山 石 尸 十 士 矢 殳 舌 身 豕 鼠 食 示 | `u` | `s` | sh 的双拼键 |
-| 宀 冖 疒 | `b` | `m` `m` `n` | |
-| 匚 冂 囗 | `k` | `f` `j` `w` | |
-| 阝 卩 | `e` | `f`/`y`/`j` | |
-| 廴 | `z` | `y` | |
-| 彳 | `x` | `c` | 行人 |
-| 罒 | `s` | `w` | |
-
-按部首表粗算，**至少 1500 个字**（zh/ch/sh 那三组 1540 + 日月目 230）落点不同。
-另外官方的「独体字取笔画码（横竖折→a、点→d、撇→p，`金` = `jnp`）」这条**没有实现**。
-
-**为什么没直接改成官方表**：官方资料自己就打架——§2.1 说独体字用笔画码（`金`=`jnp`），
-§3 的部件表又把 `金` 列在 `j` 下；`亠` 在部件表里是 `w`、在「特殊记忆」里是 `d`。
-再加上要按《新华字典》的**部首变体**取码（`氵`→`d` 而 `水`→`u`、`扌`→`f` 而 `手`→`u`），
-Unihan 只给部首序号、给不出变体，改起来是「用一批猜的码换掉另一批猜的码」。
-所以这轮只把**事实写清楚**：`assist.rs` 模块注释、README、`docs/使用帮助.md`
-都标明「简版，不是官方部件表」，并加了 `ziranma_column_is_the_radical_initial_variant`
-把差异钉住——真要换成官方表，得连测试和文档一起动，不能悄悄换掉让老用户肌肉记忆失效。
-
-239 项单测全绿（+2：`ong_is_not_a_standalone_syllable`、
-`ziranma_column_is_the_radical_initial_variant`）；零新增 clippy 警告。
-
-### 追加：默认辅助码改成小鹤音形（自然码保持简版）
-
-用户拍板「保持简版，默认辅助码设置为小鹤音形」。所以：
-
-- `Config::DEFAULT.assist_mode`：`Ziranma` → `Xiaohe`。
-  **不动迁移** —— `config.ini` 里已经写着 `assist_mode=ziranma` 的老用户保持原样，
-  只有全新装（没有 config.ini，或缺这个键）才落到小鹤音形。理由是没法区分
-  「默认就是它」和「用户主动选的它」，硬迁移会把后者的选择抹掉。
-- 加测试 `default_assist_is_xiaohe`：默认值、缺键回落、显式 `ziranma` 不被覆盖，三条都钉住。
-- 文档同步：README、`docs/使用帮助.md`（三处：方案表、选择建议表、设置项清单）、
-  `index.html`。设置窗不用改——单选状态由 `sync()` 从配置读，`CheckRadioButton` 自然会落在小鹤那一项。
-
-顺带确认：辅助码的形码表与双拼方案解耦，微软双拼 + 小鹤音形照样能用，所以默认值
-不需要跟着 `scheme` 走。
-
-## 2026-11-04 借鉴青简（第一批）：模糊音 + 设置窗滚动
-
-用户拿 `d:/codes/qingjian`（青简，GPL-3.0）来问有没有可借鉴的，列了 10 项，回「1~9 都
-可以」。按依赖关系分三批做，这是第一批。
-
-**许可证先摆清楚**：飞鹤 MIT、青简 GPL-3.0-or-later，**代码一行都不能拷**（会传染成
-GPL）。这轮全部是自己重写，只借了「做什么」和「为什么这么做」。
-
-### 1. 模糊音（`src/fuzzy.rs`，新文件）
-
-**核心决定：在双拼码上按位置换键，不做「解码成全拼 → 套规则 → 重新编码」。**
-
-双拼每个音节恰好两键，声母位和韵母位是固定的，所以一条规则就是某个位置上的一次
-换键：小鹤里 `z=zh` 就是声母位 `z ↔ v`（`v` 是 `zh` 键），`an=ang` 就是韵母位
-`j ↔ h`。反过来那条路要先解决「`go` 到底是 `guo` 还是 `g`+`o`」——`encode_chars`
-对声母+韵母是**构造式**的，`b`+`uo` 会给出和 `bo` 一样的码，没有真实音节表就分不清。
-按位置换键不需要音节表。
-
-三个必须守住的细节：
-
-1. **声母规则只能用在声母位。** `l`/`r`/`n` 同时是韵母键（`l`=`iang/uang`、
-   `r`=`uan/er`），跑错位置会把 `liang` 变成 `liar`。韵母规则同理：`f=h` 用到韵母位
-   上 `en` 就成 `eh` 了。有单测钉住（`initial_rules_never_touch_the_final_slot`）。
-2. **零声母是小鹤的特例。** 小鹤零声母不是「声母位 + 韵母键」：`an`→`an`（双字母
-   保留全拼）、`ang`→`ah`（三字母用韵母键）。所以 `an=ang` 在零声母上换的是
-   `n ↔ h`，和有声母时的 `j ↔ h` 不是一对。微软双拼没这问题（零声母是 `o`+键）。
-3. **换出来的码要验结构合法性。** `shuangpin::is_valid_pair` 用「声母键 × 韵母键 +
-   零声母组合」预生一个集合，宽松但有效——多收一个只是多一次空查询，漏收会让模糊音
-   直接失效。
-
-**排序：原样永远在前，模糊命中让一步。** `freq::rank` 多了一个 `tiers` 参数，
-`tier>0` 的候选计数先减 `fuzzy::COUNT_PENALTY = 3` 再比。为什么不是硬排到最后：
-`n=l` 的人打 `lan` 就是想打「南」，选过十几次理应翻上来；但减 3 意味着「至少选过 4 次」
-才翻得过一个原样命中，一次误开模糊音不会立刻打乱手感。
-
-**合并要按词去重。** 同一个词可能既被原样命中也从模糊变体冒出来（`南` 的码是 `nj`，
-打 `lj` 时它从 `lj` 那支也能查到）。`dedupe_keep_first` 保留先出现的那份——原样支路
-排在前面，所以精确命中不会被顶掉。**三个平行数组（词 / 码长 / 层级）必须同步删**，
-这里踩过一次：`retain` 拿着 `&mut` 而集合借着 `out` 里的字符串，借用检查过不去，
-改成「先标记、集合销毁后再删」两步。
-
-**只在双拼下生效。** 全拼模式音节长度不固定，位置前提不成立。设置窗文案和文档都写了。
-
-### 2. 设置窗改成自适应高度 + 滚动
-
-加模糊音九个勾选后内容 994px，而客户区固定 900px——更要紧的是 **1366×768 的笔记本
-根本装不下**（900 + 标题栏 ≈ 940 > 768 - 任务栏）。与其继续加高，不如让它滚：
-
-- `want_client_h()`：屏幕高度 - 120，夹在 460..820。
-- `WS_VSCROLL` + `WM_VSCROLL` / `WM_MOUSEWHEEL`；`init_scroll` 在 `build` 末尾把每个
-  子控件的 `(hwnd, x, y)` 记下来，滚动时按「基准 - 偏移」重摆，**不重算布局**。
-- **「关闭」按钮不参与滚动**：滚到一半找不到关闭按钮很恼人。滚到最底时内容底边正好
-  落在 `client_h - FOOTER_H` 上，不会被按钮压住（算过：994 的内容、820 的窗口、
-  226 的滚动范围，底边 768，按钮 780）。
-- `WM_VSCROLL` 拖滑块要用 `GetScrollInfo` 拿 `nTrackPos`，不能用 wParam 高字——
-  那个只有 16 位，内容超过 32767px 会翻符号。
-
-**踩到一个系统 API 的坑**：`AdjustWindowRectEx` **不**为 `WS_VSCROLL` 留位置
-（MSDN 明说要自己加 `SM_CXVSCROLL`）。不补这一条，客户区会窄 17px，右边那列控件
-（`关闭` 按钮右缘 444 > 443）被滚动条压掉一截。
-
-### 顺带
-
-- `config` 新增 `fuzzy` 字段，写成 `fuzzy=n_l,en_eng`（逗号分隔的规则名，全关是空串），
-  比 9 个布尔键好读也好迁移；默认 `Rules::NONE`。
-- 设置窗九个勾选的 ID 连续（`ID_FUZZY_FIRST + 序号`，序号就是 `fuzzy::NAMES` 的下标），
-  派发和回填都是一次循环，加规则不用回设置窗改代码。
-- README / index.html / 使用帮助 里「模糊音：无」的表述全部改掉，「现在还做不到的」
-  清单里删掉这一条。
-
-254 项单测（+13：模糊音 10、rank 层级 2、配置往返 1），零新增 clippy 警告。
-**未打包，版本号未动**（等用户发话）。
-
-## 2026-11-04（二）借鉴青简第二批：计算模式 + 码点 + 自定义短语
-
-第一批是模糊音 + 设置窗滚动（见上一节），这一批做 #8 快捷输入扩充和 #6 自定义短语。
-**青简仍是 GPL-3.0，飞鹤是 MIT，代码一行没拷，全部自己重写。**
-
-### 1. 为什么 `v` 不能当表达式前缀（这是本批最要紧的一条）
-
-青简的表达式模式用 `v`：「`v` 不是任何拼音音节的开头」。那对**全拼**成立，对
-**双拼**是灾难——小鹤里 `v` 就是 `zh` 键，`vi` / `vs` / `vu` / `vhui` 全是真实编码，
-拿 `v` 当引导符会堵掉一大片常用字。
-
-所以先有 `/` 引导符，再有 `/c` 子前缀（calculate）。`/u` 给码点，`/uuid` 归它
-（`uuid` 不是合法十六进制，不会和码点撞）。
-
-### 2. 数字键归谁：进了 `/c` 就归算式
-
-这是设计上唯一有争议的地方。输入法里数字键 = 选候选，而算式要数字，同一个键两种
-含义只能挑一个。选「进了 `/c` 就归算式」，理由：
-
-- 可预测：「在写算式」这个状态是用户自己按出来的，进去之后规则单一；
-- 反例（「有结果时数字回去选词、没结果时数字进算式」）在 `/c1` 上直接崩——`/c1`
-  本身就是完整数字、有四个候选，但用户可能想接着打 `12`。歧义无解，不如不设歧义。
-
-代价：算式态下换候选要靠空格（第一项）/ 左右 / 上下 / 鼠标。文档和验证清单都写了。
-
-配套：`/c` 状态下按字母只收 `x`（乘号），其它字母**吞掉**——`/c1+2a` 会算不出来、
-候选整片消失，比吞掉一个手误的键更让人困惑。
-
-### 3. 三个纯函数模块
-
-| 文件 | 干什么 | 为什么单独放 |
-|---|---|---|
-| `src/number.rs` | 阿拉伯数字 → 读法 / 财务大写 / 小数 / 金额 | 规则多且容易写错（四个零读一个、节间补零、一十只有开头才省、亿是 8 位不是 4 位），单独放才好逐条钉测试 |
-| `src/calc.rs` | 算式求值 + `/c` 的三种形态分派 | 求值要递归下降；分派顺序（数字 → 日期 → 算式）本身是规则，不是实现细节 |
-| `src/custom.rs` | 自定义短语 + 时间变量展开 | 和 `pin` / `phrase` 同构，但只读（用户手写文件） |
-
-`calc::forms` 里两个顺序决定值得记：
-
-1. **数字形态先于日期**：`1998.3` 是「一千九百九十八点三」，不是「1998 年 3 月」。
-2. **年份必须四位**：`98-3-8` 是减法（87）。两位年份的世纪猜不出来，猜错了比不支持更糟。
-
-`number` 里几处踩过的坑：
-- 年份逐位读用「〇」（二〇〇六），和补位的「零」（一百零五）不是一回事，两套表。
-- 金额「有元无角有分」要在元后补零（壹佰贰拾叁元零伍分），「不足一元不写元」（五角）。
-- 超 16 位原样返回：给不出读法就别硬给。
-
-### 4. 自定义短语：配置 ≠ 学习
-
-`custom.txt` 每行 `码<TAB>文本`，支持 `{year}` 这一套变量。**展开在查询时做，不在
-加载时做**——`{day}` 的意义是「今天」，缓存住就跨天错一天。
-
-排序位置是这轮唯一要想清楚的事：放在 `freq::rank` 之后、**置顶之前**，`place` 到
-0、1、2 位。理由：
-
-- 不参与词频排序：这是配置不是学习结果。写了 `dz` → 地址，打 `dz` 第一位就该是它，
-  不该先被「上次从词库里选了别的」顶几次才学会。
-- 但压在置顶下面：置顶是「临时想换一个」的即时动作，比改文件更近。
-
-设置窗加了「编辑自定义短语…」按钮（`ShellExecute` 交给系统默认编辑器），**文件不存在
-时先写一份带注释的模板**——空文件看不出格式。模板只在点按钮时写，启动时不写：
-写了的话用户删掉文件想清空，一重启又长回来。
-
-### 5. 顺手修的一处：`/c` 的候选不该被学进词频
-
-`commit_with` 里 `freq::bump(&code, &word)` 原来不分情况。算式态下 code 是
-`/c1+2`、word 是 `3`，学它纯属往 `freq.txt` 里堆垃圾（下次也命不中）。加了
-`if !code.starts_with(quick::PREFIX)`——和 `pick_index` 里那条早了半年的判断对齐。
-
-### 6. `code_ok`：中间状态必须合法
-
-用户打 `/uuid` 会依次经过 `/u`、`/uu`、`/uui`。任何一步被 `code_allowed` 拒掉，
-组合串就断，用户看到「打一半汉字消失」。所以判的是**前缀**：
-`"uid".starts_with(rest)`（`rest` 是去掉首个 `u` 之后的，而 `uuid` 自己也是 `u`
-开头——这里写错过一次，`/uui` 被拒、UUID 一条都出不来）。
-
-279 项单测（+13：number 7 / calc 6 / quick 5 / custom 5 / textservice 2，扣掉合并的），
-零新增 clippy 警告。**未打包，版本号仍是 0.3.10**。
-
-## 2026-11-04（三）借鉴青简第三批：拼写纠错
-
-清单里的 #5。这一项改了两版才定下来，过程比结论值钱，都记在这里。
-
-### 1. 第一版判据是错的：双拼里不存在「结构非法的音节」
-
-最初的设想：小鹤的 `h` + `x`(`ia`) 拼出 `hia`，普通话没这个音节，所以「码里有一个
-非法音节」就是打错了。用 `shuangpin::is_valid_pair` 判。
-
-**跑真实词库一看就崩了。** `is_valid_pair` 是「声母键 × 韵母键」的笛卡尔积，回答的
-是「结构上可能吗」，`h`+`x` 在它眼里完全合法。更根本的是：**小鹤的 26 个韵母键把
-字母表铺满了**，`x` 既是 `ia` 也是 `ua`，所以 `hx` 是 `hua`（话）——有字，正经音节。
-
-    音节 hx: ["话", "花", "化"]
-
-于是 `nihx` 是 `ni` + `hua`，两个音节都有字，只是「你话」不在词库里。判据换了第二版：
-「哪个音节在词库里查不到字」。同样没用——这个条件几乎永远不成立。
-
-**真正的形态是：每个音节单独都有字，凑在一起没有词。** 那就别猜是哪个音节坏了，
-每个位置都试一遍，让词库决定。
-
-### 2. 第二版的坑：纠错把自动分词挡死了
-
-把纠错写进 `dict::search`（候选为空就试变体）之后，
-`can_compose_char_by_char_without_the_whole_word` 当场红了：`checked = 0`。
-
-原因：这个测试挑的是「词库没有整词、但每个音节都有字」的组合（`an bin`、`niu an`
-之类），断言 `dict::lookup(code, 1)` 为空 → 走分词模式逐字组词。加了纠错之后
-`lookup` 不为空了，`maybe_split` 的「零候选才分词」前提被破坏，**逐字组词这条路
-整个被堵死**。用户打「安并」会看到一屏「按病 / 暗冰」，凑不出他想要的字。
-
-修法：**纠错从 `search` 里摘出来，做成 `dict::corrected`，调用顺序由 `textservice`
-把关**：
-
-    正常查询 refresh → 自动分词 maybe_split → 还是空才 try_correction
-
-`search` 是「查词库」，纠错是「查不到之后的补救」，两者混在一个函数里，任何一个
-「查不到」的下游判断都会被污染。**这条和第一批的「显示路径要过同一道闸」是同一类
-错误——只是这次是「查询路径不能偷偷放宽」。**
-
-### 3. 最终规则
-
-- **只换一个键**，不删不加：双拼每音节恰好两键，删一个或加一个会让后面所有音节
-  错位，猜中的概率比不猜还低。这是双拼和全拼纠错的根本区别——全拼那边
-  「多打/少打一个字母」是主力形态，双拼这边完全用不上。
-- **最后按的键先试**：从最后一个音节往前，音节内先换第二键（韵母位）再换第一键。
-  `nihx` 的第一条候选因此是 `nihc`（你好），不是从前一个音节瞎改出来的。
-- **每个音节位置最多 32 个变体、总数 96**：不按位置限的话，变体全被最后一个音节
-  占满，「第一个音节打错」照样救不回来。
-- **至少 4 键**：单音节没词的情况太少，猜出来的一屏全是噪音。
-- **全拼模式直接返回空**：纠错是按「每音节两键」切位置的，全拼没有这个前提。
-
-### 4. 学习不用另开一张表
-
-纠错候选上屏时 `commit_with` 记的是「**错码** + 词」（`nihx` → 你还），
-`dict::corrected` 末尾又调了一次 `freq::rank`，所以同一个错码再打，「你还」会被
-提前。**复用了现有的学习路径，没有新增文件、没有新增格式。**
-
-### 5. 性能
-
-2 音节约 40 µs、3 音节约 115 µs（96 个变体各查一次 mmap 二分）。只在候选全空时
-触发一次——打错的过程中间态是奇数长度，根本走不到这里。
-
-### 6. 留下的探测测试
-
-`dict::tests::zz_probe_correction`（`#[ignore]`）会把几组真实案例的「直接查询 /
-纠错结果 / 单次耗时」打出来。改 `correct` 的生成顺序或上限之后跑一遍，比空想快。
-
-287 项单测（+8：usable 边界、最后音节优先、包含目标词、每位置都轮到、结构合法、
-数量上限、两种方案不同、Fix 记录），两种词库配置都绿，零新增 clippy 警告。
-**未打包，版本仍是 0.3.10。**
-
-## 2026-11-04（四）中文态 Shift+4 出 ￥ + 候选降权（鼠标）
-
-用户报：「中文模式输入 shift+4 无法输入中文的货币符号，而是美元符号」；并拍板降权
-**不用快捷键，改成鼠标操作**（原计划是 `Ctrl+Shift+数字`）。
-
-### 1. Shift+4 → ￥：先要弄清「谁在出这个字符」
-
-中文态按 Shift+4 打出的是 `$`，而搜狗、微软拼音、QQ 在中文态给的都是 `￥`(U+FFE5)。
-根因不是映射表漏了一条，而是**整条 Shift 组合都被设计成「交还应用」**——`chinese_punct_for`
-开头一句 `if shift_down() { return None }`，理由是「Shift 组合的字符由键盘布局决定，
-我们按 VK 自己映射会在非 QWERTY 布局上算错」。这条理由至今成立，所以不能简单删掉。
-
-三个必须一起改的点，少一个都不生效：
-
-1. **`OnTestKeyDown` 必须认下这个键**。经典宿主（记事本、Word）里 `OnTestKeyDown`
-   返回 FALSE 就不派发 `OnKeyDown`，我们连看都看不到——这正是「改了半天毫无反应」的
-   典型形态。
-2. **`OnKeyDown` 的处理要放在 `match vk` 之前**，且要接住三种态（**分词 / 组合 /
-   空闲**）。只做「空闲态」的话，`nihc` 打到一半按 Shift+4 会落进
-   `0x31..=0x39` 那条分支去**选第 4 个候选**——用户按的是符号，得到的却是选词。
-3. **布局闸**：`VkKeyScanExW('$', GetKeyboardLayout(0))` 反查「这个布局上 `$` 要按哪个
-   键、带什么修饰」，要求 **VK_4 + 恰好 Shift**。法语 AZERTY 的数字键要按 Shift 才出
-   数字（`Shift+4` = `4`），德语等布局的 `$` 要 AltGr——这两种情况都不换，交还应用。
-   用 `VkKeyScanExW` 而不是 `ToUnicodeEx`：前者没有键盘状态副作用（`ToUnicodeEx` 碰
-   到死键会改内核状态）。
-
-**只做 4 这一个键**。`Shift+6`→`……`、`Shift+-`→`——` 这些各输入法并不统一（有的给
-`^`），猜错了比不支持更糟；`￥` 是唯一「所有中文输入法都这么出、用户天天在用」的组合。
-
-性能：`dollar_on_shift` 做成闭包，非 `VK_4` 的键**一次 FFI 都不做**（有单测钉住：
-`layout_probe_only_runs_for_key_4`）。这函数在每次按键的判定路径上跑两份。
-
-### 2. 候选降权：放哪儿、为什么这么放
-
-`src/demote.rs`，`demoted.txt` 每行 `编码<TAB>词`。和 `pin` 的三点不同：
-
-- **一个码下可以按下去多个词**（`HashMap<String, HashSet<Arc<str>>>`），置顶是一码一词；
-- **只重排、不插入**：降权的词不在候选里就什么都不做。硬塞一个不在候选里的词等于
-  给用户一个错字（这是 `promote(insert_missing=true)` 和它的本质区别）；
-- **写盘走 `mutate`（读盘→改→写盘）**，理由同 `pin`：合并语义会把「恢复」灌回来。
-
-位置：`freq::rank` **之后**、所有显式提权之前。
-- 放在 `rank` 之前等于白做——排序立刻又把它顶上来；
-- 放在一简 / 二简 / 自定义短语 / 置顶之后，会把这些显式选择也压掉。**降权压的是
-  「默认排序」，不是用户的显式选择。**
-
-### 3. 触发方式：Ctrl+左键（不是快捷键）
-
-左键是选词、右键是置顶，两个都占了。第三只手势用 `Ctrl`+左键：
-
-- 不占任何全局组合键，不会和别的软件抢键（项目里刚因为同样的理由去掉过全角切换的
-  快捷键，用户这次也明确说「不用快捷键了，让用户用鼠标操作」）；
-- 再点一次同一个词 = 恢复，手势复用，不必记第二个组合。
-
-`MK_CONTROL`（0x0008）在 windows-rs 0.62 里**没导出**（和 `SS_NOTIFY` 一样），写字面值。
-判断用消息自带的 `wParam` 键状态、**不**去问 `GetKeyState`：前者是事件发生那一刻的
-状态，后者会被「点完立刻松开 Ctrl」骗到——把词上了屏，而用户按的是降权。
-
-`candidate.rs` 加了第三个回调槽 `ON_DEMOTE`（连同 `clear_demote_click_handler` 在两条
-销毁路径上清干净），`pin_target` 改名 `candidate_target`——它现在同时服务置顶和降权。
-
-设置窗加一行「降权 N 条 · Ctrl+左键点候选」+「清空」。**这行文案就是唯一的发现入口**
-（不占快捷键的东西用户摸不出来），所以措辞要能自解释。
-
-297 项单测（+7：Shift+4 三条、demote 四条），两种词库配置都绿，零新增 clippy 警告。
-DLL 3980 → **4009 KB**（+29 KB，主要是新模块的代码与字符串）。**未打包，版本仍 0.3.10。**
-
-### 0.3.10 → 0.3.11 打包
-
-版本号五处同步（Cargo.toml 唯一源头 / `installer/feihe.nsi` 的 `APP_VER` / README /
-使用帮助 / index.html），历史章节里的旧版本号不动。
-
-`build_setup.ps1 -SelfTest` 一把过：
-- 64 位 `feihe.dll` **4009 KB**（Machine=0x8664）、32 位 **4048 KB**（Machine=0x014C），
-  发布构建 `-NoUserDict`，`base.bin` 46493 条 / 2895 KB
-- `dist\Feihe-Setup-0.3.11.exe` **1.83 MB**（1,917,769 字节），FileVersion / ProductVersion
-  都是 0.3.11
-- 自检：静默装到 `%TEMP%` 后核对两份 DLL + 用户手册的 SHA256，与构建产物一致
-  （`02596522…` / `622B803B…` / `B9669F51…`），64/32 位 `DllGetClassObject` → `CreateInstance`
-  两条路都 PASS
-
-0.3.10 之后累积了四批改动（模糊音、`/c` 计算与自定义短语、拼写纠错、降权 + `Shift+4`），
-DLL 各涨 123 KB / 122 KB，安装包 1.73 → 1.83 MB。文档顶部的体积数字同步成
-「1.83 MB / 装完约 7.9 MB」（装完 = 两份 DLL 之和 8057 KB）。
-
-**没有装到 `C:/soft/Feihe`**（用户规矩：不代跑安装包）。
-
-### 追加：中文态 Shift 标点补全（…… —— 《》）
-
-用户接着报「Shift+6 应该是省略号、Shift+- 是破折号、`<>` 应该出书名号」。上一节那套
-单点实现（`chinese_shift_punct` 里 `if vk != VK_4`）自然改成**表驱动**：
-
-```rust
-const SHIFT_PUNCT: [(u8, char, &'static str); 5] = [
-    (VK_4.0 as u8, '$', "￥"),
-    (VK_6.0 as u8, '^', "……"),
-    (VK_OEM_MINUS.0 as u8, '_', "——"),
-    (VK_OEM_COMMA.0 as u8, '<', "《"),
-    (VK_OEM_PERIOD.0 as u8, '>', "》"),
-];
-```
-
-第二列是**布局校验的锚点**，第三列是中文里该出的东西。查表命中后才问
-`layout_shift_char_is(vk, ascii)`（`VkKeyScanExW` 反查「这个布局上这个 ASCII 是不是
-这个键 + 恰好 Shift」），所以 AZERTY / 德语布局自动失效。
-
-三点值得记：
-
-1. **返回值从 `Option<char>` 变成 `Option<&'static str>`**。省略号是「……」、破折号是
-   「——」，都是**两个**码位，`char` 装不下。调用方原来那句 `encode_utf8(&mut buf)`
-   直接去掉，把 `&str` 交给 `commit_*`——那两个函数本来就收 `&str`。
-2. **`Shift+-` 在组合态原本是「上一页」**（`handle_page_key` 不看 Shift）。新分支放在
-   `handle_page_key` 之前，所以现在组合态按 `Shift+-` 是「上屏候选 + 破折号」。这是
-   刻意的：`-` / `=` 翻页是**不按 Shift** 的手势，按住 Shift 的人要的是破折号。
-3. **`Shift+6` 原本会去选第 6 个候选**（`0x31..=0x39`），同理被新分支挡在前面。
-
-新增 `zz_probe_shift_table`（`#[ignore]`）：在真机上打印五个锚点的布局命中情况。
-排障「按了没反应」时先跑它——某一行 `布局命中=false` 就说明那个布局上这个字符本来就
-不在 Shift 上，我们按设计不换。本机（US）五个全 true。
-
-298 项单测（+1 净：拆成三条并补一条表锚点校验）；文档四处同步（README 标点表、
-使用帮助标点表 + 两段说明、index.html 卡片、验证清单 M3.53 共 7 条）。
-**这一版没有进 0.3.11 安装包**（那个包是这轮改动之前打的）。
-
-重打包（用户选「同名重打包 0.3.11」，不升号）：
-- 64 位 4009 KB / 32 位 4048 KB（与上一版同尺寸：只改了一张表 + 分支顺序）
-- `dist\Feihe-Setup-0.3.11.exe` 1.83 MB，自检 SHA256 全对
-  （`E33EBB48…` / `35C668F2…` / `D2EF85FF…`），64/32 位 CreateInstance PASS
-- **这个同名包的字节和 10:02 那版不同**（多了 Shift 标点），别拿旧包当同一份
-
----
 
 ## 中文标点按搜狗补全（`！？：（）＋～` + 成对引号）
 
@@ -3738,9 +2300,6 @@ chinesecj「免费公开」——免费不等于可再分发。MIT 项目打包�
 
 ### 路线 B：内置表（同日补上）
 
-在线语料这条路被堵死了：这台机器的出口只有几十 KB/s（中文维基 dump 3.4 GB，不现实），
-Tatoeba 的中文语料又太小。所以走了**第三条路——不需要语料**：
-
 **从词库的复合词反推词对。** rime-ice 的 `base.dict.yaml` 有 54 万条带词频的词，
 其中大量是复合词。把每个 ≥ 4 字的复合词按**最短前缀**切开（两段都 ≥ 2 字），
 就得到一条 `前段 → 后段`，权重取那个复合词自己的词频：
@@ -3776,328 +2335,6 @@ Tatoeba 的中文语料又太小。所以走了**第三条路——不需要语�
 
 ---
 
-## Android M1：拆出 `feihe-core`（第一批 8 个模块）
-
-起因见 `docs/Android-方案.md`：`windows` crate 在 `aarch64-linux-android` 上编不过，
-所以只要引擎代码还挂在同一个 crate 里，Android 端**一行都复用不了**——哪怕这些模块
-本身一个系统调用都不碰。
-
-### 布局为什么是「根包 + `core/`」，不是 `crates/win` + `crates/core`
-
-根 `Cargo.toml` 同时是 workspace 根和 Windows 侧的包（`feihe` = TSF shell），
-平台无关的东西放 `core/`（`feihe-core`）。**不**把 Windows 侧也挪进 `crates/win`：
-`installer/build_setup.ps1`、`build.ps1`、`repair.nsi` 里到处是
-`target\<triple>\release\feihe.dll` 和 `src\*.txt` 的路径，挪一下要改五个脚本，
-换不来任何收益。目录形状服从工具链，不服从审美。
-
-### `pub use` 挂回根：刻意不动调用点
-
-```rust
-// src/lib.rs
-pub use feihe_core::{assist, brief, brief2, calc, correct, fuzzy, number, shuangpin};
-```
-
-有了这句，`crate::shuangpin::encode(…)` 之类的**老路径一个字都不用改**。这是刻意的：
-搬家要是不动调用点，将来真出了回归，才能确定问题在搬家本身而不是顺手改的那几行。
-代价是 core 里的模块对外全部 `pub`（原来有几个 `pub(crate)`）。
-
-### 第一批搬什么、为什么不搬
-
-搬：`shuangpin` `fuzzy` `correct` `number` `calc` `brief` `brief2` `assist`——即
-「零个 `crate::` 外部引用」的叶子。共 62 项测试。
-
-没搬，各有原因：
-
-| 模块 | 为什么留 |
-|---|---|
-| `dllcount` | 零依赖，但它是 COM 引用计数（`DllCanUnloadNow`）。Android 没有 COM，放进 core 是撒谎 |
-| `dictenc` | 能搬，但单测 `load_all_entries` 要扫 `$CARGO_MANIFEST_DIR/src/*.txt` 做全量编码校验。搬进 `core/` 之后 `src` 变成 `core/src`，只剩两个 txt，测试会**静默变成空跑**（照样绿，只是什么都没验）。留到第二批跟 `dict` 一起处理 |
-| `freq` `next` `pin` `phrase` `demote` `custom` | 都要 `config::dir()` 拼数据文件路径。等路径注入做完 |
-| `dict` / `hint` / `fancha` | 依赖上面那些 |
-
-### 三个会安静咬人的地方
-
-1. **`cargo test` 默认只测当前包。** 拆完在根目录敲 `cargo test`，core 那 62 项被
-   **静默跳过**——测试全绿，但少跑了一大半。所以 `Cargo.toml` 里写了
-   `default-members = [".", "core"]`，用配置堵死，不靠人记得加 `--workspace`。
-2. **`build.rs` 的 `#[path]` 指向 `core/src/shuangpin.rs`。** 它和 `src/` 下的文件
-   靠文件名认路，哪天 `src/` 里又冒出一个同名文件，就会静默编到旧的那份去（编译
-   不报错，行为不对）。改 `build.rs` 前先 `ls` 一眼。
-3. **`assist::RAW` 从 `pub(crate)` 升成 `pub`。** `dict.rs` 里那条「每个字的形码都能
-   被辅助码表命中」的单测要读它，跨 crate 之后 `pub(crate)` 就看不见了。
-
-顺带把两个生成脚本的输出路径改了：`tools/gen_assist.py` → `core/src/assist.txt`、
-`tools/gen_brief2.py` → `core/src/brief2.txt`。不改的话下次重新生成会写回 `src/`，
-然后 `include_str!` 找不到文件——这种错误还算好发现，怕的是两个同名文件同时存在。
-
-### 验收
-
-- 308 项测试（246 + 62）默认配置和 `FEIHE_NO_USER_DICT=1` 都全绿，**一条没丢**。
-- 发布模式 DLL **4285 KB**，拆分前 4284 KB——差的 1 KB 是 crate 边界带来的对齐差异，
-  `include_str!` 的数据和 LTO 结果都没变。
-- core 自身 **零 clippy 警告**（既有那 38 条全在 `src/`）。
-- 下一步：`config::dir()` 改成 `OnceLock<PathBuf>` + `init(dir)`，然后搬
-  `freq` / `next` / `pin` / `demote` / `custom`，再搬 `dict` + `dictenc`，最后才是
-  `textservice` 拆纯状态机（唯一有风险的一步）。
-
----
-
-## Android M1：`config` 搬进 core（两个钩子），以及 JNI 链路打通
-
-### `config` 为什么卡了两轮
-
-它是 `freq` / `next` / `pin` / `phrase` / `demote` / `custom` 的前置（它们都要
-`config::save()`），但自己挂着两处 Windows 依赖。两处都用**注入**解决，效果是
-`config` 里一行系统调用都不剩：
-
-| 原依赖 | 改成 | 为什么这么拆 |
-|---|---|---|
-| `resolve_dir`（问 DLL 路径、试写、首次迁移） | 壳侧 `src/datadir.rs` + `paths::set_resolver` | 「数据放哪」是壳的事，「怎么写」是 core 的事 |
-| `no_popup()` → `fullscreen::covers_popup` | `config::set_fullscreen_probe` | QUNS 是 Windows API；**没注册时按「不该收」处理**——多弹一个候选窗只是碍眼，该弹不弹像彻底坏了 |
-
-**`DllMain` 只注册、不执行。** `resolve` 会写探针文件、做首次迁移，那是文件 I/O，
-在 loader lock 里做会卡住甚至死锁。所以交进去的是函数指针，真正执行发生在第一次
-要读写数据文件时。
-
-### 测试进程没有 `DllMain`——这条必须补
-
-搬完第一轮测试直接红了 66 条：`paths::dir()` panic。因为单元测试的产物是个 exe，
-`DllMain` 根本不会执行，解析器永远没注册。
-
-修法是加一层壳侧门面 `src/config.rs`：
-
-```rust
-pub use feihe_core::config::*;          // 实现和 16 项单测都在 core
-
-#[cfg(test)]  pub fn dir() -> PathBuf { crate::datadir::legacy_dir() }   // 老行为
-#[cfg(not(test))] pub fn dir() -> PathBuf { feihe_core::paths::dir() }
-```
-
-但光有这一层**不够**：core 里的 `config::load/save` 走的是 core 自己的 `path()`，
-不经过门面。所以 `test_guard()`（所有碰配置的测试都要拿的那把锁）顺便注册解析器，
-一次注册、后面全命中。这把锁成了测试的锚点，这一点写进了注释，别删。
-
-### 两个不能加 `#[cfg(test)]` 的函数
-
-`test_guard` / `set_no_popup_for_test` 原来都是 `#[cfg(test)] pub(crate)`。搬进 core
-之后，**调用方在另一个 crate 里**——core 正常编译时这两个函数不存在，壳的测试就编
-不过，而且报错位置飘到壳里，看起来跟这把锁毫无关系。改成 `#[doc(hidden)] pub`，
-名字带 `for_test` 让人一眼知道不该在产物里调。
-
-### JNI：为什么先搬 `encode_pinyin` 上去
-
-链路上要验的是「`.so` 能编出来、能装进 APK、符号对得上、字符串能来回」。验证这件事
-不需要词库——`nihao → nihc` 一眼能看出对错，纯函数、不依赖状态。拿 `add(a,b)` 验不出
-任何东西，拿它验能顺带证明 `shuangpin` 在 ARM 上行为一致。
-
-三个已经在真机前能验的点（命令见 `docs/Android-方案.md` §12.5）：`.so` 是 ELF64
-AArch64、`llvm-nm -D` 里三个 `Java_` 符号、APK 的 `lib/arm64-v8a/` 里文件在且未压缩。
-
-**每个 JNI 入口都包 `catch_unwind`。** Rust panic 穿过 FFI 边界 = 进程 abort = 用户
-正在写的文档没了。宁可这次调用返回空串。也正因为要 catch，`profile.release` 里
-**不能**设 `panic = "abort"`——设了就没得 catch。
-
-### 链接器的两个 Windows 专属坑
-
-1. `aarch64-linux-android24-clang.cmd` 是批处理包装，会把
-   `-Wl,--version-script=...` 搞坏，报错还是 **GBK 中文**。改用 `clang.exe` +
-   `-Clink-arg=--target=aarch64-linux-android24`。
-2. `rustup target add aarch64-linux-android` 在清华镜像上是 404（那个日期还没同步），
-   只能走官方源，15 分钟。
-
-### 验收
-
-- 308 项（230 + 78）两种词库配置全绿，**一条没丢**（config 的 16 项随迁）。
-- DLL 64 位 4285 KB、32 位 4328 KB——和搬之前一致。
-- `cargo check --target aarch64-linux-android -p feihe-core` 通过（真编，不是看注释）。
-- `libfeihe_android.so` 268 KB；带 78 MB 模型的 APK 80.3 MiB。
-- Kotlin 单测 19 项全绿。
-
----
-
-## Android M1：数据层搬进 core，手机上第一次打出中文（`34ca5f2` / `664bd37`）
-
-### 三处必须先开钩子，否则搬不过去
-
-| 模块 | 原依赖 | 改成 |
-|---|---|---|
-| 日志（`freq`/`dict` 都要写） | `diag`（写 `feihe.log` + 问前台窗口类名） | `core::log`（只写文件，属于数据目录）+ 壳的 `diag` 只剩 `fg_class`；core 侧 `macro_export` 了 `dlog!`，搬过去的模块 `crate::dlog!` 自动指向 core 那份 |
-| 自定义短语的时间 | `GetLocalTime` | `core::clock`：壳可注册 provider；没注册就用 `SystemTime` + 偏移分钟（Android 用）。日期分解是 Hinnant 的 `civil_from_days`，纯整数 |
-| 个人词库的加载 | `CreateFileMappingW` + `MapViewOfFile` | 读进内存再 `Box::leak`。**行为等价**：原来映射的视图也从不解除 |
-
-`dictbin::map_file` 那段有个借用检查器的坑值得记：**必须先 leak 再校验**。写成
-「先 `Bin::try_new(&data)` 校验、再 `leak(data)`」过不了——校验拿到的 `Bin<'a>` 会和
-后面 `'static` 的那份被统一成同一个生命周期，`data` 就再也 move 不走。代价是损坏文件
-会泄漏它自己那么大一块（每进程只解析一次，可接受）。
-
-### `base.bin` 跟着词库走
-
-`include_bytes!(concat!(env!("OUT_DIR"), "/base.bin"))` 的 `OUT_DIR` 是**所在 crate**
-的构建目录。词库搬进 core，生成就得跟着搬：`core/build.rs` 干这件事，根的 `build.rs`
-只剩 windres 打图标。
-
-词库**源文件**（`dict.txt` / `extra_*.txt` / `user_dict.txt`）仍在仓库根的 `src/`——
-它们由 `tools/gen_dict.py` / `gen_extra.py` 写在那里。所以 `core/build.rs` 和 core 的
-测试都用 `../src` 前缀，两个文件里都写了同一条说明。将来要连数据一起搬，改前缀即可。
-
-### 「测试因为读不到文件而空跑变绿」——这次差点又踩
-
-`dict` 里几个测试原来写 `std::fs::read_dir("src")`。搬到 core 之后 CWD 是 `core/`，
-读到的是 `core/src`（一个词库文件都没有）。`generated_words_are_all_searchable` 有
-`assert!(files.len() >= 10)` 所以红了；但**没有断言的那些就会静默变成空跑**。
-
-所以统一加了 `repo_src()`（`#[cfg(test)]`），并且 `dictenc` 那条「全量编码校验」
-在扫不到文件时直接 panic。规则：**core 里任何读词库文件的测试都不许用相对路径**。
-
-### 又两个不能 `#[cfg(test)]` 的钩子
-
-`dict::scheme_guard()` 取代了 `dict::tests::SCHEME_LOCK`。和 `config::test_guard`
-同一个原因：`mod tests` 是 `pub(crate)`，跨 crate 看不见；改成 `#[doc(hidden)] pub`
-的普通函数。**这类「测试锁」在拆 crate 时一定会撞，撞一次记一次。**
-
-顺带：core 自己的单测没有壳、没有 `DllMain`，所以 `paths::dir()` 在 `cfg!(test)` 时
-回落到进程独立的临时目录。这里 `cfg!(test)` 是准确的——只有 core 被当测试目标编译
-时才为真。
-
-### 手机上「能出字」这一版的具体取舍
-
-- JNI 只加两个方法：`initNative(dataDir, utcOffsetMinutes)` 和 `lookupNative(code, limit)`。
-  **init 的顺序不能换**：`paths::init` → `clock` 偏移 → `config::refresh_if_changed`，
-  因为 refresh 内部会读 `config::dir()`。
-- Gradle 的 cargo 任务**必须**带 `FEIHE_NO_USER_DICT=1`。不设的话 `base.bin` 从
-  46k 条涨到 98k 条，而那多出来的 5 万条是用户从搜狗导入的个人打字记录 ——
-  它会随 APK 发出去。这条和 Windows 发布构建是同一条红线。
-- 候选条常驻 40dp 占位：不留位置的话第一条候选弹出来时键盘会往上跳一下，
-  打字时这个抖动很烦。
-- **空格 = 选第一个**（没有候选时原样上屏，否则用户打了一串字母会卡住）。
-- **全拼多音节是通的**（`zhongguo` → `vsgo` → 「中国」），因为 `split_pinyin` 从
-  `textservice` 搬进了 `shuangpin`，JNI 用 `encode_phrase`（猜音节边界）而不是
-  `encode_pinyin`（按空格切）。这一步差点漏掉：先写的版本用 `encode_pinyin`，
-  `nihao` 会被当成一个音节直接失败——**键盘敲出来的串里没有空格**。
-- 不支持的只有「分词态」：已经输成中文码的长串（`nihcshij`）不切段逐段选。
-  那条交互在手机上太重，见 `后续待办.md` A1。
-
-## Android：编译用签名，为什么 key 和密码一起进仓库
-
-APK 必须签名才能装。调试包 AGP 会用 `~/.android/debug.keystore`（**每台机器不同**），
-`assembleRelease` 默认更是只出 unsigned 包。所以放了一把固定的自签名 key：
-`android/keystore/feihe-release.p12` 加 `keystore.properties`，**两者都进版本库**，
-密码 `feihe-ime-2026` 就明写在文件里。
-
-判断依据：这把 key 唯一的作用是「同一把 key 打出来的包能互相覆盖」，不承担任何
-身份作用；项目只做自用和侧载，不走商店。藏起来的唯一结果是换台机器 clone 下来
-打不出能覆盖安装的包，还得翻聊天记录找密码。真要上架那天，商店那份签名另生成、
-不进这个仓库。详见 `docs/Android-方案.md` §12.6。
-
-**debug 也签同一把 key。** Android 只在签名相同时才允许覆盖安装，否则
-`INSTALL_FAILED_UPDATE_INCOMPATIBLE`，唯一出路是卸载；而输入法的数据目录（用户
-词库、词频、置顶、自造词）跟着应用走，一卸载就清零。debug 若用调试 key，
-「先装 debug 试试、再换 release」这条最常走的路每次都要求卸载重装。
-
-### 三个坑
-
-- **`.gitattributes` 必须钉 `*.p12 binary`。** 这台机器 `core.autocrlf` 是开的，
-  不钉的话 git 会把 keystore 当文本加 CRLF，下次 checkout 出来 PKCS12 直接解不开，
-  而 keytool 报的是「密码不正确」——离真正原因十万八千里。
-- **`enableV1Signing = true` 在 `minSdk 24` 下不生效。** AGP 按 minSdk 直接跳过 v1，
-  写了也是空的。实测 `apksigner verify -v` 是 `v1:false / v2:true / v3:true`，
-  所以显式设 `false` 并注明——写 `true` 只会让人以为它生效了。
-- **缺 key 时 `assembleRelease` 不报错，只产出一个 unsigned APK。** 装不上，而错误
-  暴露在 adb 输出或者用户手机上，离原因很远。已给 `assembleRelease` 挂 `doFirst`
-  抛 `GradleException`；实测（临时移走 properties 再构建）确实在 20s 时失败并指向
-  §12.6，而不是安静出一个装不上的包。
-
-## Android M1：`hint` / `fancha` / `zhconv` 搬进 core，`sogou` 明确不搬
-
-搬完之后 `src/` 里剩下的都真的离不开 Windows（注册表、剪贴板、NLS、QUNS、TSF/UI）。
-验收：**317 项**测试全绿（core 206 + 壳 111），DLL 4290 KB 不变，
-`cargo check -p feihe-core --target aarch64-linux-android` 通过。
-
-### `hint`：唯一一个「整体搬、零改动」的
-
-它连 `hint.txt` 一起进 `core/src/`（`include_str!` 找同目录），代码里只有
-`crate::shuangpin` / `crate::dict`，都在 core。`tools/gen_hint.py` 的 `OUT` 跟着改，
-否则下次重生成会写回 `src/`，然后 core 里那份变成过期数据——**这种「两份同名数据、
-一份没人更新」是最难发现的一类 bug**。
-
-### `fancha`：剪贴板开钩子，但真正的工作在测试上
-
-唯一系统调用是 `clipboard::text()`，换成 `set_clipboard_reader` 就行。麻烦的是测试：
-原来七条用例全在断言 `describe("玑")` 的输出，而那是**拿真实词库的读音**算出来的。
-搬到 core 之后，core 的测试进程数据目录是空的临时目录（`paths` 在 `cfg!(test)` 时
-回落），`readings_for` 拿不到任何读音 → 要么红，要么「静默空跑变绿」。
-
-于是把主体拆成 `describe_reading(chars, readings, …)`：读数从参数进来。
-测试喂一张假表（玑→ji、璇→xuan、的→de），断言只钉**格式**——音怎么排、连打串怎么接、
-截断标在哪——以及辅助码（`+wj` / `+wr` / `+b` 来自 `assist.txt`，编译期嵌入，可以钉）。
-`describe` 只剩「过滤汉字 → 截断 → 查词库 → 交给上面」四步。
-
-**`dict::readings_for` 的结果一律不进断言**，这条在 `handoff` 里已经记过两次了
-（个人词库一导入，断言当场不成立），这次是第三次，写在代码注释里。
-
-### `zhconv`：映射留在壳，core 只留开关
-
-`LCMapStringEx` 只有 Windows 有。方案不是「往 core 里塞一张 s2t 表」，而是
-`set_converter(fn(&str) -> Option<String>)`：NLS 实现搬进 `src/nls.rs`，`DllMain` 注册。
-好处是 core 里能让 Android 用的部分（配置开关、ASCII 快路径、失败兜底）保持可测，
-而具体某个字映射成什么交给壳的测试——那本来就是 Windows NLS 的行为。
-
-core 的测试用「只把『设』换成『設』」的假转换器；真实映射的四条断言在 `src/nls.rs`。
-选表还是选 NLS 的取舍没变：NLS 零体积、跟着系统更新，代价是依赖 zh-CN 区域数据；
-换 Android 实现时只需要写一个 `to_traditional` 并注册，core 一个字不用动。
-
-### `sogou` 不搬（写进方案文档 §11.1，避免下次又列进待办）
-
-`import_auto` 靠注册表找搜狗目录、`.scel` 是私有格式、产物写 `user_dict.txt`——
-三步全是桌面导入流程。Android 上没有注册表也没有 `.scel`，搬过去是一段永远走不到的
-代码。真要做「从文件导入」时再单独拆 `wordlist` 模块。
-
-### 顺带踩回来的坑：`cargo test` 要 llvm-mingw 在 PATH
-
-`[build] target = x86_64-pc-windows-gnullvm` 意味着测试二进制也要用 mingw 链接器，
-而 shell 里没有 `build.ps1` 设好的 PATH，报的是
-`linker x86_64-w64-mingw32-gcc not found`。命令里补一句就够：
-
-```bash
-export PATH="/c/llvm-mingw/llvm-mingw-20260908-ucrt-x86_64/bin:$PATH"
-```
-
-另外 workspace 的 `default-members` 是 `[".", "core"]`，所以在根目录敲 `cargo test --lib`
-会跑**两个包**；只看 `tail` 容易只看到 core 那份结果，以为壳没跑。
-
-## Android：联想接进来了（+262 KB，值）
-
-`next` 一直在 core 里，Windows 端上屏后弹浮窗用它。手机上不能弹浮窗（压住键盘、
-候选条还被顶跳一下），所以改成**候选条末尾一排 `→词`**：两个 JNI 入口
-（`suggestNative` / `recordNative`）+ `NativeEngine.suggest/record`。
-
-### 三个「按 Windows 的直觉会写错」的地方
-
-1. **联想不能进 `candidates` 列表。** 它不参与「空格选第一个」的语义，混进同一个
-   列表会让空格选到联想词——肌肉记忆立刻错乱。分开存 `suggestions`，只响应点击。
-2. **`→` 前缀不是装饰。** 用户得一眼看出「这个点了直接上屏、不吃空格」。候选和
-   联想之间还放了一条 `|` 隔开。
-3. **上下文什么时候断，要跟着动作走**：标点、空格、回车、删掉文档里的字、切中英、
-   换输入框——这六处都清 `prevWord`。漏一处就会「打完句号了，`→` 还挂在上句话的
-   最后一个词上」。标点前那次上屏还要 `thenSuggest=false`，否则「你好，」后面紧跟
-   一排联想，纯噪音。
-
-### 体积：+262 KB
-
-`.so` 从 3383 KB 涨到 3645 KB。原因是 `next_builtin.txt`（1.5 万条、约 300 KB）
-之前**没有任何 JNI 入口引用**，链接器把它连同 `next` 的实现一起丢了；现在
-`suggest` 一调，整张表进段。APK 84 MB 里占 0.3%，值。
-
-这也说明一件事：**.so 的体积不能靠「core 里有这个模块」推断**，不调用的模块会被
-链接器丢掉——反过来说，给 Android 加功能时要顺手记一次体积变化，否则「哪天突然
-大了 300 KB」会查不到是哪次改动带来的。
-
-### 没做的（写在 `docs/后续待办.md` A3 里）
-
-- 没读宿主前文（`getTextBeforeCursor`），所以**切窗口后的第一个词学不到**上下文。
-  Windows 端有 `leading_word`，手机上要走 IPC 读宿主文本，兼容性和时延都得再评估。
-- 候选给满 9 个时联想在屏幕外，得横滑。下一步可以「候选超过 6 个就只给 3 个」。
-
 ## 教训：给 SDK 补组件前先看目录里有没有
 
 2026-11-05 我「补装」platform-tools，实际上 `D:/soft/asdk/platform-tools` **早就在**
@@ -4126,907 +2363,3 @@ export PATH="/c/llvm-mingw/llvm-mingw-20260908-ucrt-x86_64/bin:$PATH"
 **顺带的发现**：`cmdline-tools` 的目录结构不是标准的 `cmdline-tools/latest/`，
 `sdkmanager` 不带 `--sdk_root` 会报 `Could not determine SDK root`。这也是
 「`sdkmanager` 装不了包」的一半原因（另一半是 `dl.google.com` 不通）。
-
-## 真机首验（realme RMX5080 / Android 16）：跑通了，并揪出一个老 bug
-
-2026-11-05 第一次在真机上走完全链路：装包 → `ime enable` → `ime set` → 打字上屏。
-结果为：`nihao` → `nihc` → 候选「你好」→ 空格上屏；`sanguo` → `sjgo` → 「三国 / 三国志」；
-上屏后联想出现。**M2 的「能打中文」在真机上成立了。**
-
-### 抓到的 bug：联想顺序是反的
-
-「三国」上屏后，四个联想词是「时代 / 时期 / 演义 / 群英传」——**完全倒序**。
-
-原因：`parse_builtin` 把内置表的权重也套了 `n.min(MAX_COUNT)`（=500）。内置权重是
-词库统计，最大 19260817；一压全部变成 500，`sort_by` 退化成按字符串比，而字符串序
-恰好是 时代 < 时期 < 演义 < 群英传 < 鼎立，看起来就像倒序。
-
-**为什么 313 项测试没抓到**：`builtin_tail_is_sorted_by_weight` 断言的是「权重序列
-降序」，而**全相等也满足降序**。这已经是第三次栽在「测试绿得没有意义」上。
-
-修法：内置表解析不再截断（`MAX_COUNT` 只留给用户表的 +1 计数），并加
-`builtin_weights_are_not_flattened`：断言「三国」首尾权重严格不等且最大值 ≥ 1000。
-把修复回退后跑一遍，它准确报出 `[("时代",500),("时期",500),("演义",500),
-("群英传",500),("鼎立",500)]` —— 和屏幕上一模一样。
-
-> **通用教训：排序类测试必须断言「顺序能区分」，不能只断言「有序」。**
-> 全相等的序列对任何比较器都是有序的。
-
-### 真机上的四个操作坑
-
-1. **`adb install` 装 84 MB 会超时**（7 分钟没结束，被 SIGTERM）。改用
-   `adb push` + `adb shell pm install -r`，push 11 秒（7.7 MB/s），装 20 秒。
-2. **MSYS 会把 `adb push x /data/local/tmp/y` 的目标路径改写成 Windows 路径**
-   （`D:/soft/.../PortableGit/data/local/tmp/y`），报 `remote secure_mkdirs() failed`。
-   命令前加 `MSYS_NO_PATHCONV=1`。
-3. **装完必须 `ime enable` + `ime set`**，`pm install` 不会自动启用。
-   `ime list -s` 只列**已启用**的，要用 `ime list -a -s` 才能看到新装的。
-4. **验证键盘配色不要看缩略图。** 我一度从缩略图判断「键盘是黑底白键、样式没生效」，
-   实际读像素是：键缝 `#D9DCE1`（= 代码里的 `0xFFD9DCE1`）、功能键 `#B9BEC6`
-   （= `0xFFB9BEC6`）、字母键 `#FFFFFF`。**全部正确**，是我看错了。
-   判断颜色用截图取像素（`System.Drawing` 被安全策略禁了，用 python 手写 PNG 解码）。
-
-### 设备信息（下次直接对）
-
-- realme RMX5080 / RE6025L1，Android 16（API 36），arm64-v8a，`wm size 1080x2376`，
-  density override 480。adb 走 WiFi（`192.168.3.3:43995`）。
-- 键盘按键坐标（1080×2376，改布局后要重新扫）：
-  第一行 y=1766，键中心 x = 61/167/273/379/485/591/697/803/909/1017（q..p）；
-  第二行 y=1919，x = 67/185/303/421/539/657/775/893/1011（a..l）；
-  第三行 y=2120，x = 85(⇧)/214/322/430/538/646/754/862/993(⌫)（z..m）；
-  第四行 y=2200，x = 87(中)/228(，)/538(空格)/848(。)/990(↵)。
-  定位方法：扫截图里 `#D9DCE1` 的缝隙列，取相邻缝隙中点（脚本见本条 commit 前的临时文件，
-  不进仓库）。
-
-## Android：设置页 / 数字页 / 双拼那半条路（用户当场指出的三个缺口）
-
-用户第一次在真机上用完，报了三件事：**没有任何设置界面**、**弹窗里没有设置入口**、
-**没有别的输入法那种数字键**。这三条都是真的缺，不是配置问题。同一次还问了一句
-「现在好像只支持全拼是吗?」——那也是真的：壳里写死了「按键串一律按全拼解释」。
-
-### 一、输入方式：判断挪进 core，壳只传一个布尔
-
-原来 `FeiheIme.refreshCandidates` 是这么写的：
-
-```kotlin
-val code = NativeEngine.encodePhrase(pending.toString())   // 全拼 → 双拼码
-NativeEngine.lookup(code, 9)
-```
-
-于是双拼用户打 `nihc` 一个字都没有（`nihc` 编不出码），而设置里那个「全拼模式」
-写着「双拼方案暂不生效」——因为壳压根没读配置。
-
-现在规则在 `core/src/dict.rs` 的 `dict::resolve_code_with` / `lookup_input`：
-
-- **双拼模式（默认）**：先原样当码查，查不到再按全拼解释。所以 `nihc` 和 `nihao`
-  都出「你好」——它实际是「双拼，且认全拼」。
-- **全拼模式**：一律按全拼解释，`xian` → 「先」，不会变成「西安」。
-
-三条理由写在 `docs/Android-方案.md` §11.2，简述：判断写在 Kotlin 里就是**第二份真值**；
-默认值是双拼，不兜全拼的话新装用户打 `nihao` 会看到空白然后认定「坏了」；
-而选了全拼的人要的就是别让双拼抢答。
-
-单测喂**假探针**（`resolve_code_with(input, mode, scheme, probe)`）：真探针是 `any`，
-它的答案依赖词库内容，而 `lookup` 结果进断言这条已经踩过三次。
-
-真词库上手工验过（临时 integration test，跑完即删）：
-
-```
-[双拼]      nihc -> nihc  ["你好", "你好啊", ...]
-[双拼]     nihao -> nihc  ["你好", ...]        ← 兜底生效
-[双拼]      xian -> xian  ["喜按", "西安", "西岸", ...]
-[全拼]      xian ->   xm  ["先", "下面", "现", ...]
-[双拼]    sanguo -> sjgo  ["三国", "三国志"]
-```
-
-### 二、`lookupNative` 换成 `lookupInputNative`，一行带回两样东西
-
-壳既要候选（摆进候选条），又要「实际用的码」（状态条显示 `nihao→nihc`）。分两次
-JNI 调用就要过两遍字符串边界、两遍切分，所以约定返回串**第一行是码，后面每行一个
-候选**。空串 = 没有码也没有候选。
-
-顺手删掉了 `lookupNative`：留着就是第二条查词路径，将来一定会有一条忘了改。
-
-### 三、设置页：三个入口缺一个都会有人找不到
-
-输入法不像普通 App——用户装完不会去桌面找它，也不会想到「系统设置里还有个输入法子菜单」。
-所以三处都指向同一个 `SettingsActivity`：状态条右侧齿轮（`onCreateInputView` 里）、
-系统输入法设置（`service` 的 `android:settingsActivity`）、桌面图标。
-
-UI 是代码搭的，不用 XML：只有几行单选 + 几行开关，XML 要三份文件、改一个间距跳两个文件。
-
-两个会安静出错的点：
-
-- **`Switch` 必须先 `isChecked` 再挂监听**，反过来进页面就白写一遍配置。
-- **主题要去掉 ActionBar**（`Theme.DeviceDefault.Light.NoActionBar`），否则系统标题栏和
-  页面自己的「飞鹤输入法」重复一行。
-
-### 四、数字/符号页
-
-`KeyKind.TEXT`（直接上屏的字符：数字、符号），和 `PUNCT` 同一套语义：**先把手上半截
-拼音处理掉再打这个字符**，否则 `nihao` + `1` 会变成组合态里的 `nihao1`。
-
-底行加 `123`/`ABC` 切换键，`showKeyboardPage(numeric)` 只重建键盘容器，**不重建
-InputView**——重建会闪一下并且清空候选条。数字页上状态条写「中 · 数字」而不是
-「中 · 26 键」，否则会让人以为还能打拼音。
-
-### 五、状态条改成显示输入方式
-
-「26 键」这个信息键盘上看得见，输入方式看不见，而它决定了「为什么我打 xian 出了西安」。
-所以状态条现在是 `中 · 双拼` / `中 · 全拼`，打全拼时再补 `→码`（双拼模式下两者相同，
-不显示箭头，免得一直多两个字符）。
-
-`pinyinMode` 在壳里缓存（每次按键都要用），`onStartInputView` 和 `onWindowShown`
-各重读一次——设置页返回后最需要的就是「改完立刻生效」。同一个进程，`config::update`
-写的是内存里的那份，不需要重载文件。
-
-### 没验完的部分
-
-`assembleDebug` / Kotlin 单测全绿，`.so` 3 735 680 字节（≈3648 KiB，比上一版 +262 KiB：
-`lookup_input` 把 `encode_phrase` 那条分支也拉进了链接，之前它只被 `encodePhraseNative`
-引用一次）。**注意体积别再手算**：3735680 除 1024 是 3648，除 1000 才是 3736 ——
-这份文档里一度写成「3736 KB」就是因为这个。
-但**真机上还没复验双拼模式**：装包时 `adb` 的 WiFi 连接掉了
-（`192.168.3.3:43995` → offline，`reconnect` / `kill-server` / mDNS 都找不回来，
-端口应该变了）。下次接上一件事就是：装新包 → 双拼模式打 `nihc` 出「你好」→
-切全拼模式打 `xian` 出「先」。
-
-## Android：上档键 + 数据备份（导出/导入）
-
-用户报两件：⇧ 按了没反应；设置页要有「导入/导出全部自有数据」（默认文件名带
-`feihe_bak_yyyyMMdd`）。
-
-### 上档键：为什么之前「没反应」
-
-`onKey` 里写着 `KeyKind.SHIFT -> Unit`——不是坏了，是压根没实现（上一版为了不假装
-支持，占了个空分支）。现在：
-
-- **一次性**：按一下点亮（⇧ 染成强调蓝、白字），下一个字母大写，打完自动落下。
-  没有「按住」这个概念，也没有双击锁定（双击在手机上容易和连点删字混淆，见待办）。
-- **中文态 = 临时英文**：先把手上半截拼音处理掉再上屏那个大写字母。不这么做的话
-  `nihao` + ⇧A 会变成组合态里的 `nihaoA`（和标点键同一个坑）。
-- **英文态 = 正常续进组合串**，`H e l l o` 一个个打出来。
-- 切中英、切页时把上档落下来：那一下属于上一个模式，留着就是误判。
-
-状态只能靠 ⇧ 自己表示：**字母键标签本来就是大写的**（手机键盘的通行做法），
-所以「大写标签」不能用来表示上档。实现上不重建键盘，按 `SHIFT_TAG` 找到那颗键就地
-换配色——重建会闪一下、候选条还会跟着抖。
-
-### 数据备份：清单在 core，容器在壳
-
-`core/src/backup.rs` 只有三件事：`DATA_FILES`（哪些文件算用户数据）、`manifest()`
-（带版本和时间的说明）、`reload_all()`（导入后把八个模块的缓存全重读）。打包解包在
-Kotlin——core 的依赖政策只允许 `tyme4rs`，zip 要么引库要么手写 DEFLATE，而
-`java.util.zip` 两行就完事。
-
-三个刻意的决定（§11.3 有完整版）：
-
-1. **`user.bin` 不进备份。** 它是 `user_dict.txt` 的编译产物，格式随版本走；跨版本
-   导入旧 bin 最坏是当新格式解析、查出乱码词。导入后重编译一次百来毫秒。
-2. **导入 = 覆盖恢复，不是合并。** 合并要一堆「谁盖谁」的规则，而用户说「导入备份」
-   时想的是回到那个时间点。所以先清空再写；代价是包不完整就等于删数据，于是
-   **整个包先解到内存校验完才动手**，写盘先落 `.importing` 再改名。
-3. **白名单挡路径穿越。** 只认 `DATA_FILES` 里一字不差的名字，`../config.ini` 进不来；
-   单文件超 32 MB 直接拒（解压炸弹）。
-
-`reload_all()` 的顺序不是随便排的：**先配置**（热路径原子镜像的来源）→ **方案跟着
-配置走**（`config.scheme` 和 `dict::scheme()` 是两处状态，只重读配置会「设置里小鹤、
-查词还按微软」）→ 其余七个 refresh → 重编译个人词库 → 换掉 txt 回退层。
-
-顺手修了文档里一个算错的数：`.so` 体积之前写成「3736 KB」，实际是 3 735 680 字节
-≈ **3648 KiB**（除 1024 与除 1000 的区别）。这类数字以后一律写字节数。
-
-### 验证到哪
-
-core 218 项 + 壳 111 项全绿（新增 4 条备份用例：清单无重复/不带路径/产物与日志不在
-清单里、白名单挡 `../`、manifest 只列存在的文件）；Kotlin 26 项全绿；`assembleDebug`
-通过；`.so` 3 778 232 字节（12 个 JNI 符号）。**真机仍未复验**——adb 的 WiFi 连接从
-上一轮就掉了，导出/导入这种要弹系统文件选择器的流程没法在模拟环境里代跑。
-
-## 长串自动整句：分段搬进 core，顺手拆掉一个「DP 一定退化」的坑
-
-用户说「先写代码，测试放一放」，所以接着补手机上最大的缺口：打一长串双拼码
-（`vhsjli`）以前是空候选条。桌面端这时进分词态，手机上没做逐段选择（交互重），
-但至少该给出「张三李」这个整句候选。
-
-### 一、切分逻辑搬到 `core/src/segment.rs`
-
-`syllables` / `split_segments` / `plan` 三个纯函数原样搬过去，签名多一个
-`pinyin_mode: bool` 参数（原来读 `config::pinyin_mode()`，搬进 core 后由调用方给，
-测试才好喂）。`textservice` 里三个函数改成一行转发，**调用点和已有测试一个字没改**——
-搬家不顺手改调用点，出回归才能确定是搬家本身的问题。
-
-同样搬过去的还有那几个「撇号是硬边界」「奇数长度不许猜」的规则，以及它们原有的用例。
-
-### 二、真正的问题：`dict::any` 是前缀探测，不能当分段的「有没有词」
-
-第一版直接复用 `any`，跑真实词库立刻现原形：
-
-```
-vhsjli -> segs=["vh","sj","li"]  firsts=["vh=长", "sj=三", "li=里"]
-```
-
-应该切 `vhsj`(张三) + `li`(李)，实际退化成逐音节。原因：词库里有「张三李四」，
-码 `vhsjlisj` —— `any("vhsjli")` 做前缀匹配命中了它，于是 DP 认为整串是一个词，
-`codes.len() >= 2` 不成立，`plan` 退回逐音节。
-
-修法是新增 `any_aligned` / `first_aligned`：**字数必须等于音节数**。
-两个实现细节值得记：
-
-1. **用字数，不用码长字段。** 码长要从 `collect` 透出来，而那条流水线后面还挂着
-   一简字 / 二简词 / 自定义短语 / 置顶一堆 `promote` / `place` 插入——它们只往 `out`
-   里塞词、不塞长度，长度数组会失配。字数（`w.chars().count()`）是候选自己的属性，
-   谁也改不到一半。
-2. **扫描上限只要 12 条，有依据。** 双拼码长 = 2 × 音节数，前缀匹配要求词码以段码
-   开头，所以能匹配到的词至少 n 个音节 / n 个字 —— 「字数对得上」的那一档恰好是
-   码长最短的一档，`collect` 的排序（码长升序）把它们放在最前面。上限不能随便加大：
-   `any_aligned` 在 DP 里被调用 O(n²) 次，每条候选都要走一遍词频/降级/置顶流水线。
-
-### 三、接入 `lookup_input`（Android 立刻就有了）
-
-`lookup_input` 现在两条路都会兜到整句：
-
-- 有码：先正常查；**查不到**才试 `compose_sentence(code)`（整词永远优先，
-  否则打 `nihc` 会先看到一堆拼凑）。
-- 没码：双拼模式下这段输入很可能就是「一长串码」（`vhsjli` 编不出任何拼音），
-  直接按码分段。
-
-任何一段查不到字就**整句放弃**（`compose_sentence_with` 里的 `first(s)?`）：
-混着段码的整句（`面ap` 那种）上屏只会让人莫名其妙，宁可什么都不给。
-
-真词库实测（临时 integration test，跑完即删）：
-
-```
-vhsjli                   -> 张三李
-nihcuijp                 -> 你好世界
-nihaoshijie（全拼串）    -> 你好世界
-wobuzhidao（全拼串）     -> 我不知道
-zhonghuarenmingongheguo  -> 中华人民共和国
-mmap                     -> 空（编码混英文，整句放弃）
-```
-
-耗时 0.1–2 ms，且只在「本来就没有候选」的按键上跑。
-
-### 还没做的
-
-逐段选择（改「张三|李四」里某一段）没做，理由和之前一样：候选条只有一行，
-左右移段没有好手势。写进 `docs/后续待办.md` A1，**动之前先定手势**，
-而且分段规则必须继续用 core 那份。
-
-## 数字页改成 3×3 九宫格（用户：那样方便使用）
-
-第一版数字页每行 5 个键（`1 2 3 4 5` / `6 7 8 9 0`），键宽只有屏宽 1/5。改成
-电话拨号盘那种三列九宫格后键宽接近 1/3。改动只涉及键盘层，引擎一行没动。
-
-### 三个不能省的决定
-
-1. **多一排但不长高。** 字母页 4 排 × 46dp，紧凑页 5 排 × 36dp：
-   `4×46 + 3×5 + 12 = 211dp` 对 `5×36 + 4×5 + 12 = 212dp`。
-   不做这一步，每次切页整块键盘长出 50dp，输入框和候选条都往上跳一下——
-   这种「感觉不太对」的回归在真机上很难描述。算式钉在 `SymbolLayoutTest` 里。
-2. **符号单独一页。** 3 列 × 5 行 = 15 格，装不下「10 数字 + 中文标点 + 功能键」，
-   硬塞就得把某排做成 6 个小键，等于把刚争取到的键宽还回去。数字页留 `，` `。`
-   两个最高频的，其余 12 个标点到「符」页。两页**形状完全相同**
-   （5 行、每行总权重 6），切换时每个键的位置都不动。
-3. **`KeyKind.SYMBOL`（布尔切两页）换成 `KeyKind.PAGE` + `Page` 三态。**
-   三个键 `123` / `ABC` / `符` 要去三个地方，布尔值装不下，硬塞只会变成一堆 if。
-   `key.code` 存目标页名，`FeiheIme` 里只有一个 when；`KeyboardPages` 收了
-   「页 → 行数据 / 行高 / 状态条文字」三张小表，免得壳里散落重复的 when。
-
-### 权重那个老坑
-
-`KeyboardView` 是按**每行自己的** `weightSum` 分宽度的，所以各行权重合计必须一致，
-同一个 `weight=1` 在不同行才有相同的物理宽度。三列数字页给每个字符键 `weight=2`
-（3 × 2 = 6），功能排 `ABC 1 + 符 1 + 空格 2 + ↵ 1 + ⌫ 1 = 6`，两排才对得上。
-单测里逐行断言合计 6.0。
-
-### 验收
-
-`testDebugUnitTest` + `assembleDebug` 通过，Kotlin 单测 26 → **33 项**
-（新增 `SymbolLayoutTest` 6 条、数字页改 7 条含「前三行必须是 123/456/789」）。
-用户已断开设备，键盘实际观感下次连上再看。
-
-## 2026-11-05（夜）Android 后续功能：逐段选择 / 上档锁定 / 数字选词 / 语音面板
-
-用户从待办里点了 2/3/4 一起做。全部按「先写纯函数 + JVM 单测，再接 UI」推进，
-Rust 侧 `cargo test --workspace` 348 项、Android 侧 `testDebugUnitTest` 58 项全绿，
-`assembleDebug` 出包并核对了 APK 内容。**真机未验**（adb WiFi 一直掉线）。
-
-### 三个手势决定（写进代码注释和 `docs/后续待办.md`，避免以后重新论证）
-
-1. **上档锁定 = 长按 ⇧，不是双击。** 键盘里 ⌫ 长按连续删已是既有手势；双击会和
-   「连按两下打两个大写」抢同一个时间窗口，阈值松了误触、紧了按不出来。
-   单击仍是一次性，锁定态标签换 `⇪`。三态迁移全在纯 `ShiftMachine`（`InputAssist.kt`），
-   单测钉住「一次性只影响第一个字母 / 锁定态连打三个全大写」。
-2. **数字选词行 = 不进键盘、只在有候选时出现、设置可关。** 它是候选条下方一个
-   `GONE` 时高度为 0 的独立容器，字母键一 dp 不少，也不常驻。A2 犹豫的「加一行挤掉
-   字母高度」就这样绕开了。下标换算 `NumberSelect.indexOf` 单测钉死 `-1`。
-3. **逐段选择 = 点段换词，不做左右移段。** 候选条画 `[张三][李]` chip，点哪段展开
-   哪段候选，选完自动回 chip 视图，空格/回车/标点整句上屏。没有游标，直接避开
-   「单行候选条左右移段很别扭」。分段规则继续用 `feihe_core::segment::plan`。
-
-### 关键坑：`lookup_input` 必须显式告诉壳「这是不是整句」
-
-逐段选择最容易写错的地方，是让 Kotlin 去猜「候选只有一条 / 码够长 → 是整句」。
-打 `nihc` 出「你好」这种正常双字词就会误弹分段 chip，而且这条判断会散到两个壳里
-各写一份。所以把 `lookup_input` 的返回值从 `(String, Vec)` 换成 `LookupResult`，
-多带一个 `segments: Vec<SegmentChoice>` —— **真值只在产生它的地方**。
-JNI 新增 `segmentCandidatesNative(input, pinyinMode, limit)`，传原始按键串而不是码；
-格式是每段一行、行内 `\t` 分隔（不引 JSON，core 依赖政策只剩 `tyme4rs`）。
-
-`segment_candidates` / `segment_candidates_with` 照 `compose_sentence_with` 的老规矩
-拆成「带假表闭包的纯函数」：真词库内容一律不进断言。有两条硬约束单测：
-- **各段第一名拼起来必须等于 `compose_sentence`**（用户什么都没点时，改功能前后
-  上屏的字一模一样）；
-- **字数 != 音节数的候选要过滤**（否则「张三丰」挂到 2 音节段上，一选整句字数就错）。
-
-写测试时踩了一次：不能直接复用 `compose_sentence` 那组 `fake_has` —— 它把整串
-`vhsjli` 也列为「有词」，DP 会切成 1 段再退回逐音节（3 段）。`compose_sentence` 那条
-测试两种切法都拼出「张三李」所以看不出来，但逐段选择要断言**段的边界**，就得单独
-给一组 `seg_has`。
-
-### 语音面板：用本机已验证的样板，不用镜像里的第三方 AAR
-
-用户提示依赖可以走国内镜像。查下来 aliyun public 确实有
-`com.bihe0832.android:lib-sherpa-onnx:6.25.21`（AAR，含 `com.k2fsa.sherpa.onnx` 类），
-**但不能用**：
-- 它只带 `libsherpa-onnx-jni.so`，而该 `.so` 的 `DT_NEEDED` 里有 `libonnxruntime.so`
-  （在另一个 `lib-onnx` AAR 里），单引一个运行期必挂；
-- `classes.jar` 里**没有 `Vad` / `SpeechSegment` 类**（native 符号倒是有），
-  `OfflineRecognizer` 构造签名还和上游样板不一致（AssetManager 非空、字段也少），
-  那份 Kotlin API 是改过的旧版。
-
-而本机 `/d/codes/xingyu`（星语）里有一套**真机验证过、版本号与上游 Kotlin API 一致**
-的 4 个 arm64 `.so` + `silero_vad.onnx`，正是方案 §4 说的「能用星语的集成样板」。
-JNI 符号名是硬编码 `com/k2fsa/sherpa/onnx/...`，`.so` 和 Kotlin 必须同版本，所以
-直接复用这套、零网络零版本漂移最稳。31 MB 二进制不进库，仿 `fetch_asr_model.py`
-写了 `tools/fetch_sherpa_libs.py`（`--from` 可指向镜像解包目录，SHA256 钉住 5 个文件，
-`--verify` 只校验）。
-
-其它实现要点：
-- 模型走 `newFromAsset`（`OfflineRecognizer(assets, config)`），**不拷 81 MB 到
-  filesDir** —— `noCompress` 已让 `.onnx` STORED，AAssetManager 能拿连续 fd。
-  已核对 APK：`assets/asr/*.onnx` 和 `silero_vad.onnx` 都是 Stored(0%)，5 个 `.so` 都在
-  `lib/arm64-v8a/`，`RECORD_AUDIO` 在 merged manifest 里。debug APK **122,363,620 字节**。
-- **权限在 SettingsActivity 申请，不在 IME 里**：`InputMethodService` 不是 Activity，
-  `requestPermissions` 从输入法进程弹不出来。用户打开「语音输入」开关时申请一次，
-  拒绝了不反复弹；IME 侧只 `checkSelfPermission`，没权限给一句能照做的提示。
-- 按住 🎤 录、松手识别上屏（`OnTouch` 而非 `OnClick`：两态按钮用户分不清在不在录，
-  输入法窗口也没地方放红灯）。VAD 只裁首尾静音、不决定何时结束（方案 §4 禁止固定
-  时长截断），60 秒只是防忘松手的内存上限。`withEngine` 串行化，原生 ptr 不会被
-  两个长按并发 release。
-- 识别器懒加载：81 MB 冷加载在骁龙 665 上约 2.7s，放按键回调里同步初始化等于
-  「按住两秒没反应」。LOADING 状态就是给这几秒看的。
-
-### 第三方代码署名（Apache-2.0）
-
-`android/app/src/main/java/com/k2fsa/sherpa/onnx/` 下 6 个 `.kt` 是 sherpa-onnx 官方
-Android 调用层，来自 `github.com/k2-fsa/sherpa-onnx`，Copyright (c) 2023 Xiaomi
-Corporation，Apache-2.0。为的是让 JNI 符号能对上，**包名/类名/字段名一个都不能改**。
-飞鹤是 MIT；这里按 Apache-2.0 保留版权头并在此署名，未改动逻辑。
-
-## 2026-11-05（夜·续）联想打磨 + 文档口径统一为「替换搜狗」
-
-### 联想打磨（A3 两处）
-
-用户接着点了「继续完成其他 android 端欠缺的功能」。这轮补的是纯 Kotlin、能在本机
-验证的两块，都是「先写纯函数 + JVM 单测再接 UI」：
-
-1. **候选给联想让位**：原来一敲字母就把 `suggestions` 清空，所以候选和联想从不同屏
-   共存，「候选满 9 个要横滑才看得见联想」这个待办其实永远不会触发。改成**打字时
-   保留联想**（也是搜狗的行为），`CandidateBarPolicy.candidateSlots()` 在有联想时
-   把候选压到 6 个，给 `→词` 留位置；候选上限由设置页 5/7/9 控制。
-   老注释说"留着旧联想等于把几分钟前的上下文摆在手指下面"——这个顾虑现在由
-   「每次 commitWord 重算联想 + onStartInput 读宿主前文」解决了，所以反过来是安全的。
-2. **读宿主前文**：`onStartInput` 用 `getTextBeforeCursor(24, 0)` 拿前文，
-   `HostContext.lastWord` 取末尾最多 2 个汉字当上一个词。这样切到微信、或光标停在
-   已有文字后面，第一个词也有联想上下文。
-   **底线是密码框一个字都不读**：`HostContext.canRead` 按 `inputType` 位掩码挡掉
-   所有密码类 variation 和 `FLAG_NO_SUGGESTIONS`。故意不 import `InputType`
-   （那些常量在 JVM 单测里会踩 "Method not mocked"），抄成局部常量换可测性。
-   末尾是英文/数字时返回空串，不跨过去捞更前面的汉字凑词。
-
-两处都没有动 core。`UiPrefs.candidateLimit` 和之前的 `number_row` / `voice` 一样，
-是纯界面开关，不进 `config.ini`——桌面端没有"候选个数"这个概念。
-
-### 文档口径：目标改为替换搜狗
-
-用户明确「目的就是替换搜狗」，而 README 和首页原来都写着「不打算取代搜狗，只服务
-一种人」。这是方向调整，不是措辞微调，所以把**所有**对外文档一起改了：
-
-- `README.md`：开头改成"一套 Rust 引擎两个壳"+ 目标替换搜狗；新增完整的
-  **「Android 输入法」章节**（装、已实现功能表、构建与验证、验收状态）；
-  定位段新增一张「还差什么」表（云同步 / 词库规模 / 皮肤 / 手写 / 多行候选 /
-  语音中间标点）；对比表把语音改成"Android 有"、加平台行；里程碑注明是 Windows 线、
-  Android 线另见方案文档；仓库结构补 `android/` 全树；已知缺口注明只讲 Windows 端。
-- `index.html`（GitHub Pages 落地页）：title / nav / hero / 定位标题 / 对比表 /
-  未做清单 / footer 全部同步，新增 `<section id="android">` 一节。
-- `docs/使用帮助.md`（随 Windows 安装包分发）：开头明确"这是 Windows 版手册"并
-  指向 Android 章节；「现在还做不到的」注明只列 Windows；新增「十四、Android 版速查」
-  和 sherpa-onnx 的 Apache-2.0 署名。
-- `docs/验证清单.md`：开头说明分组，末尾新增 **Android（IME，真机）15 条**，
-  逐条覆盖手势、联想让位、密码框不读、语音权限与隐私、降级不崩。
-- `docs/后续待办.md`：开头写总目标；勾掉联想两处打磨和设置页剩余项；勾掉
-  「NAS 补推」「github 远程」（今天都已推通，并把凭据/代理的具体做法记下来）。
-- `docs/Android-方案.md`：开头补总目标和进度。
-
-改数字按项目约定四处一起改：README 顶部、README 对比表、index.html、
-`docs/使用帮助.md`。测试数 58 → **71**（新增 13 项 `SuggestPolicyTest`）。
-
-### 一个反复踩的坑：JUnit 断言参数顺序
-
-这轮两次编译失败都是 `assertEquals(expected, actual, "说明")` —— Kotlin 里 JUnit4
-的三参重载是 `assertEquals(message, expected, actual)`，**message 在最前**。
-写成 `assertEquals(actual, expected, "说明")` 不报类型错，而是把 "说明" 当成 expected、
-actual 当成 message，运行期才报一个看不懂的 ComparisonFailure。以后新写断言直接
-message 打头，或干脆不写第三个参数。
-
-
-## 2026-11-06 联想补齐「任何长度的词」：根因是生成器把长头词挤掉了
-
-用户反馈「现在只有两字输入后有联想，单字、三个字也要有，尽量按词频联想」。
-
-### 根因：不是查表逻辑，是内置表只有 2 字头词
-
-`suggest` 本身没限制长度（`is_word` 允许 1..=8 字），但内置表里：
-
-| 头词长度 | 1 字 | 2 字 | 3 字 | 4 字 |
-|---|---|---|---|---|
-| 改前 | **0** | 4699 | 247 | 49 |
-
-`gen_next.py` 按「头词自身词频 + 所有后续权重之和」取前 5000——2 字头词在数量和
-权重上都占优，单字头词（当时还被规则直接排除）和 3 字头词永远排不进去。所以
-「只有两字词有联想」不是查表漏了，是**表里根本没有**。
-
-### 改法一：生成器按头词长度分桶
-
-`tools/gen_next.py` 不再取全局前 N，而是每个长度各取前 N：
-单字 900 / 两字 5200 / 三字 800 / 四字 300（三、四字桶里能拆出来的就 665 / 272 个）。
-
-- 单字头词是这次新增的：`我觉得` → `我→觉得`、`打电话` → `打→电话`。
-  **base.dict.yaml 里没有单字词条**（0 条），所以不能拿 `a in freq` 判断，改成读
-  `_ice8105.yaml`（8105 字表）校验「这是个真汉字」。之前怕「不 / 的 这类虚词把表灌满」
-  而整段排除了单字头，现在它们在表里——虚词后面接什么本来就高频，而且联想是「点一下
-  才上屏」，噪音代价低、漏联想的机会成本高。
-- 后续词**仍然要求 ≥ 2 字**：`北京|市`、`中国|省` 那种「词 → 单个方位词」是纯噪音，
-  这条下限保留。
-- 表从 5003 头词 / 约 1.5 万条涨到 7037 头词 / 20438 条，233 KB → 309 KB。
-  多出来的 76 KB 是这次功能实实在在的成本，记在这里免得以后有人以为是误提交。
-
-### 改法二：查表时做后缀回退
-
-`resolve()`：精确查不到就逐个丢掉最左边的字再查，取**最长的已知后缀**。
-
-- `今天北京` / `去了北京` 表里没有，但后缀 `北京` 有——「北京后面接什么」对这三者
-  本来就是同一件事。
-- **后缀最少留 2 个字**：`计算机` 退到单字「机」会联想出一堆跟整词无关的碎片。
-  单字头词只在 `prev` 本身就是一个字时才用（用户真的上屏了「我」，不是从长词里截的）。
-- `suggest` 的入参校验从 `is_word`（1..=8 字）换成 `all_han`（任意长度的纯汉字）：
-  整句上屏那种长 `prev` 反而更该靠后缀回退救回来。`record` 仍然用 `is_word`。
-
-用户表和内置表**各自**做回退再合并：同一个 `prev` 在两张表里可能落在不同长度的
-后缀上，强行统一到一个键会漏。合并顺序照旧「用户表整段优先、内置表补位」。
-
-### 改法三：Android 联想条数 4 → 5
-
-和 core 的 `next::SHOW`（桌面候选窗）对齐——同一份词对表，条数不一样会让人以为
-「手机上联想更少」。刚上屏、没有候选时 5 个正好排满一行。
-
-### 验证
-
-- `cargo test --workspace`：**354 项**全绿（111 壳 + 243 core，新增 6 项）。
-  新测试钉住：后缀回退取最长、单字头只匹配单字 `prev`、合并去重、任意长度入参，
-  以及**内置表各长度都有货**（`builtin_covers_single_and_long_heads`——这条就是防
-  「又变成只有两字词有联想」的回归测试）。
-- `gradlew testDebugUnitTest assembleDebug`：71 项 JVM 单测全绿，APK 出包。
-  已在 `libfeihe_android.so` 里 `grep` 到 `上市公司`（新表独有）、`人工智能` 仍是 0 条
-  （它确实没进表，正好是后缀回退的测试用例：`人工智能` → `智能` → 手机/家居/系统）。
-  真机仍未验（adb WiFi 掉线）。
-- README / 首页 / 使用帮助里的「内置 1.5 万条」全部改成 2 万；测试数 348 → 354 四处同步。
-  安装包体积（1.83 MB）**没有重新测量**——那要重打 NSIS 安装包，属于发版动作；
-  表大了 76 KB，下次发版时顺手核一下。
-
-### 一个提醒
-
-**待办**：内置表变大意味着首次 `suggest` 的惰性解析多扫 76 KB（一次性，几毫秒）。
-如果以后继续加头词，注意 `BUILTIN` 是 `OnceLock`，解析发生在**第一次上屏后的联想要
-求**，别让它在主线程上长到几十毫秒。
-
-
-## 2026-11-06 0.3.11 → 0.3.12 打包（联想覆盖任何长度）
-
-用户要求「递增小版本号，然后做安装包」。升 patch 号，走 `installer/build_setup.ps1 -SelfTest`。
-
-### 版本号
-
-以 `Cargo.toml` 为唯一真相（`build_setup.ps1` 从那里读，读到才继续），三处 crate 一起升：
-根 `feihe`、`core/feihe-core`、`android/jni/feihe-android` 都是 0.3.12；
-`installer/feihe.nsi` 的兜底 `APP_VER` 同步（只在绕过 build_setup 直接跑 makensis 时用到）。
-两个 `Cargo.lock` 跟着改（根的那个由构建自动更新，Android 那份没有构建就手动改了两行）。
-Android 的 `versionName` 仍是 `0.1.0-skeleton`，没动——那是 App 版本，和引擎版本是两件事，
-正式发 Android 包时再定规则。
-
-### 产物
-
-| 项 | 字节 | 可读 |
-|---|---|---|
-| `dist\Feihe-Setup-0.3.12.exe` | 2,082,982 | 1.99 MB |
-| 64 位 `feihe.dll` | 4,475,904 | 4371 KB |
-| 32 位 `feihe.dll` | 4,519,936 | 4414 KB |
-
-- FileVersion / ProductVersion 都是 **0.3.12**。
-- SHA256 `1734436AD2E91ADD6DB01BA279870257F5BBF20EAF8BE7DAC9291F5A81E01B85`
-- `-SelfTest` 通过：静默装到 `%TEMP%`，64/32 位 DLL 和用户手册都与构建产物 SHA256
-  逐字节一致（这个自检就是为了抓「makensis 不报错但装出来是空壳」）。
-- base.bin 46493 条 / 2895 KB，**不含个人词库**：`src\user_dict.txt` 有 55639 条，
-  `-NoUserDict` 把它们排除了。发布包必须走这条路，否则个人打字记录会随 DLL 发出去。
-
-### 体积为什么涨了
-
-安装包 1.83 → 1.99 MB，装完约 7.9 → 8.6 MB。**别把账都算到联想头上**——内置表只
-+76 KB（233 → 309 KB），大头是 0.3.11 之后这半月累积的改动（分段候选、引擎代码、
-词条）。README / 首页 / 使用帮助三处的体积数字已按实测同步。
-
-
-## 2026-11-06（续）性能优化：P0~P3 全做
-
-用户看完性能报告后要求「建议的条目全都要做」。基准工具 `core/examples/bench.rs`
-（`FEIHE_NO_USER_DICT=1 cargo run --release --example bench -p feihe-core`）先行，
-改动前后都有数。
-
-### P0：内置联想表 309 KB 文本 → 323 KB 二进制（next.bin）
-
-`next.rs` 原来是 `include_str!` + 第一次 `suggest` 时解析成 HashMap：实测
-**5.8 ms / 37,000 次分配 / 2.1 MB 堆**，落在「第一次上屏」或「键盘带着已有文字弹出」
-的瞬间，而且 2.1 MB 是每个宿主进程一份。现在：
-
-- `core/src/nextbin.rs`：零解析读取器（排序头词池 + 偏移表 + 尾词池，二分查找）。
-  **不存权重**——内置表顺序就是生成时的词频顺序，运行时只按序取；省 80 KB。
-  编码器 `nextbin::encode` 就住在读取器同一个文件里，`build.rs` 用 `#[path]` 拉进去用，
-  单测也用它——编码/解码不会各改一半。
-- `core/build.rs`：新增 `gen_next_bin`，把 `src/next_builtin.txt` 编成 `$OUT_DIR/next.bin`，
-  并检查每个头词的权重是否递减（乱序会改变联想排序，构建时就警告）。
-- 效果：首次 suggest **5.8 ms → 0.088 ms**，分配 37,000 次 / 2.1 MB → 10 次 / ~0 KB。
-
-### P1：长串输入的 DP 从三次并成一次
-
-`lookup_input` 里本来就有 `segments`，但 JNI 只回传码+候选，Kotlin 拿到后再调一次
-`segmentCandidatesNative` 重算——24 键输入每次按键白跑 ~100 µs。现在：
-
-- `lookupInputNative` 返回串末尾加 `#seg` 标记行 + 分段数据（每行 `段码\t候选…`）；
-- `NativeEngine.lookupInput` 返回 `Lookup(code, words, segments)`；
-- `FeiheIme.refreshSegmentMode` 直接用带回的 `pendingSegments`，删掉
-  `candidates.size == 1 && code.length >= 4` 那个启发式短路（真值本来就只在 core）；
-- `segmentCandidatesNative` JNI + Kotlin 包装 + core `lookup_segments` 随之删除（无调用方）；
-- `lookup_input` 本身也只算一次分段：整句由各段第一名拼出来，
-  `lookup_input_sentence_equals_compose_sentence` 钉住「与 compose_sentence 一字不差」。
-
-### P2：候选条不再每次按键重建 20~35 个 View
-
-引擎一次按键才几微秒，UI 才是大头。`renderCandidates` 改成复用：
-多退少补 TextView，`bindCandidateView` / `bindSeparatorView` / `bindSuggestionView`
-把每个视觉属性（含 background——可能是分段 chip 复用来的）都重设一遍。
-数字行按「显示开关 + 候选个数」缓存，个数不变就不重建（省 9 个 GradientDrawable）。
-**真机手感未验**（adb WiFi 掉线），但逻辑上渲染输出和以前逐像素等价。
-
-### P3：超长串限长
-
-分段 DP 开销随音节数平方涨。`lookup_input` 加 `MAX_SENTENCE_SYLLABLES = 24`（48 键）：
-以内照常，超过就不试整句/分段——那种串基本是忘了选词，上限把最坏情况钉住。
-
-### 数字
-
-| 项 | 改前 | 改后 |
-|---|---|---|
-| 首次 suggest | 5.8 ms / 2.1 MB 堆 | **0.088 ms / ~0** |
-| lookup 乱码 8 键 | 40 µs / 171 allocs | 21 µs / 93 |
-| lookup 乱码 16 键 | 89 µs | 46 µs |
-| lookup 24 键（含壳重复） | 205 + 103 µs | **108 µs** |
-| 全拼长句 22 键 | 98 µs | 55 µs |
-| suggest 每次分配 | 12 次 | 6 次 |
-
-测试：Rust **358** 项（111 + 247，nextbin 新增 4 + dict 新增 1，删 2 旧内置表测试），
-Android 71 项不变，`assembleDebug` 通过。文档数字四处同步（354 → 358）。
-
-## 2026-11-06（续二）词库扩充 4.7 万 → 7.5 万 + 0.3.13 打包
-
-用户要求：`_icebase.yaml` 的长词不能默认去掉，收纳词数增加。
-
-### 改动（tools/gen_dict.py）
-
-- 长度上限 2~4 字 → **2~8 字**（和联想表 is_word 的 8 字上限对齐）：词库里有
-  7.6 万条五字以上的成语、专名、术语，原来一条都进不来。
-- MAX_WORDS 30000 → **60000**：词频下限从 3.3 万掉到四五千，「生僻一点的词
-  打不出来」这条「还差什么」表里的项顺手消掉一条。
-
-结果：`src/dict.txt` 38,573 → **68,573 条**（单字 8573 / 两字 31,941 /
-三字 13,829 / 四字 12,788 / 五字以上 1,442）；发布 base.bin 46,493 →
-**74,869 条 / 4.8 MB**。单字可编码数 7896 → 8463（8105 表 + pinyin-data
-更新），加 GB2312 补字 110，最终 **8573**。
-
-### 顺手抓到的坑：Gradle 的 Rust 任务漏了词库输入
-
-`android/app/build.gradle.kts` 的 `buildRust` inputs 只盯 `core/src` 和
-`jni/src`——**词库在仓库根的 `src/dict.txt`，不在里面**。扩词库后第一次
-`assembleDebug` 只跑了 2 秒就 UP-TO-DATE，.so 还是旧词库的，和注释里
-「改了 Rust，装上去行为没变」是同一类坑，只是这次坑在数据侧。已把整个
-`../src` 目录加进 inputs（含 user_dict：排除与否本身也是构建输入）。
-
-### 0.3.13 产物
-
-| 项 | 字节 | 可读 |
-|---|---|---|
-| `dist\Feihe-Setup-0.3.13.exe` | 2,631,273 | 2.51 MB |
-| 64 位 feihe.dll | 6,563,840 | 6410 KB |
-| 32 位 feihe.dll | 6,609,408 | 6455 KB |
-
-- FileVersion / ProductVersion **0.3.13**，SHA256
-  `BDB39735D23D7D74C41FB7AA41EBBFC0B1D82676C05038A53B786B58E6E0FFE8`。
-- `-SelfTest` 通过（两份 DLL + 用户手册与构建产物逐字节一致）；
-  个人词库 55,639 条仍被 `-NoUserDict` 排除在外。
-
-### 体积账
-
-安装包 1.99 → **2.51 MB**，装完 8.6 → **12.6 MB**。涨的都是词库
-（base.bin 2.9 → 4.8 MB，两份 DLL 各带一份）——这是「替换搜狗」目标下
-用户点名要的取舍：词库规模从「还差什么」变成「够用」。查询延迟不受影响
-（二分多 1 次比较），文档已同步。
-
-### 验证
-
-cargo test --workspace 358 项全绿（词库翻倍后行为测试无回归）；
-testDebugUnitTest 71 项全绿；APK 128,327,268 字节（+2.1 MB 词库），
-并 grep 到扩充后才有的生僻字（鿕/麤）确认新词库真的编进去了。
-
-## 2026-11-06（续三）细胞词库导入 + 滚动残影 + /v 金额命令 + 二简全表
-
-四件事一批，前两件是用户点名，后两件是用户报的问题/要求。
-
-### 1. 设置窗新增「细胞词库…」：直接导入下载的 .scel
-
-原来「从搜狗导入…」走自动发现，找不到才让手选**文件夹**；用户从搜狗词库网站
-下载的细胞词库是单个 .scel 文件，放在哪都行、跟装没装搜狗无关——那个流程让它
-绕得难受。新增 `sogou::import_file(path)`（扩展名定解析器：.scel/.bin/.txt，
-手动文件优先级 1 与细胞词库同级）+ 设置窗 `ID_SOGOU_FILE` 按钮 + `pick_scel_file`
-（`pick_file` 拆出 `pick_file_filtered` 通用版）。布局重排：第一行
-导入词库/从搜狗导入/细胞词库/导出词库，编译个人词库挪到下一行与自定义短语同排。
-
-**法律边界（用户专门问了，结论：个人使用低风险）**：词表本身（常用词的集合）
-通常不构成作品；.scel 是无加密的普通二进制格式，不涉及规避技术措施；解析用户
-自己下载的文件自用，是十几年来的行业惯例（QQ 拼音、百度、讯飞都有搜狗词库导入，
-开源的深蓝词库转换器做了十几年）。**真正的红线是「我们分发词库数据」**——所以：
-不内置任何 .scel、不做网站抓取、文件永远用户自己下载自己选；使用帮助里写明
-版权归原上传者与搜狗、仅供个人使用、勿再分发提取结果。这句话现在写在
-`docs/使用帮助.md` 的词库一节。
-
-### 2. 设置窗滚动残影：根因是逐个 SetWindowPos 各自异步重画
-
-`scroll_to` 逐个挪子窗口，先动的画完了、后动的还没挪，父窗口暴露的空隙没人擦，
-中间态留在屏幕上。修法三步：`WM_SETREDRAW` 挂起 → 全挪完 → `RedrawWindow`
-（RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW）
-原子重画。注意 windows-rs 0.62 的 `SendMessageW` wparam/lparam 是 Option。
-
-### 3. 快捷输入新增 `/v` 金额
-
-`/c123` 其实已经给金额大写，但四条候选混着读法；开票场景要的是「只有金额」。
-新增 `/v`（`calc::amount_ok/amount_forms`）：数字 → 财务大写在前、小写在后；
-小数只认角分两位、末尾零不影响、`/v123.` 按整数给（候选不闪）、整数 16 位封顶。
-`code_ok` 的中间态规则同步（/v1、/v12. 都合法，组合串不能断）。
-
-### 4. 二级简码全表写进使用帮助
-
-原来只有 12 个例子。从 `core/src/brief2.txt` 生成全表（370 条，按首键分组、
-组内按码升序、次选标（次））插进 `docs/使用帮助.md`；顺手把「首选 273 + 次选 97」
-修正为实际的 **272 + 98**（README 同步）。
-
-### 验证
-
-cargo test --workspace **364 项**全绿（114 壳 + 250 core：sogou +1、quick +1、
-calc +3）；文档三份 + 验证清单（276 重排、281b/c、53b）同步。设置窗布局改动和
-滚动修复**只能真机看**：打开设置滚几屏确认无残影，点「细胞词库…」走一遍导入。
-
-## 2026-11-06（续四）release 0.3.14：细胞词库导入 + 滚动残影 + /v 金额 + 二简全表
-
-0.3.13 只装了「词库扩充」，上一批（细胞词库导入 / 滚动残影 / /v 金额 / 二简全表）
-还没进包，升 0.3.14 重打。版本号照旧三处 crate + nsi 兜底 + 两个 lock，
-文档版本引用同步（README / 首页 / 使用帮助 / Android-方案 / NativeEngine 注释）。
-
-| 项 | 字节 | 可读 |
-|---|---|---|
-| `dist\Feihe-Setup-0.3.14.exe` | 2,633,534 | 2.51 MB |
-| 64 位 feihe.dll | 6,566,912 | 6413 KB |
-| 32 位 feihe.dll | 6,610,944 | 6456 KB |
-
-- FileVersion / ProductVersion **0.3.14**，SHA256
-  `0356DD3F0F650238C6896C04C1D5139721D4ADCA5F96FCA25E9A5FB3D4868096`
-- `-SelfTest` 通过（两份 DLL + 用户手册逐字节一致）；个人词库 55,639 条仍被排除。
-- 装完约 **12.6 MB**，与 0.3.13 持平（这批是代码不是数据）。
-
-这个包里相对 0.3.13 的内容：设置窗「细胞词库…」（直接导入下载的 .scel）、
-设置窗滚动残影修复、快捷输入 `/v` 金额、二级简码全表进帮助文档。
-
-## 2026-11-06（续五）高 DPI 适配：自绘窗口按系统 DPI 放大
-
-自绘 UI 有一笔欠了很久的账：候选窗 / 状态浮窗 / 符号面板 / 设置窗的尺寸全是按
-96 DPI 写死的整数，150% 缩放的笔记本上整块界面小一半。这次补齐，**五个源文件 + 一个
-新模块**。
-
-### 为什么不能在 DLL 里调 `SetProcessDpiAwareness`
-
-DPI 感知是**进程级**状态，宿主（资源管理器 / 记事本 / Chrome）在我们被加载之前就
-定好了。从 DLL 里改它会把宿主整个界面打乱——那是不能碰的东西。所以这一层只做一件事：
-**问系统「这块屏多少 DPI」，然后按比例放大自己的度量**。感知模式跟随宿主。
-
-### unaware 宿主会双重放大
-
-老程序是 DPI unaware，系统把我们的窗口连同坐标一起「虚拟化」放大一遍；我们再按
-DPI 放大就是双重放大，窗口大出一圈。所以 `dpi::effective()` 里，感知模式不是
-PER_MONITOR / SYSTEM 的一律按 96 处理。这条如果写错，症状是「在高 DPI 的普通程序里
-特正常，在老程序里特别大」——很难联想到是感知模式的问题。
-
-### 缓存：`AtomicU32`，0 是「还没问过系统」的哨兵
-
-`dpi()` 每帧都会被命中判定和绘制同时调用，每次去问 `GetDpiForMonitor`（会问 DWM）
-太浪费。缓存一个值，在窗口创建 / `WM_DPICHANGED` / 每次按光标位置弹窗时刷新。
-
-**0 当哨兵**而不是「真的 0 DPI」：0 表示还没问过，按 96 处理。`scale(v, 0)` 返回
-`v` 本身，单测就是拿这个当「默认缩放」的。这一条先写错了（`scale(13,0)` 期望 1），
-被自己的单测抓住。
-
-### 单测不能写全局 DPI 缓存
-
-`candidate` / `softkbd` 的几何用例是按 96 DPI 的常数并排断言的，而且并行跑。
-只要有一个用例顺手 `DPI.store(144)`，别的用例随机假失败、而且时序相关、极难复现。
-所以：**测试路径只准调纯函数 `scale` / `unscale`，绝不准碰 `dpi()`**。
-
-### 32 位构建里 `AtomicIsize` 装不下 `(句柄 << 32) | dpi`
-
-`font.rs` 把字体句柄和 DPI 打包进一个原子量做缓存（句柄变了或 DPI 变了都要重建）。
-第一版用 `AtomicIsize` —— 在 x86 上它只有 32 位，`(dpi << 32)` 直接被 rustc 判成
-编译期溢出。0.3.14 首次出 x86 包就是这么挂的。改 `AtomicU64`，两个架构都够。
-
-### 每个窗口改了什么
-
-| 文件 | 关键改动 |
-|---|---|
-| `src/dpi.rs`（新） | `dpi/px/scale/unscale/update_for_point/update_for_window`，模块文档写清上面三条 |
-| `src/candidate.rs` | 常量改 `*_L` 逻辑值 + 访问函数（`pad/gap/row_h/...`）；`show()` 开头按光标刷新 DPI；`WM_DPICHANGED` **先抄参数、释放 STATE 锁再调 `show()`** |
-| `src/statusbar.rs` | `PAD/HEIGHT/BTN_INSET/BTN_W` 同名改造；`place()` 先 `update_for_point` 再算宽高 |
-| `src/softkbd.rs` | `CELL_W/CELL_H/PAD/TAB_H` 同名改造；`WM_DPICHANGED` 重算宽高 + `SetWindowPos` |
-| `font.rs` | 句柄缓存改 `AtomicU64` 打包 `(句柄, dpi)`，`ui/small/emoji` 按 DPI 比对重建 |
-| `src/settings.rs` | 见下 |
-
-**候选窗的 `WM_DPICHANGED` 有个死锁坑**：处理函数里要调 `show()` 重排，而 `show()`
-自己会去锁 `STATE`。如果 `WM_DPICHANGED` 分支是从「已经持有 `STATE` 锁」的路径上
-进来的，直接调就是自己等自己。所以先把新坐标抄进局部变量、把锁放掉，再调 `show()`。
-
-### 设置窗：换算只在边界做
-
-`settings.rs` 是这一批里最麻烦的——它同时有**逻辑布局**（`build()` 里几十行
-`y += 40`）和**物理尺寸**（客户区高度、滚动条位置、`SetWindowPos`）。
-
-定下的规矩：**布局代码全写逻辑值，换算只在 `mk()` / `window_size()` /
-`client_h()` / `want_client_h()` 四个边界上做**。反过来（每个 `y += 40` 后面跟一句
-`px()`）漏一个就在某个缩放下错位，而且很难看出来——这种漏法在 100% 缩放下完全正常。
-
-几个具体的量：
-
-- `want_client_h()`：`GetSystemMetrics(SM_CYSCREEN)` 给的是**物理**像素，先
-  `unscale` 回逻辑值再夹 `[460, 820]`。不换回来的话，150% 的 768p 屏物理高 768、
-  逻辑高只有 512，会以为屏幕很宽裕，结果窗口高过屏幕、底部按钮跑到屏幕外。
-  这和「1366×768 装不下 900 客户区」是同一个老问题换了副面孔。
-- `client_h()` / `view_h()`：留在**物理**坐标系。滚动相关的东西（`CONTENT_H`、
-  `SCROLL`、`SetWindowPos` 的 y）全在这一个坐标系里才比得了。
-- `CONTENT_H` 存 `px(content_h)`：跟滚动位置同坐标系。
-- 底部「关闭」按钮：`y = unscale(client_h(h), dpi()) - 40`，因为 `mk()` 还会再乘一次。
-  直接减 40 会得到「150% 下按钮浮在半空」。
-- `WM_DPICHANGED`：**重建子窗口**而不是就地挪。就地挪改不了已经下发的高度和字体
-  （字体句柄是按 DPI 缓存的），重建比「遍历子窗口 `SetWindowPos` + `WM_SETFONT`」
-  少一半代码，而且不会漏掉下拉框这类系统自绘的部分。
-
-### Android 侧不用改
-
-Android 全部用 `dp` / `sp`（`resources.displayMetrics.density`），系统本来就按密度
-换算，键盘高度、内边距、字号都已经是密度无关的。这次审计只确认了一件事：源码里没有
-漏网的裸像素值（`setPadding(12, ...)` 这种）。核对结果：`LayoutParams` / `setPadding`
-每一处都走 `dp()`。
-
-### 验证
-
-- `cargo test --workspace`：`133 passed`（新增 `unscale` 往返用例）+ `251 passed`。
-- `build_setup.ps1 -NoUserDict`：64 位 6431 KB / 32 位 6474 KB，`[test] 64 : PASS` /
-  `[test] 32 : PASS`，安装包 `dist\Feihe-Setup-0.3.14.exe` 2,648,415 字节。
-- 真机手感验证见 `docs/验证清单.md` **M3.57（376–384）**：100% 和 150% 两种缩放对着比，
-  含跨屏跟随、unaware 宿主不双重放大、设置窗换屏重排。
-
-## 2026-11-06（续六）release 0.3.15：高 DPI 适配
-
-上一批高 DPI 只编了 DLL、没进包，升 0.3.15 重打。版本号照旧五处
-（三处 crate + nsi 兜底 + 两个 lock），README / 首页 / 使用帮助 / Android-方案
-里的版本与体积引用同步。
-
-| 项 | 字节 | 可读 |
-|---|---|---|
-| `dist\Feihe-Setup-0.3.15.exe` | 2,648,694 | 2.53 MB |
-| 64 位 feihe.dll | 6,585,344 | 6431 KB |
-| 32 位 feihe.dll | 6,628,864 | 6474 KB |
-
-- SHA256 `D4D59BAF03F94E5FEA3F0A2B7901EE7132EE6FE6D1AEDBFFC5C41BBA2742E081`
-- `-SelfTest` 通过（两份 DLL + 用户手册逐字节一致）；个人词库 55,639 条仍被排除。
-- 安装包 2.51 → 2.53 MB（纯代码，无新数据）。
-
-**顺手校了一笔旧账**：README 的「和搜狗比」表里安装包还写着 1.99 MB、装完 8.6 MB
-（那是 0.3.12 的数），0.3.13 词库翻倍后一直没改。这次一并改成 2.53 / 12.6 MB。
-
-## 2026-11-07 快捷输入搬进 core + Android 接线 + 个人词库导入导出
-
-这一批是把 `quick.rs` 从桌面壳搬进 `feihe-core`，让两端用**同一份命令表**，
-然后把 Android 侧的 JNI / Kotlin / InputMethod 接上，并补了个人词库的单独
-导入导出。
-
-### 1. 为什么搬而不是复制
-
-手机上打不出 `/' + 'rq` 是用户直接反馈的痛点。复制一份到 Kotlin 会立刻分叉：
-日期格式改一处、两端忘一处，一年后就是两套行为。搬进 core 后桌面壳只剩：
-
-```rust
-// src/quick.rs（703 字节）
-pub use feihe_core::quick::{candidates, code_ok, commands, EXPR_KEY, PREFIX};
-```
-
-于是 `textservice.rs` / `settings.rs` 里 `quick::` 的调用点**一行没改**。
-
-三个 API 替换（core 不许有系统调用）：
-
-| 原来 | 现在 | 说明 |
-|---|---|---|
-| `GetLocalTime` | `core::clock` | 同一份本地时间拆分 |
-| `CoCreateGuid` | 时间派生模拟 v4 | 不引 `uuid` crate，够用即可（不用来当安全标识） |
-| `fancha` / `ampc` | `core::fancha` / `ampm` | 拼写顺带修正 |
-
-**`EXPR_KEY` 必须一起 re-export**。首版漏了，壳侧编译直接
-`error[E0425]: cannot find value EXPR_KEY in module quick`——门面少导一个
-名字，报错在几百行外的调用点，不好定位。
-
-### 2. Android 侧：快捷输入是独立状态位
-
-`FeiheIme.kt` 里加了 `quickMode` / `quickWords`，**不靠 `pending` 是否以 `/' + '` 开头现判**。
-理由：引导符来自引擎（`quick::PREFIX`），壳里硬写一个 `/' + '` 就是两处真相；
-而 `pending` 在候选为空、切模式、联想中断时都可能被清，跟着它走会闪。
-
-- 进：中文态 + `pending` 为空 + 按 `/' + '`。
-- 退：退格删到只剩 `/' + '` 再按一次退格 / 回车 / 切中英。
-- 候选走 `quickWords`，`renderNumberRow()` 跟着换，**不查词库、不学词、不联想**。
-  日期时间每次都不一样，学了就是往联想表里灌垃圾。
-
-JNI 三个入口单独一个文件 `android/jni/src/quick_extra.rs`
-（`quickPrefixNative` / `quickCandidatesNative` / `quickCodeOkNative`），
-`lib.rs` 已经 340 行，子模块只 `use super::{make_string, read_string};`。
-
-### 3. 个人词库：单独一张卡片，走临时文件
-
-整包备份解决「换手机」，但「把搜狗词库导进来」「把手机上的词带走」更常见，
-塞进 zip 里说不通。设置页新增「个人词库」卡片：当前来源 + 导入 / 导出 / 编译。
-
-- 格式就是 `user_dict.txt` 那套纯文本（词 + Tab + 全拼），记事本能开。
-- SAF 给 `Uri`，引擎要路径：Kotlin 侧 `dictTransfer(uri, import)` 负责
-  「Uri ⇄ cacheDir 临时文件」，用完就删。**不给 core 传流**——那要么一次 JNI
-  回调，要么在 core 里开个只给 Android 的口子，都比一次拷贝更危险。
-- 导出先写临时文件，成功了才搬过去，失败不留空文件。
-- `CompileOutcome::NoSource` **不算失败**：给「先导入一份」的人话，不抛 ERR。
-  匹配时注意枚举是 `Compiled { count, bytes }` / `NoSource { existing }`。
-
-### 4. 体积
-
-这一批**没涨体积**：`quick.rs` 从壳搬到 core，命令表一份没多；`tyme4rs` 早就在
-（农历/干支/节气）。Android `.so` 没实测（本机 JDK 是 1.8 + libjdwp.dll 缺失，
-Gradle 跑不起来），下次在能跑 Gradle 的机器上编一次补数字。
-
-### 验证
-
-- `cargo test --workspace`：壳 **112 passed / 3 ignored**，core **272 passed / 5 ignored**。
-- `cargo check --target aarch64-linux-android -p feihe-jni` 通过，零 error / 零 warning
-  （`quick_extra.rs` / `dict_extra.rs` 都无 `jboolean` 等未使用警告）。
-- Android Kotlin 侧**未做编译验证**（本机无可用 JDK 17），改动集中在
-  `NativeEngine.kt` / `FeiheIme.kt` / `SettingsActivity.kt` / `Backup.kt`。
-
