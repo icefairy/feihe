@@ -16,6 +16,59 @@
 - **构建发布**：32 位支持 · 安装包（NSIS）· UILess 测试宿主
 - **速查**：关键事实（实测确认，别再猜）· 待办 · 已知问题
 
+## 2026-11-07 Win 端「导入细胞词库后没反应」的三个真因
+
+用户报的是 **Windows** 设置窗点「细胞词库…」选完文件什么都没发生。查下来是三个
+独立问题叠在一起，任何一个单独存在都会让结果看起来像「没反应」：
+
+1. **`extract_scel` 一遇不合法记录就 `break`。** 老写法「严格按记录走」，只要有一条
+   解析失败就把文件剩下的全丢。现在的搜狗 `.scel` 在词条区和列表区之间有一段不认识
+   的格式，于是解析出 0 条。
+   → 改成「成功就前进一条、失败跳 2 字节重试」（搜狗自己的解析器也是这个思路）。
+   误判出来的半截词注不出音，会在 `Encoder::encode` 那步被丢掉。
+2. **`extract_bin_loose` 的词长下限**：`blen` 是字节数，4 字节 = 2 个汉字。看着没
+   问题，但按 2 字节游标扫的时候，「拼音长度」字段常落在 4..=32、且后面紧跟的字节能
+   凑出两个汉字，于是匹配到的是半个拼音串，真正的两字词被跳过。
+3. **解析出 0 条照样返回 `Ok`**：设置窗显示「已解析1个文件（0条），没有新词——都已在
+   词库里」，和「成功但本来就有」一模一样。这是最要命的一条。
+
+### 现在的结构（别再写第三份）
+
+「一个文件 → `Imported`」只有 `feihe_core::sogou_import::import_file` 一份实现，
+Windows 的「细胞词库…」和 Android 的 JNI 都调它。**解析出 0 条 = `Err`**，
+`Imported::summary()` 会说明是「扫了 N 条但一条都没解析出来」。
+
+`src/sogou.rs`（Windows 壳）现在只剩：注册表找搜狗目录、目录扫描、读盘。
+`Imported` / `Kind` / `MAX_LEN` 全部改成 `pub use feihe_core::sogou::…`——
+两个 crate 各存一份定义，编译器不会报错，但会在某天悄悄分叉。
+
+### 错误必须弹框
+
+`show_import_error()`：长错误 / 多行错误走 `MessageBoxW`。`ID_NOTE` 那条静态标签
+只有 428px，超过一行的部分直接被裁——「点了没反应」的另一半原因就是错误被裁没了。
+
+### 本机 `cargo test` 的办法（这次终于跑通了）
+
+`.cargo/config.toml` 钉的 gnullvm 链接器 `x86_64-w64-mingw32-gcc` 在 WSL 里解析到的
+是 Linux ELF，Windows 侧 cargo 找不到 `.exe`（PATH 里 `/bin` 的 shim 干扰）。临时改
+`linker` 也没用（cargo 直接说找不到）。唯一可靠的路：用 PowerShell 起一个干净 PATH，
+把 llvm-mingw 的 bin 放最前面：
+
+```powershell
+$env:PATH = 'C:\llvm-mingw\llvm-mingw-20260908-ucrt-x86_64\bin;C:\Users\<你>\.cargo\bin;' + $env:PATH
+Set-Location D:\codes\feihe
+cargo test --lib
+```
+
+实测：壳 107 passed + 3 ignored，core 286 passed + 5 ignored。
+
+### 0.3.15 重打（不出新版本号）
+
+这次修的是「导入根本用不了」，属于 bug 修复、没有新功能，所以**没有升版本号**，
+只把 `dist\Feihe-Setup-0.3.15.exe` 覆盖重打了（`installer/build_setup.ps1`，
+2,651,402 字节，2.53 MB）。安装包内容与源码一致，但版本号仍写 0.3.15。
+下次有用户能感知的新东西时再一起升 0.3.16。
+
 ## 2026-11-06（续七）Android 能编了 + 搜狗词库导入
 
 ### `build-android.ps1`：为什么非要有它
