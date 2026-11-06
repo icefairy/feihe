@@ -152,6 +152,32 @@ cd /mnt/d/tmpfc && CARGO_TARGET_DIR=/mnt/d/tmpfc/target CARGO_INCREMENTAL=0 carg
 
 `cargo` 那侧跑测试的坑见上；**Android 侧真机验证仍然没做**（这次交付的是包）。
 
+## 2026-11-07 仓库根目录瘦身：下载缓存全部挪进 `cache/`
+
+以前仓库根目录躺着 8 个 `_` 前缀的大文件（合计约 29 MB）：雾凇拼音词表、Unihan 包、
+以及几个早已没人引用的死文件。它们和 `Cargo.toml` / `src/` / `README.md` 混在
+一起，`ls` 一眼分不清哪些是产品的一部分。
+
+现在统一在 `cache/`：
+
+| 文件 | 谁读（引用已改） |
+|---|---|
+| `cache/_icebase.yaml` | `tools/gen_dict.py`、`tools/gen_next.py` |
+| `cache/_ice8105.yaml` | `gen_dict.py`、`gen_next.py`、`tools/import_sogou.py` |
+| `cache/_pinyin_data.txt` | `gen_dict.py` |
+| `cache/_unihan.zip` | `tools/gen_assist.py` |
+| `cache/_ids.txt`、`_luna.yaml`、`_kmandarin.txt`、`_enc.py` | 无人引用（死文件，留着没删） |
+
+改法是把 `os.path.join(ROOT, "_xxx")` 换成 `os.path.join(ROOT, "cache", "_xxx")`，
+一共 4 个脚本 6 处。**文件名保留 `_` 前缀**——`gen_dict.py` 下载时就是按这个名字
+落盘的，改名要连着改下载逻辑和一堆文档，不值。
+
+`.gitignore` 加了 `/cache/`（整个目录忽略），同时保留原来的 `/_*.yaml` 等规则，
+防止哪天又把缓存下到根目录时误提交进历史。
+
+验证：`import gen_dict` 打出来的路径都指向 `cache/`；`python tools/gen_next.py`
+正常跑完（它读 `_icebase.yaml` + `_ice8105.yaml`）。
+
 ## 当前状态
 
 0.2.5 的功能全部落地，只有组合串下划线未做。这里只列「哪一块在哪、有什么讲究」，

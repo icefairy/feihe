@@ -34,7 +34,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UNIHAN_ZIP = os.path.join(ROOT, "_unihan.zip")
+UNIHAN_ZIP = os.path.join(ROOT, "cache", "_unihan.zip")
 XHUP_CACHE = os.path.join(ROOT, "tools", "xhup_cache.txt")
 OVERRIDES = os.path.join(ROOT, "tools", "assist_overrides.txt")
 OUT = os.path.join(ROOT, "core", "src", "assist.txt")

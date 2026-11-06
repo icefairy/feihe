@@ -280,7 +280,7 @@ def load_base_codes():
 def load_char_pinyin():
     """单字 → 最高频读音。数据来自 8105 字典（带真实词频）。"""
     if not os.path.exists(gd.CACHE_CHAR):
-        print("  ! 找不到 _ice8105.yaml，无法逐字注音（先跑一次 gen_dict.py）")
+        print("  ! 找不到 cache/_ice8105.yaml，无法逐字注音（先跑一次 gen_dict.py）")
         return {}
     best = {}
     for text, pinyin, weight in gd.parse_dict(gd.CACHE_CHAR):

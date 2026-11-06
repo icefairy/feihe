@@ -51,9 +51,9 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "_icebase.yaml")
+SRC = os.path.join(ROOT, "cache", "_icebase.yaml")
 # 单字字表：只用来判断「这个字是不是常用汉字」，不参与权重。
-CHAR_SRC = os.path.join(ROOT, "_ice8105.yaml")
+CHAR_SRC = os.path.join(ROOT, "cache", "_ice8105.yaml")
 OUT = os.path.join(ROOT, "core", "src", "next_builtin.txt")
 
 # 每个头词最多留几个后续。和 core/src/next.rs 的 MAX_TAIL 对齐（内置表可以更小一点：

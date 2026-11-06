@@ -22,10 +22,10 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE_CHAR = os.path.join(ROOT, "_ice8105.yaml")
-CACHE_WORD = os.path.join(ROOT, "_icebase.yaml")
+CACHE_CHAR = os.path.join(ROOT, "cache", "_ice8105.yaml")
+CACHE_WORD = os.path.join(ROOT, "cache", "_icebase.yaml")
 # 补充拼音源：mozillazg/pinyin-data 的 pinyin.txt（Unicode 全 CJK 读音，带调号）
-CACHE_PY = os.path.join(ROOT, "_pinyin_data.txt")
+CACHE_PY = os.path.join(ROOT, "cache", "_pinyin_data.txt")
 OUT = os.path.join(ROOT, "src", "dict.txt")
 
 MIRRORS = [
@@ -281,7 +281,7 @@ def main():
                 break  # 只取第一个能编码的读音
         print(f"gb2312 补字: {added}（GB2312 共 {len(set(gb2312_hanzi()))} 个汉字）")
     else:
-        print("  [!] 缺少 _pinyin_data.txt，未做 GB2312 补字")
+        print("  [!] 缺少 cache/_pinyin_data.txt，未做 GB2312 补字")
 
     rows = sorted(entries.items(), key=lambda kv: -kv[1])
 

@@ -1505,24 +1505,29 @@ rime-ice 是「书面语料」词表，缺一批日常真的会打的词：电�
 
 ## 数据源与下载缓存
 
-生成词库和辅助码表要拉外部数据，都缓存在仓库根目录，统一用 `_` 前缀，已被 `.gitignore`
-忽略（`_*.yaml` / `_*.txt` / `_*.zip`）。**它们不是产品的一部分**——`build.rs` 只读
-`src/dict.txt` 和 `src/assist.txt`，删掉缓存不影响编译。
+生成词库和辅助码表要拉外部数据，**全部放在仓库根的 `cache/` 目录**，整个目录已被
+`.gitignore` 忽略。**它们不是产品的一部分**——`build.rs` 只读 `src/dict.txt` 和
+`src/assist.txt`，删掉缓存不影响编译。
+
+> 2026-11-07 从仓库根目录挪进 `cache/`：以前 8 个下划线前缀的大文件（合计约 30 MB）
+> 散在根目录，`ls` 一眼分不清哪些是源码、哪些只是下载缓存。名字保留 `_` 前缀，
+> 是为了和 `tools/gen_*.py` 里的引用、以及老文档里的说法对得上。
 
 | 文件 | 大小 | 谁读 | 删了会怎样 |
 |---|---|---|---|
-| `_icebase.yaml` | 15.8 MB | `tools/gen_dict.py` | 下次跑会自动重下（镜像可达） |
-| `_ice8105.yaml` | 0.1 MB | `gen_dict.py`、`import_sogou.py` | 同上 |
-| `_pinyin_data.txt` | 1.0 MB | `gen_dict.py`（GB2312 补字取音） | 自动重下（`pinyin-data` 的 `pinyin.txt`，多镜像） |
-| `_ids.txt` | 2.1 MB | **无人引用** | 死文件，可删（辅助码改成官方码之后不再需要 IDS） |
-| `_unihan.zip` | 8.0 MB | `tools/gen_assist.py` | **别删**：unicode.org 目前连不上，删了就没法重生成自然码辅助码 |
-| `_luna.yaml` | 0.8 MB | **无人引用** | 死文件，可删 |
-| `_kmandarin.txt` | 0.9 MB | **无人引用** | 死文件，可删 |
+| `cache/_icebase.yaml` | 15.8 MB | `tools/gen_dict.py`、`gen_next.py` | 下次跑会自动重下（镜像可达） |
+| `cache/_ice8105.yaml` | 0.1 MB | `gen_dict.py`、`gen_next.py`、`import_sogou.py` | 同上 |
+| `cache/_pinyin_data.txt` | 1.0 MB | `gen_dict.py`（GB2312 补字取音） | 自动重下（`pinyin-data` 的 `pinyin.txt`，多镜像） |
+| `cache/_ids.txt` | 2.1 MB | **无人引用** | 死文件，可删（辅助码改成官方码之后不再需要 IDS） |
+| `cache/_unihan.zip` | 8.0 MB | `tools/gen_assist.py` | **别删**：unicode.org 目前连不上，删了就没法重生成自然码辅助码 |
+| `cache/_luna.yaml` | 0.8 MB | **无人引用** | 死文件，可删 |
+| `cache/_kmandarin.txt` | 0.9 MB | **无人引用** | 死文件，可删 |
+| `cache/_enc.py` | 2 KB | 无（当年手工核对编码用的小脚本） | 可删 |
 
-Unihan 没有下载代码，得手工放到仓库根目录：
+Unihan 没有下载代码，得手工放进去：
 
 ```text
-https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip          -> _unihan.zip
+https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip          -> cache/_unihan.zip
 ```
 
 小鹤形码不在这里：它是 `tools/fetch_xhup.py` 抓官方接口的结果，存在
