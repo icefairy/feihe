@@ -21,6 +21,7 @@ object UiPrefs {
     private const val KEY_NUMBER_ROW = "number_row"
     private const val KEY_VOICE = "voice"
     private const val KEY_CANDIDATE_LIMIT = "candidate_limit"
+    private const val KEY_SMS_OTP = "sms_otp"
 
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -51,4 +52,16 @@ object UiPrefs {
 
     fun setVoiceEnabled(ctx: Context, on: Boolean) =
         prefs(ctx).edit().putBoolean(KEY_VOICE, on).apply()
+
+    /**
+     * 从短信读取验证码。**默认关**。
+     *
+     * 这是整个输入法里唯一会碰「别人发给你的内容」的功能，读的还是短信——权限本身
+     * 就是敏感权限。所以默认值必须是 false：用户没主动打开，就不该有任何一条短信
+     * 被读。打开后还有两道闸（系统授权 + 当前是验证码框），见 [com.feihe.ime.clip.SmsOtp]。
+     */
+    fun smsOtp(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SMS_OTP, false)
+
+    fun setSmsOtp(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean(KEY_SMS_OTP, on).apply()
 }

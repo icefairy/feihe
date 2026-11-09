@@ -1,8 +1,10 @@
 package com.feihe.ime
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -165,6 +167,34 @@ class SettingsActivity : Activity() {
                     if (on) requestMicPermissionIfNeeded()
                 },
                 actionRow("语音模型", "模型状态、隐私说明见下方") { showVoiceInfo() },
+            ),
+        )
+
+        // 隐私：整个输入法里唯一会碰「别人发给你的内容」的开关，单独一张卡，**默认关**。
+        // 和语音放一起容易让人以为是一类东西——语音是本地处理自己的声音，短信是读
+        // 第三方发来的文字，敏感程度不一样。
+        list.addView(
+            card(
+                "隐私",
+                switchRow(
+                    "从短信读取验证码",
+                    "只在验证码输入框里读最近 10 分钟的短信，只取数字本身（默认关）",
+                    UiPrefs.smsOtp(this),
+                    alwaysEnabled = true,
+                ) { on ->
+                    if (!on) {
+                        UiPrefs.setSmsOtp(this, false)
+                        return@switchRow
+                    }
+                    // 先不落盘：授权是异步的，等 onRequestPermissionsResult 再决定。
+                    // 否则用户拒绝了权限、开关却显示「已开启」，下次进来才发现没生效。
+                    if (hasSmsPermission()) {
+                        UiPrefs.setSmsOtp(this, true)
+                    } else {
+                        requestPermissions(arrayOf(Manifest.permission.READ_SMS), REQ_SMS)
+                    }
+                },
+                actionRow("读什么、什么时候读", "短信权限的完整说明") { showSmsInfo() },
             ),
         )
 
@@ -682,6 +712,52 @@ class SettingsActivity : Activity() {
      * "录音不出本机"。模型是离线 paraformer（见 `docs/Android-方案.md` §4），
      * 没有任何联网上传路径。
      */
+    private fun hasSmsPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * 短信权限的授权结果。
+     *
+     * **必须等这里再写开关**：`requestPermissions` 是异步的，在点击回调里直接写
+     * 「已开启」会出现「权限被拒但开关是开的」——用户下次进来发现验证码不提示，
+     * 也看不出是权限问题。拒绝时顺便说清楚退化成什么（只能从剪贴板识别）。
+     */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_SMS) return
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        UiPrefs.setSmsOtp(this, granted)
+        if (!granted) toast("没有短信权限，验证码只能从剪贴板识别")
+        // 开关的真实状态取决于授权结果，整页重画一次最省事
+        setContentView(buildUi())
+    }
+
+    /**
+     * 短信验证码的权限说明。
+     *
+     * 这段话的作用是让用户在**授权之前**就知道边界：读哪些、什么时候读、读完留下什么。
+     * 和语音那条隐私说明同一个理由——不能等用户点了同意再解释。
+     */
+    private fun showSmsInfo() {
+        AlertDialog.Builder(this)
+            .setTitle("短信验证码")
+            .setMessage(
+                "默认关闭，打开后也只做这几件事：\n\n" +
+                    "· 只在当前输入框是「验证码框」（数字框或提示里带验证码）时读，平时一个字都不读；\n" +
+                    "· 只查最近 10 分钟内的几条短信，目的是找 4-8 位数字；\n" +
+                    "· 短信正文不保存、不联网、不进剪贴板历史，用完只留下那串数字；\n" +
+                    "· 键盘收起就停止监听。\n\n" +
+                    "关掉这个开关后，本输入法不再读取短信。",
+            )
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
     private fun requestMicPermissionIfNeeded() {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -752,5 +828,8 @@ class SettingsActivity : Activity() {
         const val REQ_DICT_EXPORT = 1003
         const val REQ_DICT_IMPORT = 1004
         const val REQ_SOGOU_IMPORT = 1005
+
+        /** 短信权限。和上面几个 startActivityForResult 的码分开，别撞。 */
+        const val REQ_SMS = 1006
     }
 }

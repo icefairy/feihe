@@ -1,8 +1,14 @@
 package com.feihe.ime
 
+import android.content.ClipboardManager
 import android.content.Intent
+import android.database.ContentObserver
+import android.net.Uri
 import android.graphics.drawable.GradientDrawable
 import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
+import android.text.TextUtils
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -12,7 +18,11 @@ import android.widget.Toast
 import android.view.inputmethod.EditorInfo
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import com.feihe.ime.clip.ClipHistory
+import com.feihe.ime.clip.OtpCode
+import com.feihe.ime.clip.SmsOtp
 import com.feihe.ime.engine.NativeEngine
 import com.feihe.ime.segment.SegmentState
 import com.feihe.ime.suggest.CandidateBarPolicy
@@ -27,6 +37,7 @@ import com.feihe.ime.keyboard.NumberSelectLayout
 import com.feihe.ime.keyboard.Page
 import com.feihe.ime.keyboard.ShiftMachine
 import com.feihe.ime.keyboard.ShiftState
+import java.io.File
 
 /**
  * 飞鹤输入法 · Android 壳（M2 阶段）。
@@ -164,6 +175,29 @@ class FeiheIme : InputMethodService() {
     /** 当前键盘页。字母 / 数字 / 符号——布尔值装不下三态，别再退回布尔。 */
     private var page: Page = Page.LETTERS
 
+    /** 当前输入框的 inputType / hint。判断「像不像验证码框」用，见 [OtpCode]。 */
+    private var fieldType = 0
+    private var fieldHint: CharSequence? = null
+
+    /** 候选条上要提示的验证码；null = 没有。只在没有候选时显示，避免顶掉候选的位置。 */
+    private var otpCode: String? = null
+
+    /** 剪贴板历史。纯逻辑在 [ClipHistory]，这里只管读、存、画。 */
+    private var clipEntries: List<ClipHistory.Entry> = emptyList()
+    private var clipPanel: LinearLayout? = null
+    private var clipList: LinearLayout? = null
+    private var clipButton: TextView? = null
+    private var clipOpen = false
+
+    /** 上次读剪贴板的时间（毫秒）。onStartInputView 和 onWindowShown 常常连着来，别读两遍。 */
+    private var lastClipReadAt = 0L
+
+    /** 用户是否打开了「从短信读取验证码」。默认 false，见 [UiPrefs.smsOtp]。 */
+    private var smsOtpOn = false
+
+    /** 键盘在屏时挂的短信监听；收起来就摘掉，不做常驻监听。 */
+    private var smsObserver: ContentObserver? = null
+
     override fun onCreate() {
         super.onCreate()
         // 数据目录用 filesDir：输入法进程随时可能被杀，配置和词频都必须落盘到
@@ -181,6 +215,9 @@ class FeiheIme : InputMethodService() {
             },
         )
         readUiPrefs()
+        clipEntries = ClipHistory.decode(
+            runCatching { clipFile().takeIf { it.isFile }?.readText().orEmpty() }.getOrDefault("")
+        )
         Log.i(TAG, "onCreate: 引擎 ${NativeEngine.coreVersion()}，${modeLabel()}")
     }
 
@@ -206,6 +243,9 @@ class FeiheIme : InputMethodService() {
         showNumberRow = UiPrefs.showNumberRow(this)
         voiceEnabled = UiPrefs.voiceEnabled(this)
         candidateLimit = UiPrefs.candidateLimit(this)
+        smsOtpOn = UiPrefs.smsOtp(this)
+        // 用户刚在设置页把短信开关关掉：监听要立刻摘掉，不能等键盘收起
+        if (!smsOtpOn) stopSmsObserver()
         micButton?.visibility = if (voiceEnabled) View.VISIBLE else View.GONE
     }
 
@@ -215,6 +255,12 @@ class FeiheIme : InputMethodService() {
     override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
         clearComposing()
+        fieldType = info?.inputType ?: 0
+        fieldHint = info?.hintText
+        // 换输入框是抓剪贴板的时机：用户刚从短信里复制验证码，切回来正好被记下。
+        // 读不到的场合也正常（密码框、宿主不允许），见 readClipboard。
+        readClipboard()
+        refreshSmsCode(render = false)
         // 换了输入框（甚至可能是换了 App），**同一段连续输入里攒的 prevWord 不能再沿用** ——
         // 否则切到微信会拿着半小时前在便签里打的词去联想。
         // 但也不能直接清空：搜狗这类输入法会读光标前的文字，切回聊天框时「北京」后面
@@ -249,11 +295,197 @@ class FeiheIme : InputMethodService() {
         return HostContext.lastWord(before)
     }
 
+    /**
+     * 读一次剪贴板：记进历史，顺手判断能不能当验证码提示。
+     *
+     * **只在键盘出现 / 切输入框时读**，不做常驻监听——Android 10 起后台读剪贴板
+     * 这条路本来就是断的，输入法能拿到的就是「自己有焦点」的那几个瞬间。用户从短信
+     * 复制完切回输入框，正好落在这些时刻上。
+     *
+     * **密码框一律不读**：剪贴板里很可能就是那个密码，和 [HostContext.canRead]
+     * 是同一条底线。
+     */
+    private fun readClipboard(force: Boolean = false) {
+        // onStartInputView 和 onWindowShown 常常连着触发，别读两遍。
+        val now = System.currentTimeMillis()
+        if (!force && now - lastClipReadAt < 300) return
+        lastClipReadAt = now
+
+        if (!HostContext.canRead(fieldType)) {
+            otpCode = null
+            return
+        }
+        val cm = getSystemService(ClipboardManager::class.java) ?: return
+        val clip = runCatching { cm.primaryClip }.getOrNull() ?: return
+        val text = runCatching {
+            if (clip.itemCount == 0) null else clip.getItemAt(0).coerceToText(this)?.toString()
+        }.getOrNull()
+        if (text.isNullOrBlank()) return
+
+        rememberClip(text)
+
+        // 有数字框 / hint 里的关键词兜底：剪贴板里是验证码，但当前框是普通文本框时
+        // 也提示——很多 App 的验证码框不走 number 类型。
+        val code = OtpCode.extract(text)
+        otpCode = when {
+            code == null -> null
+            OtpCode.looksLikeOtpField(fieldType, fieldHint) -> code
+            OtpCode.hasKeyword(text) -> code
+            else -> null
+        }
+    }
+
+    /**
+     * 从短信里取一次验证码。
+     *
+     * 三道闸全过才会读（见 [SmsOtp]）：设置里打开了、系统给了权限、当前输入框像
+     * 验证码框。取到的只是那 4-8 位数字，短信正文用完即弃。
+     *
+     * [render] 为 false 时只更新状态不动界面——调用方紧接着自己会刷候选，省一次重绘。
+     */
+    private fun refreshSmsCode(render: Boolean = true) {
+        if (!smsOtpOn) return
+        if (!OtpCode.looksLikeOtpField(fieldType, fieldHint)) return
+        if (!SmsOtp.canRead(this)) return
+        val code = SmsOtp.latestCode(this, System.currentTimeMillis())
+        if (code == null || code == otpCode) return
+        otpCode = code
+        if (render) refreshCandidates()
+    }
+
+    /**
+     * 监听短信变化，只在键盘可见期间挂着。
+     *
+     * 验证码几乎总是「这个输入框已经开着」的时候到的，所以这里值得挂一个监听：
+     * 不挂的话用户得收起键盘再弹出来才能看到提示。收起键盘就摘——不做常驻监听，
+     * 也不为了这个去要求后台运行。
+     */
+    private fun startSmsObserver() {
+        if (!smsOtpOn || smsObserver != null) return
+        if (!OtpCode.looksLikeOtpField(fieldType, fieldHint)) return
+        if (!SmsOtp.canRead(this)) return
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                refreshSmsCode()
+            }
+        }
+        val ok = runCatching {
+            contentResolver.registerContentObserver(Uri.parse("content://sms"), true, observer)
+        }.isSuccess
+        if (ok) smsObserver = observer
+    }
+
+    private fun stopSmsObserver() {
+        smsObserver?.let { o -> runCatching { contentResolver.unregisterContentObserver(o) } }
+        smsObserver = null
+    }
+
+    /** 记一条历史。内容没变化时 [ClipHistory.merge] 会返回原引用，这里就不写盘。 */
+    private fun rememberClip(text: String) {
+        val next = ClipHistory.merge(clipEntries, text, System.currentTimeMillis())
+        if (next === clipEntries) return
+        clipEntries = next
+        persistClips()
+        if (clipOpen) renderClipboard()
+    }
+
+    private fun clipFile(): File = File(filesDir, "clip.txt")
+
+    private fun persistClips() {
+        runCatching { clipFile().writeText(ClipHistory.encode(clipEntries)) }
+    }
+
+    private fun toggleClipboard() {
+        if (clipOpen) closeClipboard() else openClipboard()
+    }
+
+    /**
+     * 打开剪贴板面板：藏键盘、露面板。
+     *
+     * 打开这一刻**强制再读一次**剪贴板：用户点了这个按钮，多半是刚复制了什么，
+     * 而系统不允许我们在后台监听剪贴板（Android 10+），这里就是最接近「实时」的时机。
+     */
+    private fun openClipboard() {
+        readClipboard(force = true)
+        clipOpen = true
+        keyboardHost?.visibility = View.GONE
+        clipPanel?.visibility = View.VISIBLE
+        clipButton?.setTextColor(Palette.of(this).accent)
+        renderClipboard()
+    }
+
+    private fun closeClipboard() {
+        clipOpen = false
+        clipPanel?.visibility = View.GONE
+        keyboardHost?.visibility = View.VISIBLE
+        clipButton?.setTextColor(Palette.of(this).sub)
+    }    private fun renderClipboard() {
+        val list = clipList ?: return
+        list.removeAllViews()
+        val p = Palette.of(this)
+        if (clipEntries.isEmpty()) {
+            list.addView(
+                TextView(this).apply {
+                    text = "还没有记录。复制的内容会在键盘弹出时记在这里。"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTextColor(p.sub)
+                    setPadding(dp(10f), dp(14f), dp(10f), dp(14f))
+                },
+            )
+            return
+        }
+        clipEntries.forEach { e ->
+            list.addView(
+                TextView(this).apply {
+                    // 预览压成一行：换行会让每一条高度不一样，列表看起来是散开的
+                    text = e.text.replace('\n', ' ').replace('\t', ' ')
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    setTextColor(p.text)
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    setPadding(dp(10f), dp(11f), dp(10f), dp(11f))
+                    setOnClickListener { insertClip(e) }
+                    setOnLongClickListener {
+                        removeClip(e)
+                        true
+                    }
+                },
+            )
+        }
+    }
+
+    /** 点一条 = 上屏。历史里的原文可能有多行，照原样提交。 */
+    private fun insertClip(e: ClipHistory.Entry) {
+        clearComposing()
+        commitText(e.text)
+        // 用过的挪到最前，下次打开就是第一条
+        clipEntries = ClipHistory.merge(clipEntries, e.text, System.currentTimeMillis())
+        persistClips()
+        closeClipboard()
+    }
+
+    /** 长按删掉这一条。删的是**这一条对象**，不是下标——下标在列表变化后会错位。 */
+    private fun removeClip(e: ClipHistory.Entry) {
+        val next = clipEntries.filterNot { it === e }
+        if (next.size == clipEntries.size) return
+        clipEntries = next
+        persistClips()
+        renderClipboard()
+    }
+
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         // 用户可能刚从设置页切了输入方式/方案/界面开关回来，这里重读一次
         readInputMode()
         readUiPrefs()
+        if (info != null) {
+            fieldType = info.inputType
+            fieldHint = info.hintText
+        }
+        readClipboard()
+        // 短信优先于剪贴板：同一屏里短信里的码一定比剪贴板里的新
+        refreshSmsCode(render = false)
+        startSmsObserver()
         refreshCandidates()
         refreshStatus()
     }
@@ -269,6 +501,9 @@ class FeiheIme : InputMethodService() {
         super.onWindowShown()
         readInputMode()
         readUiPrefs()
+        readClipboard()
+        refreshSmsCode(render = false)
+        startSmsObserver()
         refreshCandidates()
         refreshStatus()
     }
@@ -307,6 +542,18 @@ class FeiheIme : InputMethodService() {
             setOnClickListener { openSettings() }
         }
 
+        // 剪贴板历史入口。放在状态条上而不是候选条里：候选条只在有候选项时才有意义，
+        // 而剪贴板随时可能要用（复制了链接、地址、验证码之后）。
+        clipButton = TextView(this).apply {
+            text = "📋"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            gravity = Gravity.CENTER
+            setTextColor(statusPalette.sub)
+            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            contentDescription = "剪贴板历史"
+            setOnClickListener { toggleClipboard() }
+        }
+
         // 麦克风：按住说话、松手识别。**用 OnTouch 而不是 OnClick**：两态按钮用户
         // 分不清现在是录还是没录，而输入法窗口没地方放录音红灯。
         micButton = TextView(this).apply {
@@ -341,6 +588,7 @@ class FeiheIme : InputMethodService() {
                 statusText,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
             )
+            addView(clipButton)
             addView(micButton)
             addView(gear)
         }
@@ -751,13 +999,19 @@ class FeiheIme : InputMethodService() {
             renderSegmentBar(bar, seg)
             return
         }
+        // 验证码提示只在**没有候选**时占第一格：一旦开始打字它就隐身。
+        // 否则它会顶掉候选的位置，数字选词（1-9 → 第几个候选）也会跟着错一位。
+        val otp = otpCode.takeIf { candidates.isEmpty() && pending.isEmpty() }
+
         // 复用已有的 TextView：候选 + 分隔符 + 联想按顺序对位，多了删、少了补。
         // 以前每次按键都 removeAllViews 再新建 20~35 个 View——引擎一次按键才几微秒，
         // View 重建才是候选条的大头，而且绝大多数按键只是换几个字。
-        val total = candidates.size + if (suggestions.isEmpty()) 0 else 1 + suggestions.size
+        val total = (if (otp == null) 0 else 1) + candidates.size +
+            if (suggestions.isEmpty()) 0 else 1 + suggestions.size
         while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
         while (bar.childCount < total) bar.addView(TextView(this))
         var i = 0
+        if (otp != null) bindOtpView(bar.getChildAt(i++) as TextView, otp)
         candidates.forEachIndexed { idx, word ->
             bindCandidateView(bar.getChildAt(i++) as TextView, word, idx == 0)
         }
@@ -779,6 +1033,26 @@ class FeiheIme : InputMethodService() {
         val p = Palette.of(this)
         v.setTextColor(if (first) p.accent else p.text)
         v.setOnClickListener { commitWord(word) }
+    }
+
+    /**
+     * 验证码提示。**文案必须带「验证码」三个字**：候选条平时是一排汉字，单独一个
+     * "123456" 混在里面，用户会以为那是词库里的词，不敢点。
+     */
+    private fun bindOtpView(v: TextView, code: String) {
+        v.background = null
+        v.text = "验证码 $code"
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        v.setPadding(dp(12f), 0, dp(12f), 0)
+        v.setTextColor(Palette.of(this).accent)
+        v.setOnClickListener { commitOtp(code) }
+    }
+
+    private fun commitOtp(code: String) {
+        otpCode = null
+        clearComposing()
+        commitText(code)
+        refreshCandidates()
     }
 
     /** 候选和联想之间的细竖线，不可点。 */
@@ -1065,7 +1339,19 @@ class FeiheIme : InputMethodService() {
         }
     }
 
+    /**
+     * 键盘收起：短信监听跟着摘掉。
+     *
+     * 系统和用户都看得见「这个输入法在键盘开着的时候瞄了一眼短信」——键盘一收就停，
+     * 不留后台监听。
+     */
+    override fun onFinishInputView(finishingInput: Boolean) {
+        stopSmsObserver()
+        super.onFinishInputView(finishingInput)
+    }
+
     override fun onFinishInput() {
+        stopSmsObserver()
         prevWord = ""
         clearComposing()
         super.onFinishInput()

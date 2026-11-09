@@ -12,6 +12,16 @@
          不声明的话 AudioRecord 直接抛 SecurityException，而不是"没声音"。 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!--
+      短信验证码：**默认不读**。设置页里「从短信读取验证码」默认关，打开时才申请
+      这个权限，而且只在「当前输入框像验证码框」时读最近 10 分钟的短信，取到 4-8 位
+      数字就把正文丢掉（见 clip/SmsOtp.kt 的三道闸）。
+
+      声明在 manifest 里是必须的：不声明的话 requestPermissions 直接返回拒绝，
+      连授权框都弹不出来。
+    -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+
     <application
         android:allowBackup="false"
         android:label="@string/app_name">
