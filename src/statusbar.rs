@@ -23,7 +23,7 @@ use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::GetCurrentProcessId;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -95,7 +95,39 @@ fn button_rects() -> [(Btn, RECT); 4] {
     out
 }
 
+/// 关掉一个我们自己的窗口，**跨线程安全**。
+///
+/// Win32 只允许**创建窗口的线程**调用 `DestroyWindow`。TSF 是按线程激活的，
+/// 反激活可能落在另一个线程上：那里调 `DestroyWindow` 会失败（ERROR_ACCESS_DENIED），
+/// 而 `WND` 已经被清成 0，窗口就永远留在屏幕上——用户报的「桌面上 5 条状态条」
+/// 就是这么来的（同一个进程里 5 个不同线程各留下一条）。
+///
+/// 跨线程时改成给拥有线程发 `WM_CLOSE`：它在自己的消息循环里走
+/// `DefWindowProc` → `DestroyWindow`，不违反跨线程限制。
+unsafe fn close_window(h: HWND) {
+    if h.is_invalid() {
+        return;
+    }
+    let owner = GetWindowThreadProcessId(h, None);
+    if owner == GetCurrentThreadId() {
+        let _ = DestroyWindow(h);
+    } else {
+        let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+        crate::dlog!(
+            "statusbar: 跨线程关闭窗口（owner={} tid={}）",
+            owner,
+            GetCurrentThreadId()
+        );
+    }
+}
+
 static WND: AtomicIsize = AtomicIsize::new(0);
+/// 建窗串行化。TSF 是**按线程**激活的：一个进程里可能有多个线程各有一份 TIP
+/// 实例，同时进 `show()` 时若都看到 `WND == 0`，就会各建一个，后建的覆盖 WND，
+/// 先建的那个当场变成孤儿。
+static CREATE_LOCK: Mutex<()> = Mutex::new(());
+/// 孤儿清理只做一次（每个进程一次）。
+static REAPED: AtomicBool = AtomicBool::new(false);
 
 // ─────────────────────────────────────────────────────────────
 // 悬停提示
@@ -286,6 +318,51 @@ unsafe fn place(hwnd: HWND, follow_caret: bool) {
     let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width(), height(), SWP_NOACTIVATE);
 }
 
+/// 关掉本进程里**别的线程**遗留下来的状态条窗口。
+///
+/// 这是历史 bug 的善后：`Deactivate` 曾经无条件 `DestroyWindow`，而 TSF 反激活
+/// 可能发生在**另一个线程**上——Win32 只允许创建线程销毁自己的窗口，所以那次
+/// 调用静默失败，`WND` 却被清成 0，窗口就永远留在屏幕上。用户看到的是
+/// 「桌面上好几条输入法状态条」。
+///
+/// 这里在建窗 / 首次显示时扫一遍同进程的同类窗口，给它们发 `WM_CLOSE`：真正的
+/// 销毁由各自的拥有线程在消息循环里完成（`DefWindowProc` → `DestroyWindow`），
+/// 不违反跨线程限制。
+unsafe fn reap_orphans(keep: HWND) {
+    struct Ctx {
+        keep: HWND,
+        pid: u32,
+        killed: u32,
+    }
+    unsafe extern "system" fn cb(h: HWND, l: LPARAM) -> BOOL {
+        let ctx = &mut *(l.0 as *mut Ctx);
+        if h == ctx.keep {
+            return TRUE;
+        }
+        let mut buf = [0u16; 64];
+        let n = GetClassNameW(h, &mut buf);
+        if n <= 0 || String::from_utf16_lossy(&buf[..n as usize]) != "FeiheStatusBar" {
+            return TRUE;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(h, Some(&mut pid));
+        if pid == ctx.pid {
+            let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
+            ctx.killed += 1;
+        }
+        TRUE
+    }
+    let mut ctx = Ctx {
+        keep,
+        pid: GetCurrentProcessId(),
+        killed: 0,
+    };
+    let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize));
+    if ctx.killed > 0 {
+        crate::dlog!("statusbar: 清理了 {} 个孤儿状态条窗口", ctx.killed);
+    }
+}
+
 unsafe fn create() -> Option<HWND> {
     if !ensure_class() {
         return None;
@@ -347,21 +424,29 @@ pub fn show() {
         return;
     }
     REFUSE.store(0, Ordering::Relaxed);
-    let raw = WND.load(Ordering::Acquire);
-    let h = if raw != 0 {
-        HWND(raw as *mut core::ffi::c_void)
-    } else {
-        match unsafe { create() } {
-            Some(h) => {
-                WND.store(h.0 as isize, Ordering::Release);
-                h
-            }
-            None => {
-                crate::dlog_change!(REFUSE, 2, "statusbar::show：窗口创建失败");
-                return;
+    // 建窗串行化：同一进程里多个 TIP 线程同时进来时，只有第一个能建（见 CREATE_LOCK）。
+    let h = {
+        let _g = CREATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let raw = WND.load(Ordering::Acquire);
+        if raw != 0 {
+            HWND(raw as *mut core::ffi::c_void)
+        } else {
+            match unsafe { create() } {
+                Some(h) => {
+                    WND.store(h.0 as isize, Ordering::Release);
+                    h
+                }
+                None => {
+                    crate::dlog_change!(REFUSE, 2, "statusbar::show：窗口创建失败");
+                    return;
+                }
             }
         }
     };
+    // 老版本留下的孤儿窗口：每个进程只扫一次（见 reap_orphans）。
+    if !REAPED.swap(true, Ordering::AcqRel) {
+        unsafe { reap_orphans(h) };
+    }
     unsafe {
         let _ = ShowWindow(h, SW_SHOWNA);
         let _ = InvalidateRect(Some(h), None, true);
@@ -381,22 +466,32 @@ pub fn hide() {
     VISIBLE.store(false, Ordering::Release);
 }
 
-/// 反激活/卸载时销毁
+/// 反激活/卸载时销毁。
+///
+/// **只有建它的那个线程才销毁。** TSF 是按线程激活的，一个进程里可能有多个
+/// 线程各有一份 TIP 实例；B 线程反激活时若把 A 线程建的浮窗拆了，A 还在前台
+/// 打字却没了浮窗，300ms 后又得重建一次——表现是「浮窗一闪一闪」。
 pub fn destroy() {
-    let raw = WND.swap(0, Ordering::AcqRel);
-    VISIBLE.store(false, Ordering::Release);
+    let _g = CREATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let raw = WND.load(Ordering::Acquire);
     if raw == 0 {
         return;
     }
+    let h = HWND(raw as *mut core::ffi::c_void);
+    if unsafe { GetWindowThreadProcessId(h, None) } != unsafe { GetCurrentThreadId() } {
+        return;
+    }
+    WND.store(0, Ordering::Release);
+    VISIBLE.store(false, Ordering::Release);
     unsafe {
         let h = HWND(raw as *mut core::ffi::c_void);
         let _ = KillTimer(Some(h), TIMER_ID);
-        let _ = DestroyWindow(h);
+        close_window(h);
         // 提示窗是独立窗口，得单独销毁，否则进程退出时留一个孤儿 topmost
         TIP_IDX.store(-2, Ordering::Release);
         let tip = HWND(TIP_WND.swap(0, Ordering::AcqRel) as *mut core::ffi::c_void);
         if !tip.is_invalid() {
-            let _ = DestroyWindow(tip);
+            close_window(tip);
         }
     }
 }
