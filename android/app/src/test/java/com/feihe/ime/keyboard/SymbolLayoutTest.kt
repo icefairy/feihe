@@ -78,4 +78,20 @@ class SymbolLayoutTest {
         assertEquals(SymbolLayout.rows, KeyboardPages.rows(Page.SYMBOLS))
         assertEquals(EmojiLayout.rows, KeyboardPages.rows(Page.EMOJI))
     }
+
+    /**
+     * 顿号必须在**字母页和符号页都点得到**。
+     *
+     * 它是中文里最常用的标点之一（列举报菜名、地名），藏进二级页面等于没有；
+     * 用户报过「符号页找不到顿号」，所以这条钉死——两页各有一个、且都能直接上屏。
+     */
+    @Test
+    fun `字母页和符号页都有顿号`() {
+        val letters = QwertyLayout.rows.flatten().filter { it.label == "、" }
+        assertEquals("字母页应有一个顿号键", 1, letters.size)
+        assertEquals(KeyKind.PUNCT, letters[0].kind)
+        val symbols = SymbolLayout.rows.flatten().filter { it.label == "、" }
+        assertEquals("符号页应有一个顿号键", 1, symbols.size)
+        assertEquals(KeyKind.TEXT, symbols[0].kind)
+    }
 }

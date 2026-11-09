@@ -58,6 +58,31 @@ class QwertyLayoutTest {
     }
 
     /**
+     * 每个字母键都要有上滑字符，且互不重复。
+     *
+     * 少了某一个 → 那个键上滑没反应（用户会以为手势时灵时不灵）；重复 → 两个键
+     * 上滑出同一个字符，等于其中一个是多余的。
+     */
+    @Test
+    fun `每个字母键都有上滑字符`() {
+        val letterKeys = QwertyLayout.rows.flatten().filter { it.kind == KeyKind.CHAR }
+        for (k in letterKeys) {
+            assertTrue("键 ${k.label} 没有上滑字符", k.swipe != null)
+        }
+        val swipes = letterKeys.mapNotNull { it.swipe }
+        assertEquals("上滑字符不能重复", swipes.size, swipes.toSet().size)
+    }
+
+    /** 字母页必须能直接进表情页：聊天时八成时间都在字母页。 */
+    @Test
+    fun `字母页有表情入口`() {
+        val emoji = QwertyLayout.rows.flatten().firstOrNull {
+            it.kind == KeyKind.PAGE && it.code == "emoji"
+        }
+        assertTrue("字母页缺 😊 入口", emoji != null)
+    }
+
+    /**
      * 字母页上没有任何地方能打数字，`123` 是唯一入口。
      *
      * 少了它不会崩，但用户会认为「这个输入法打不了数字」——而且找不到任何补救办法。

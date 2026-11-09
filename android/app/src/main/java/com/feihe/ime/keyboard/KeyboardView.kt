@@ -4,8 +4,10 @@ import android.content.Context
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.feihe.ime.Palette
@@ -157,7 +159,95 @@ object KeyboardView {
                 true
             }
         }
+        // 有上滑字符的键要包一层：键帽右上角画小字，并接管触摸判方向。
+        // 长按类（⌫/⇧）没有上滑，两套手势不会撞。
+        if (key.swipe != null) {
+            return withSwipe(ctx, view, key, onKey)
+        }
         return view
+    }
+
+    /**
+     * 给键加「右上角小字 + 上滑输入」。
+     *
+     * 为什么用 FrameLayout 包一层而不是在 TextView 里画：小字要贴在右上角，而键的
+     * 主字符必须居中——一个 TextView 装不下两个对齐方式。
+     *
+     * **触摸为什么要自己接管**：setOnClickListener 拿不到「手指往哪滑」。这里 DOWN
+     * 时记下 y，MOVE 里判断位移，UP 时决定是「上滑」还是「点击」；因为返回 true 会
+     * 吃掉事件，点击得自己调 performClick()。
+     */
+    private fun withSwipe(
+        ctx: Context,
+        keyView: TextView,
+        key: Key,
+        onKey: (Key) -> Unit,
+    ): View {
+        val p = Palette.of(ctx)
+        val hint = TextView(ctx).apply {
+            text = key.swipe
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
+            setTextColor(p.hint)
+            setPadding(dp(ctx, 4f), dp(ctx, 1f), dp(ctx, 4f), 0)
+            isClickable = false
+        }
+        val holder = FrameLayout(ctx).apply {
+            isClickable = true
+            addView(
+                keyView,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            addView(
+                hint,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.END,
+                ),
+            )
+            contentDescription = "按键 ${key.label}，上滑输入 ${key.swipe}"
+        }
+        val threshold = dp(ctx, 16f).toFloat()
+        var downY = 0f
+        var swiped = false
+        holder.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downY = e.rawY
+                    swiped = false
+                    keyView.isPressed = true
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    // 只认「明显向上」：横向抖动和轻微下滑都不算，否则点一下字母
+                    // 手抖几个像素就变成打数字了
+                    if (!swiped && downY - e.rawY > threshold) {
+                        swiped = true
+                        keyView.isPressed = false
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    keyView.isPressed = false
+                    if (swiped) {
+                        key.swipe?.let { onKey(Key(it, KeyKind.TEXT, it)) }
+                    } else {
+                        v.performClick()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    keyView.isPressed = false
+                    swiped = false
+                    false
+                }
+                else -> false
+            }
+        }
+        return holder
     }
 
     private fun keyBackground(

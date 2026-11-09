@@ -15,6 +15,14 @@ data class Key(
     val code: String = "",
     /** 宽度权重（相对同一行）。空格给大一点，删除键也是。 */
     val weight: Float = 1f,
+    /**
+     * 上滑输入的字符。不为 null 时键帽右上角会画一行小字（淡色），在这个键上
+     * 向上滑就把它上屏。
+     *
+     * 只给 26 个字母键配了：功能键（⇧/⌫/空格/回车）上滑没有意义，而且它们还要
+     * 长按（连删、锁定），两套手势叠在一起必然互相抢。
+     */
+    val swipe: String? = null,
 )
 
 /** 键盘页。切页只换容器里的行，不重建 InputView。 */
@@ -84,7 +92,25 @@ enum class KeyKind {
  */
 object QwertyLayout {
 
-    private fun ch(c: Char) = Key(c.uppercaseChar().toString(), KeyKind.CHAR, c.toString())
+    /**
+     * 26 个字母键的**上滑字符**（键帽右上角那行小字）。
+     *
+     * 排布照手机中文输入法的惯例：第一排 1–0，第二排常见符号，第三排中英文都最常用
+     * 的标点（中文态下直接上中文标点，和搜狗一致）。
+     *
+     * **只在这一张表里改**：键帽小字、上滑动作、单测三处都读它。
+     */
+    val SWIPE: Map<Char, String> = mapOf(
+        'q' to "1", 'w' to "2", 'e' to "3", 'r' to "4", 't' to "5",
+        'y' to "6", 'u' to "7", 'i' to "8", 'o' to "9", 'p' to "0",
+        'a' to "@", 's' to "#", 'd' to "¥", 'f' to "%", 'g' to "&",
+        'h' to "*", 'j' to "-", 'k' to "(", 'l' to ")",
+        'z' to "！", 'x' to "？", 'c' to "，", 'v' to "。",
+        'b' to "：", 'n' to "；", 'm' to "、",
+    )
+
+    private fun ch(c: Char) =
+        Key(c.uppercaseChar().toString(), KeyKind.CHAR, c.toString(), swipe = SWIPE[c])
 
     val rows: List<List<Key>> = listOf(
         // 第一排 10 键
@@ -106,10 +132,15 @@ object QwertyLayout {
         listOf(
             Key("123", KeyKind.PAGE, "digits", weight = 1f),
             Key("中", KeyKind.MODE, weight = 1f),
-            Key("，", KeyKind.PUNCT, "，", weight = 0.85f),
-            Key("", KeyKind.SPACE, weight = 3.3f),
-            Key("。", KeyKind.PUNCT, "。", weight = 0.85f),
-            Key("↵", KeyKind.ENTER, weight = 1f),
+            // 表情入口。以前只有数字页/符号页底部有 😊，字母页上找不到——
+            // 而聊天时八成时间都在字母页。
+            Key("😊", KeyKind.PAGE, "emoji", weight = 0.8f),
+            Key("，", KeyKind.PUNCT, "，", weight = 0.8f),
+            // 顿号单独一个键：中文里列举报菜名、地名天天用，藏在符号页里等于没有
+            Key("、", KeyKind.PUNCT, "、", weight = 0.8f),
+            Key("", KeyKind.SPACE, weight = 2.1f),
+            Key("。", KeyKind.PUNCT, "。", weight = 0.8f),
+            Key("↵", KeyKind.ENTER, weight = 0.9f),
         ),
     )
 
@@ -202,8 +233,10 @@ object SymbolLayout {
     private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f)
 
     val rows: List<List<Key>> = listOf(
-        listOf("，", "。", "？").map(::txt),
-        listOf("！", "：", "、").map(::txt),
+        // 顿号跟逗号、句号放一排：它们是同一类「断句」标点，列举报菜名用得最多。
+        // 以前它夹在「！：」中间，找的时候要逐格扫一遍。
+        listOf("，", "。", "、").map(::txt),
+        listOf("！", "？", "：").map(::txt),
         listOf("；", "（", "）").map(::txt),
         listOf("…", "—", "·").map(::txt),
         compactFunctionRow(listOf(NAV_LETTERS, NAV_DIGITS, NAV_EMOJI)),

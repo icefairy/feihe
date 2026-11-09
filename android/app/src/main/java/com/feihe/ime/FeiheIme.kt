@@ -15,6 +15,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.Toast
 import android.view.inputmethod.EditorInfo
 import android.widget.HorizontalScrollView
@@ -161,6 +162,12 @@ class FeiheIme : InputMethodService() {
     private var candidateBar: LinearLayout? = null
     private var candidateScroll: HorizontalScrollView? = null
 
+    /** 顶部那一行（状态栏 / 候选条共用），固定高度见 [TOP_SLOT_DP]。 */
+    private var topSlot: FrameLayout? = null
+
+    /** 候选翻到第几页（0 起）。每页 [candidateLimit] 个，见 [visibleCandidates]。 */
+    private var candPage = 0
+
     /**
      * 数字选词行的容器。**和键盘分开**：它是候选条下方一个可以 `GONE` 的独立容器，
      * 没候选时高度为 0，字母键一 dp 不少。见 [NumberSelectLayout]。
@@ -259,6 +266,10 @@ class FeiheIme : InputMethodService() {
         showNumberRow = UiPrefs.showNumberRow(this)
         voiceEnabled = UiPrefs.voiceEnabled(this)
         candidateLimit = UiPrefs.candidateLimit(this)
+        // 数字行开关只改高度，不销毁视图：高度恒定是「不触发宿主 resize」的前提
+        numberRowHost?.layoutParams = numberRowHost?.layoutParams?.apply {
+            height = if (showNumberRow) dp(NUM_ROW_DP) else 0
+        }
         smsOtpOn = UiPrefs.smsOtp(this)
         // 用户刚在设置页把短信开关关掉：监听要立刻摘掉，不能等键盘收起
         if (!smsOtpOn) stopSmsObserver()
@@ -746,7 +757,7 @@ class FeiheIme : InputMethodService() {
                         // 否则「nihao」+ ⇧A 会变成组合态里的「nihaoA」。
                         // 上屏的这个大写字母也不参与联想（上下文已经断了）。
                         if (candidates.isNotEmpty()) {
-                            commitWord(candidates.first(), thenSuggest = false)
+                            commitWord(visibleCandidates().first(), thenSuggest = false)
                         } else {
                             commitPending()
                         }
@@ -833,7 +844,7 @@ class FeiheIme : InputMethodService() {
                 } else if (chinese && candidates.isNotEmpty()) {
                     // 中文态空格 = 选第一个。这是所有拼音输入法的肌肉记忆，
                     // 不这么做用户会以为候选是装饰品。
-                    commitWord(candidates.first())
+                    commitWord(visibleCandidates().first())
                 } else {
                     // 没有候选（码还没成词，或者这是个英文串）→ 原样上屏。
                     // **不能什么都不做**：那样用户打了一串字母就卡住，只能一个个删。
@@ -901,8 +912,9 @@ class FeiheIme : InputMethodService() {
                     commitQuick(quickWords[index])
                     return
                 }
-                val index = NumberSelect.indexOf(digit, candidates.size) ?: return
-                commitWord(candidates[index])
+                val window = visibleCandidates()
+                val index = NumberSelect.indexOf(digit, window.size) ?: return
+                commitWord(window[index])
             }
 
             KeyKind.PAGE -> showPage(
@@ -1010,6 +1022,8 @@ class FeiheIme : InputMethodService() {
             pinyinMode,
             assistKeys.toString(),
         )
+        // 形码一变，候选整批换掉：回到第一页
+        candPage = 0
         renderCandidates()
     }
 
@@ -1054,13 +1068,14 @@ class FeiheIme : InputMethodService() {
             candidates = emptyList()
             pendingSegments = emptyList()
         } else {
-            // 有联想时候选少给几个，让候选条末尾的 →词 不用横滑就看得见。
-            // 上限来自设置页；算式在 CandidateBarPolicy（有 JVM 单测）。
-            val slots = CandidateBarPolicy.candidateSlots(candidateLimit, suggestions.isNotEmpty())
-            val lookup = NativeEngine.lookupInput(pending.toString(), pinyinMode, slots)
+            // 一次多要一点：候选条按页显示（每页 = 设置里的「候选个数」），翻页
+            // 需要后面的候选已经在手上——每翻一页都重查一遍词库是白费。45 个够翻五页。
+            val lookup = NativeEngine.lookupInput(pending.toString(), pinyinMode, CAND_FETCH)
             code = lookup.code
             candidates = lookup.words
             pendingSegments = lookup.segments
+            // 新的一次查询 = 从第一页开始看
+            candPage = 0
         }
         refreshSegmentMode()
         renderCandidates()
@@ -1100,6 +1115,7 @@ class FeiheIme : InputMethodService() {
             quickWords.forEachIndexed { idx, word ->
                 bindCandidateView(bar.getChildAt(idx) as TextView, word, idx == 0)
             }
+            updateTopSlot()
             return
         }
         val seg = segmentState
@@ -1108,30 +1124,89 @@ class FeiheIme : InputMethodService() {
             // 直接整条重画（它不占键盘高度，重建的抖动没人看得见）。
             bar.removeAllViews()
             renderSegmentBar(bar, seg)
+            updateTopSlot()
             return
         }
         // 验证码提示只在**没有候选**时占第一格：一旦开始打字它就隐身。
-        // 否则它会顶掉候选的位置，数字选词（1-9 → 第几个候选）也会跟着错一位。
         val otp = otpCode.takeIf { candidates.isEmpty() && pending.isEmpty() }
 
+        // 「形」按钮：有码可筛时占第一格。它不参与数字选词（下标从候选开始算）。
+        val assistChip = assistAvailable()
+        val window = visibleCandidates()
+        val hasPrev = candPage > 0
+        val hasNext = (candPage + 1) * pageSize() < candidates.size
+        // 形码筛空了：给一句提示。否则候选条上只剩一个「形」按钮，看着像坏了。
+        val emptyAssist = assistActive && assistKeys.isNotEmpty() && window.isEmpty()
+
         // 复用已有的 TextView：候选 + 分隔符 + 联想按顺序对位，多了删、少了补。
-        // 以前每次按键都 removeAllViews 再新建 20~35 个 View——引擎一次按键才几微秒，
-        // View 重建才是候选条的大头，而且绝大多数按键只是换几个字。
-        val total = (if (otp == null) 0 else 1) + candidates.size +
-            if (suggestions.isEmpty()) 0 else 1 + suggestions.size
+        val total = (if (assistChip) 1 else 0) + (if (otp == null) 0 else 1) +
+            (if (hasPrev) 1 else 0) + window.size + (if (hasNext) 1 else 0) +
+            (if (emptyAssist) 1 else 0) +
+            (if (suggestions.isEmpty()) 0 else 1 + suggestions.size)
         while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
         while (bar.childCount < total) bar.addView(TextView(this))
         var i = 0
+        if (assistChip) bindAssistView(bar.getChildAt(i++) as TextView)
         if (otp != null) bindOtpView(bar.getChildAt(i++) as TextView, otp)
-        candidates.forEachIndexed { idx, word ->
+        if (hasPrev) bindPageView(bar.getChildAt(i++) as TextView, "‹", -1)
+        if (emptyAssist) bindHintView(bar.getChildAt(i++) as TextView, "形码无匹配，退格重试")
+        window.forEachIndexed { idx, word ->
             bindCandidateView(bar.getChildAt(i++) as TextView, word, idx == 0, code)
         }
+        if (hasNext) bindPageView(bar.getChildAt(i++) as TextView, "›", 1)
         if (suggestions.isNotEmpty()) {
             bindSeparatorView(bar.getChildAt(i++) as TextView)
             suggestions.forEach { word ->
                 bindSuggestionView(bar.getChildAt(i++) as TextView, word)
             }
         }
+        updateTopSlot()
+    }
+    /** 一页几个候选。用的是设置里的「候选个数」（5 / 7 / 9）——它现在就是页大小。 */
+    private fun pageSize(): Int = candidateLimit.coerceAtLeast(1)
+
+    /** 当前页的候选。候选一共 [CAND_FETCH] 个，靠 ‹ › 翻页，不靠横滑。 */
+    private fun visibleCandidates(): List<String> {
+        val size = pageSize()
+        val start = candPage * size
+        if (start >= candidates.size) return emptyList()
+        return candidates.subList(start, minOf(start + size, candidates.size))
+    }
+
+    /** 翻页箭头。`delta` = -1 上一页 / +1 下一页。 */
+    private fun bindPageView(v: TextView, label: String, delta: Int) {
+        v.background = null
+        v.text = label
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        v.setPadding(dp(10f), 0, dp(10f), 0)
+        v.setTextColor(Palette.of(this).sub)
+        v.setOnClickListener {
+            candPage = (candPage + delta).coerceAtLeast(0)
+            renderCandidates()
+        }
+    }
+
+    /** 候选条上的说明文字（形码筛空、无更多页等），不可点。 */
+    private fun bindHintView(v: TextView, text: String) {
+        v.background = null
+        v.text = text
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        v.setPadding(dp(10f), 0, dp(10f), 0)
+        v.setTextColor(Palette.of(this).hint)
+        v.setOnClickListener(null)
+    }
+
+    /**
+     * 顶部那一行显示谁：有输入 / 候选 → 候选条；什么都没在打 → 状态栏。
+     *
+     * 两者**共用一个固定高度的槽**，不是各占一行。窗口高度一变，微信 / QQ 就会
+     * 重排会话列表，表现为每敲一下闪一下。
+     */
+    private fun updateTopSlot() {
+        val typing = quickMode || pending.isNotEmpty() || candidates.isNotEmpty() ||
+            suggestions.isNotEmpty() || segmentState != null || otpCode != null
+        statusBar?.visibility = if (typing) View.GONE else View.VISIBLE
+        candidateScroll?.visibility = if (typing) View.VISIBLE else View.GONE
     }
 
     /** 普通候选项。每个视觉属性都重设：这一格可能是从分段 chip 复用来的，带背景。 */
@@ -1378,7 +1453,7 @@ class FeiheIme : InputMethodService() {
         val host = numberRowHost ?: return
         // 快捷输入态下数字行要跟着 quickWords 走：只打一个「/」后面排着十几条命令，
         // 没有数字行就只能用手指一条条点，这是 Windows 端不必忍受的事。
-        val shown = if (quickMode) quickWords.size else candidates.size
+        val shown = if (quickMode) quickWords.size else visibleCandidates().size
         val rows = if (showNumberRow && !segmentActive) {
             NumberSelectLayout.rows(shown)
         } else {
@@ -1390,11 +1465,11 @@ class FeiheIme : InputMethodService() {
         if (key == numberRowKey) return
         numberRowKey = key
         host.removeAllViews()
+        // **不再 GONE**：高度是固定的（见 [NUM_ROW_DP]），没候选时清空内容即可。
+        // 一 GONE 一 VISIBLE 就是一次窗口高度变化，宿主会跟着重排。
         if (rows.isEmpty()) {
-            host.visibility = View.GONE
             return
         }
-        host.visibility = View.VISIBLE
         host.addView(
             KeyboardView.build(
                 this,
@@ -1433,6 +1508,7 @@ class FeiheIme : InputMethodService() {
         segmentState = null
         // 形码跟着这次组合一起结束：留着的话下一个词的候选会被上一词的形码筛空
         resetAssist()
+        candPage = 0
         suggestions = if (thenSuggest && chinese) {
             NativeEngine.suggest(word, SUGGEST_LIMIT)
         } else {
@@ -1498,6 +1574,7 @@ class FeiheIme : InputMethodService() {
 
     private fun clearComposing() {
         resetAssist()
+        candPage = 0
         quickMode = false
         quickWords = emptyList()
         pending.setLength(0)
@@ -1589,5 +1666,14 @@ class FeiheIme : InputMethodService() {
          * 正好排满一行；正在打字时它们排在候选后面，多出来的部分横向滑一下。
          */
         private const val SUGGEST_LIMIT = 5
+
+        /** 顶部那一行的高度（dp）。状态栏和候选条轮流用，所以取两者较高的那个。 */
+        private const val TOP_SLOT_DP = 44f
+
+        /** 数字选词行的高度（dp）。恒定占位，不随候选有无伸缩。 */
+        private const val NUM_ROW_DP = 36f
+
+        /** 一次向引擎要多少个候选：够翻五页（每页最多 9 个）。 */
+        private const val CAND_FETCH = 45
     }
 }
