@@ -370,6 +370,10 @@ mod tests {
 
     #[test]
     fn import_file_rejects_unknown_extension() {
+        // 导入要写个人词库 → 必须有数据目录。解析器是 `test_guard()` 注册的，
+        // 不拿这把锁就会在 core 侧 panic（`数据目录未初始化`）——而且只在**并行跑
+        // 全量测试**时偶发：别的用例先跑过就正常，自己跑就一定红。
+        let _g = crate::config::test_guard();
         // 「导入没反应」的第一个可能：文件选错了。错误必须是明确的一句中文。
         let p = std::env::temp_dir().join("feihe_win_sogou_bad.exe");
         std::fs::write(&p, b"nope").unwrap();
@@ -379,6 +383,7 @@ mod tests {
 
     #[test]
     fn import_file_does_not_silently_succeed_on_zero_words() {
+        let _g = crate::config::test_guard();
         // 用户报「Win 上导入没反应」的核心现场：文件能读、但一条词都解析不出来。
         // 这时必须是 Err——否则设置窗会显示「没有新词——都已在词库里」，
         // 看起来跟成功一模一样。

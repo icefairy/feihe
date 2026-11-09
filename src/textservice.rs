@@ -402,6 +402,24 @@ impl FeiheTextService {
         }
     }
 
+    /// 同 [Self::lookup_any]，但带**辅助码筛选**。
+    ///
+    /// 分词态里每一段都是一个完整音节，所以辅助码在这里和单音节态是同一件事：
+    /// `jp` + `tl` → 只留「劫」。走 `dict::lookup_filtered` 那套，和普通态的
+    /// 辅助码共用同一张表和同一个匹配规则，不另写一份。
+    fn lookup_any_filtered(
+        code: &str,
+        assist: &str,
+        mode: AssistMode,
+        limit: usize,
+    ) -> Vec<Cow<'static, str>> {
+        if config::pinyin_mode() {
+            dict::lookup_pinyin_filtered(code, assist, mode, limit)
+        } else {
+            dict::lookup_filtered(code, assist, mode, limit)
+        }
+    }
+
     /// 同上，只问「这段码有没有候选」。切分要在候选里挑最优切法，每一步都在问
     /// 存在性，所以这里可以便宜（一条命中就停），和第一名无关。
     fn lookup_any_has(code: &str) -> bool {
@@ -1170,13 +1188,37 @@ impl FeiheTextService {
     }
 
     /// 重新查候选并回到第一页第一项
+    /// 当前分词段正在用的形码：没开形码态、或还没打形码时是空串。
+    ///
+    /// 抽成函数是为了让 `refresh` 和 `confirm_segment` **问同一个问题**。这两处一旦
+    /// 各写一遍，迟早出现「显示的候选和空格上屏的字不是同一个」。
+    fn segment_assist(&self) -> String {
+        if self.assist_active.get() {
+            self.assist.borrow().clone()
+        } else {
+            String::new()
+        }
+    }
+
     fn refresh(&self) {
         // 分词模式：候选就是当前这一段的
         if !self.segments.borrow().is_empty() {
             let idx = self.seg_idx.get().min(self.segments.borrow().len() - 1);
             let code = self.segments.borrow()[idx].code.clone();
             let word = self.segments.borrow()[idx].word.clone();
-            let list = FeiheTextService::lookup_any(&code, CANDIDATE_LIMIT);
+            // 形码态：候选是「这一段 + 已打的形码」筛出来的。没开形码态时走原路，
+            // 行为一个字都不该变。
+            let assist = self.segment_assist();
+            let list = if assist.is_empty() {
+                FeiheTextService::lookup_any(&code, CANDIDATE_LIMIT)
+            } else {
+                FeiheTextService::lookup_any_filtered(
+                    &code,
+                    &assist,
+                    config::get().assist_mode,
+                    CANDIDATE_LIMIT,
+                )
+            };
             // 选中项对齐到这一段当前选中的词，左右移动时不会跳回第一项。
             // 页号也要跟着算出来：`sel` 可能落在第二页（「鹤」在 `he` 的第 12 位），
             // 只把 `selected` 设成 12 会让高亮框跑到页外，翻页也从错的页起翻。
@@ -1274,6 +1316,17 @@ impl FeiheTextService {
                 if i == cur {
                     s.push('[');
                     s.push_str(&word);
+                    // 形码态下把已打的形码一起显示（空的显示 `_` 当光标），
+                    // 用户才知道按键吃进去了、还差几键。
+                    if self.assist_active.get() {
+                        let a = self.assist.borrow();
+                        s.push(' ');
+                        if a.is_empty() {
+                            s.push('_');
+                        } else {
+                            s.push_str(&a);
+                        }
+                    }
                     s.push(']');
                 } else {
                     s.push_str(&word);
@@ -1680,12 +1733,22 @@ impl FeiheTextService_Impl {
             return;
         }
         let idx = self.seg_idx.get().min(n - 1);
+        let assist = self.segment_assist();
         let word = {
             let segs = self.segments.borrow();
-            let list = FeiheTextService::lookup_any(
-                &segs[idx].code,
-                CANDIDATE_LIMIT,
-            );
+            // **必须和 refresh 用同一份筛选结果**：辅助码态下候选条显示的是筛过的
+            // 列表，这里若按未筛选的列表取第 N 个，空格会把「另一个字」上屏——而且
+            // 用户很难复现（同一个空格，有时对有时错）。
+            let list = if assist.is_empty() {
+                FeiheTextService::lookup_any(&segs[idx].code, CANDIDATE_LIMIT)
+            } else {
+                FeiheTextService::lookup_any_filtered(
+                    &segs[idx].code,
+                    &assist,
+                    config::get().assist_mode,
+                    CANDIDATE_LIMIT,
+                )
+            };
             list.get(sel)
                 .or_else(|| list.first())
                 .map(|s| s.to_string())
@@ -1700,6 +1763,9 @@ impl FeiheTextService_Impl {
 
         if idx + 1 < n {
             self.seg_idx.set(idx + 1);
+            // 形码属于**上一段**：下一段从空形码开始等输入，但「形码态」本身保持
+            // ——造词时一段一段筛，不用每段重新按 Tab。
+            self.assist.borrow_mut().clear();
             self.refresh();
             // 换到下一段 = 重新挑这个字，候选窗该从第一行开始。`refresh` 会把
             // 页对齐到这一段「已选的词」上，那个词可能是自动分段时给的靠后候选，
@@ -1809,6 +1875,10 @@ impl FeiheTextService_Impl {
     fn exit_segment_mode(&self) {
         self.segments.borrow_mut().clear();
         self.seg_idx.set(0);
+        // 退出分词就别留着形码态了：回到普通态后它的语义变成了「筛整个编码」，
+        // 用户刚才打的形码属于被拆掉的那一段，留着只会筛出一片空白。
+        self.assist_active.set(false);
+        self.assist.borrow_mut().clear();
         self.pop_syllable();
     }
 
@@ -1870,11 +1940,31 @@ impl FeiheTextService_Impl {
             return Ok(BOOL::from(true));
         }
         match vk {
+            // Tab：给**当前这一段**开形码。分词态每段就是一个完整音节，正好是辅助码
+            // 能筛的形态；开了之后一直保持，造词时一段一段筛，不用每段重按。
+            // 辅助码方案关掉时不动：照旧整体上屏，把 Tab 还给应用。
+            0x09 => {
+                let mode = config::get().assist_mode;
+                if mode == AssistMode::Off {
+                    self.commit_segments("");
+                    return Ok(BOOL::from(false));
+                }
+                let next = !self.assist_active.get();
+                self.assist_active.set(next);
+                // 用户亲手按的 Tab：这条形码是他的本意，不许自动撤销
+                self.assist_auto.set(false);
+                self.assist.borrow_mut().clear();
+                self.refresh();
+                self.update_composition();
+                Ok(BOOL::from(true))
+            }
             // 左：光标移到上一段
             0x25 => {
                 let i = self.seg_idx.get();
                 if i > 0 {
                     self.seg_idx.set(i - 1);
+                    // 形码属于上一段，换段就清掉（态本身保持）
+                    self.assist.borrow_mut().clear();
                     self.refresh();
                     self.update_composition();
                 }
@@ -1885,6 +1975,7 @@ impl FeiheTextService_Impl {
                 let i = self.seg_idx.get();
                 if i + 1 < n {
                     self.seg_idx.set(i + 1);
+                    self.assist.borrow_mut().clear();
                     self.refresh();
                     self.update_composition();
                 }
@@ -1907,8 +1998,21 @@ impl FeiheTextService_Impl {
                 );
                 Ok(BOOL::from(true))
             }
-            // 退格：先把当前段拆成单字（组词），拆不动再退一个音节
+            // 退格：形码态下先删形码（一格一格），删空之后再按一次退出形码态；
+            // 不在形码态时才是原来的「先拆词、拆不动退音节」。
             0x08 => {
+                if self.assist_active.get() {
+                    let popped = { self.assist.borrow_mut().pop().is_some() };
+                    if popped {
+                        self.refresh();
+                        self.update_composition();
+                        return Ok(BOOL::from(true));
+                    }
+                    self.assist_active.set(false);
+                    self.refresh();
+                    self.update_composition();
+                    return Ok(BOOL::from(true));
+                }
                 self.segment_backspace();
                 Ok(BOOL::from(true))
             }
@@ -1925,6 +2029,22 @@ impl FeiheTextService_Impl {
                 let Some(ch) = FeiheTextService::code_char(v) else {
                     return Ok(BOOL::from(true));
                 };
+                // 形码态：字母归形码，不延长编码。打满之后多按的键**直接吞掉**——
+                // 放它去延长编码会重新分段，刚筛出来的那一段就没了。
+                if self.assist_active.get() {
+                    if ch == FeiheTextService::SEP || ch == quick::PREFIX {
+                        return Ok(BOOL::from(true));
+                    }
+                    let max = config::get().assist_mode.max_keys();
+                    let full = { self.assist.borrow().chars().count() >= max };
+                    if full {
+                        return Ok(BOOL::from(true));
+                    }
+                    self.assist.borrow_mut().push(ch);
+                    self.refresh();
+                    self.update_composition();
+                    return Ok(BOOL::from(true));
+                }
                 // 分词态里按 `/` 同理：它不是引导符（编码非空），是标点。
                 // 以前这条分支会把它当成编码键 push 进去，`de` 变 `de/`、
                 // 候选整列清空，用户还得退格才能继续。
@@ -4895,5 +5015,75 @@ mod tests {
             matches!(p, "lm" | "hd" | "il" | "vi")
         });
         assert_eq!(segs, vec!["lm", "hd", "il", "vi"]);
+    }
+
+    /// 分词态的形码筛选：留下的每个字，形码都必须匹配输入的前缀。
+    ///
+    /// 只断言**不变量**，不断言「jp+tl 一定是劫」——候选来自词库，词库里还有
+    /// 用户自己导入的词（见上一条测试的教训）。这条能抓住真正会出错的两种情形：
+    /// 忘了带 mode（形码整套失效）、或者把全拼索引当双拼用（筛出不相干的字）。
+    #[test]
+    fn segment_assist_lookup_only_keeps_matching_chars() {
+        let mode = AssistMode::Xiaohe;
+        let list = dict::lookup_filtered("jp", "tl", mode, 50);
+        assert!(!list.is_empty(), "jp + tl 至少该筛出一个字");
+        for w in &list {
+            let ch = w.chars().next().unwrap();
+            let code = crate::assist::code_of(ch, mode).unwrap_or("");
+            assert!(
+                crate::assist::matches(code, "tl"),
+                "{w} 的形码是 {code}，不该出现在 tl 的筛选结果里"
+            );
+        }
+    }
+
+    /// 自然码只有 1 键：`jp` + `l` 同样能筛，且筛出来的都匹配 `l`。
+    #[test]
+    fn segment_assist_ziranma_is_one_key() {
+        let mode = AssistMode::Ziranma;
+        assert_eq!(mode.max_keys(), 1, "自然码辅助码就一键，多打的不该进形码");
+        let list = dict::lookup_filtered("jp", "l", mode, 50);
+        assert!(!list.is_empty());
+        for w in &list {
+            let ch = w.chars().next().unwrap();
+            let code = crate::assist::code_of(ch, mode).unwrap_or("");
+            assert!(crate::assist::matches(code, "l"), "{w} 的形码是 {code}");
+        }
+    }
+
+    /// 用户报的那条路：`jpyu` 两段，每段用形码直接定位「劫」「狱」。
+    ///
+    /// 这是分词态形码方案的目标场景，钉住它能防止「表里查得到、筛选查不到」——
+    /// 那种失效在真机上只表现为「按了形码候选没变」，很难归因。
+    #[test]
+    fn jie_yu_can_be_built_with_segment_assist() {
+        let units = FeiheTextService::syllables("jpyu");
+        assert_eq!(units, vec!["jp", "yu"], "jpyu 就该切成两段");
+        let xh = AssistMode::Xiaohe;
+        assert!(
+            dict::lookup_filtered("jp", "tl", xh, 50)
+                .iter()
+                .any(|w| w.as_ref() == "劫"),
+            "jp + tl 应该能筛出劫"
+        );
+        assert!(
+            dict::lookup_filtered("yu", "qq", xh, 50)
+                .iter()
+                .any(|w| w.as_ref() == "狱"),
+            "yu + qq 应该能筛出狱"
+        );
+    }
+
+    /// 形码是空串时，筛选查询必须**等于**普通查询。
+    ///
+    /// 分词态没开形码态走的就是这条路；一旦两者不等，用户看到的候选条和
+    /// `confirm_segment` 取的字就会错位。
+    #[test]
+    fn empty_assist_filter_equals_plain_lookup() {
+        let mode = AssistMode::Xiaohe;
+        assert_eq!(
+            dict::lookup("jp", 50),
+            dict::lookup_filtered("jp", "", mode, 50)
+        );
     }
 }
