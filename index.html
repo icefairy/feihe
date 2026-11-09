@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>飞鹤输入法 · 目标替换搜狗的开源双拼输入法（Windows + Android）</title>
-<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 2.53 MB，不联网、不弹窗、无账号，源码全开。">
+<meta name="description" content="飞鹤输入法：Rust + windows-rs 实现的 Windows TSF 中文输入法。原生小鹤双拼，安装包 2.54 MB，不联网、不弹窗、无账号，源码全开。">
 <style>
   :root{
     --ink:#0a0d12;
@@ -255,7 +255,7 @@
 
     <div class="stats">
       <div class="stat"><div class="n">2</div><div class="k">平台（Win + Android）</div></div>
-      <div class="stat"><div class="n">2.53<small>MB</small></div><div class="k">Windows 安装包</div></div>
+      <div class="stat"><div class="n">2.54<small>MB</small></div><div class="k">Windows 安装包</div></div>
       <div class="stat"><div class="n">74869</div><div class="k">词条（两端共用）</div></div>
       <div class="stat"><div class="n">0</div><div class="k">广告 / 联网 / 账号</div></div>
     </div>
@@ -281,7 +281,7 @@
           <tr><th>维度</th><th>飞鹤</th><th>搜狗拼音</th><th>微软拼音</th></tr>
         </thead>
         <tbody>
-          <tr><td>安装包</td><td class="me">2.53 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
+          <tr><td>安装包</td><td class="me">2.54 MB</td><td>百 MB 量级</td><td>随系统预装</td></tr>
           <tr><td>装完占用</td><td class="me">约 12.6 MB</td><td>134 MB + 用户数据</td><td>随系统</td></tr>
           <tr><td>广告 / 热点推送</td><td class="yes">没有这功能</td><td class="no">有（可关）</td><td class="yes">无</td></tr>
           <tr><td>账号 / 联网</td><td class="yes">完全不需要</td><td class="no">登录后云同步</td><td class="half">账户可选</td></tr>
@@ -556,7 +556,8 @@ dd + f + j → Tab  <span class="c">组合串变成「dd fj」，不用退格重
         <p><code>dd</code> 底下「大 / 代 / 待 / 带 / 戴 / 呆 / 贷」一串同音字：
           按小鹤的 <code>f</code>（或自然码的 <code>j</code>）就只剩「带」那一支（带上、带来）；
           按 <code>r y</code>（自然码 <code>r</code>）只剩「代」那一支。
-          第二个字的形状不参与，想让词更准就把音码打全。</p>
+          第二个字的形状不参与，想让词更准就把音码打全。
+          （<strong>逐段选择</strong>时例外：那时每段各筛各的，见下。）</p>
       </div>
       <div class="card">
         <h3>和「3 键直出」的关系</h3>
@@ -596,9 +597,11 @@ dd + f + j → Tab  <span class="c">组合串变成「dd fj」，不用退格重
           生僻字、以及「一批同音词里我就要那一个字开头的词」。日常大部分码两三个候选就够，不用按 Tab。</div>
       </div>
       <div class="z">
-        <div class="t">和分词的关系</div>
-        <div class="d">辅助码态里<strong>进不了分词</strong>。要逐段改长句，先按一次
-          <code>Tab</code> 退出；退格删掉最后一个形码字母也会自动退出。</div>
+        <div class="t">造词：逐段也能用</div>
+        <div class="d">词库里没有的词要靠逐段拼（<code>jpyu</code> → 劫狱）。分词态
+          按 <code>Tab</code> 开的是<strong>当前这一段</strong>的形码，而且<strong>跨段保持</strong>：
+          <code>t l</code> 定位「劫」→ 空格 → <code>q q</code> 定位「狱」→ 空格，
+          上屏即自造词，下次不用再拼。</div>
       </div>
     </div>
   </div>
