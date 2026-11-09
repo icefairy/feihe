@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "feihe-android"
-version = "0.3.16"
+version = "0.3.18"
 dependencies = [
  "feihe-core",
  "jni",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "feihe-core"
-version = "0.3.16"
+version = "0.3.18"
 dependencies = [
  "tyme4rs",
 ]

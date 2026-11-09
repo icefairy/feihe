@@ -6,8 +6,8 @@
 
 Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
 
-**Windows 端当前版本 0.3.16** ｜ 安装包 2.53 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 398 项 Rust 单测 + 94 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
+**Windows 端当前版本 0.3.18** ｜ 安装包 2.53 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
+不联网、不弹窗、无账号、密码框不接管 ｜ 402 项 Rust 单测 + 94 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
 > 上档锁定、数字选词、离线语音输入、数据备份，已可装机（真机验收待补）。
@@ -395,6 +395,8 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 ```
 
 记的是**全拼**而不是双拼码（`li ming yuan`），所以换方案、切全拼模式都还能打。
+**拆词时每个字都可以用形码直接定位**（见「辅助码」一节的「分词态里的形码」），
+不用在候选里翻页——造一次词省下的翻页比记住这个词更值。
 全拼从词库里逐段反查（`dict::pinyin_of` 走整码匹配，不做前缀——只按前缀扫会把
 `limk`（李明）的全拼错配给单字「李」）。
 
@@ -489,6 +491,7 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 回车  原样上屏字母（已确认过的段保留汉字）
 退格  拆开当前段（词 → 单字）；全是单字了才退掉最后一个音节
 继续敲编码键 → 延长组合串并重新分段，已选过的段会保留
+Tab   给当前段开形码（造词时直接定位生僻字，见「辅助码」一节），再按一次退出
 ```
 
 **回车 = 字母，不是候选。** 分词模式曾经把回车做成「整体上屏」，于是任何能切成音节的
@@ -591,6 +594,23 @@ nihx  →  你好 / 你还 / 你和 / 你很 / 你换 / …
 具上 / 既左」这类专用字根，还有「孰大优先 / 相交不拆 / 插隔不取」这些得看笔顺才
 判得了的规则，推不出来。码错了不会报错，只会让你筛出一片空白，所以宁可先抓下来
 入库（`tools/xhup_cache.txt`，随仓库走）也不猜。
+
+**分词态里的形码（造词用）**：长码被拆成逐段选择时，`Tab` 开的是**当前这一段**的
+形码——每段就是一个完整音节，和单音节态完全同一套规则。形码态会**跨段保持**，
+所以造一个词只需要按一次 `Tab`：
+
+```text
+jpyu       → 两段（jie / yu），不是想要的「劫狱」
+Tab        → 当前段 jie 进入形码态（组合串显示 [劫 _]）
+t l        → 只剩「劫」，空格确认
+q q        → 焦点已到 yu，形码态还开着，直接打就能筛到「狱」
+空格       → 两段齐了 → 上屏「劫狱」，并记成自造词
+```
+
+规则：形码打满（小鹤 2 键 / 自然码 1 键）后多按的字母**吞掉**（不许变成延长编码，
+否则会重新分段）；退格先删形码、删空后再按一次退出形码态；换段（空格 / 数字 / ←→）
+会清掉上一段的形码但**态保留**；辅助码方案设成「关闭」时 `Tab` 还是老行为
+（整体上屏后交给应用）。
 
 打法示例（小鹤音形）：`dd` → `Tab` → `f` → `j`，第一位就是「带」。生僻字同理：
 `ji` → `Tab` → `wj` → 「玑」。反查工具给的 `jiwj` 是「音 + 形」连写，**必须先按 `Tab`**
@@ -1074,7 +1094,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选 / 高 DPI 换算，共 398 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选 / 高 DPI 换算，共 402 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 # 384 = feihe（TSF 壳）133 项 + feihe-core（平台无关）251 项。两个包都会跑，
 # 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 237 项会被静默跳过。
@@ -1112,7 +1132,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.16.exe
+# 产物：dist\Feihe-Setup-0.3.18.exe
 ```
 
 **为什么必须提权**：输入法的 COM / TSF 注册要写
@@ -1175,7 +1195,7 @@ HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Fe
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.16.exe
+# 产物：dist\Feihe-Setup-0.3.18.exe
 ```
 
 `build_setup.ps1` 做四件事：
@@ -1644,5 +1664,5 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)
 （Windows 384 条 + Android 15 条）。不需要全跑——改到哪块就跑哪组，比如动
 `textservice.rs` 的按键路径至少要跑 M2 + 分词 + 回车三组。自动化那部分仍然是
-`cargo test --workspace`（398 项）+ `tools/smoke_com.py` + Android 的
+`cargo test --workspace`（402 项）+ `tools/smoke_com.py` + Android 的
 `gradlew testDebugUnitTest`（94 项）。
