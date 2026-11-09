@@ -1976,6 +1976,48 @@ DP 认为整串是一个词，退回逐音节。
 | `ITfUIElementSink::BeginUIElement` | 回调只有 `(dwID, *mut BOOL)`，**没有元素对象**；要拿候选得回头 `ITfUIElementMgr::GetUIElement(id)` 再 QI `ITfCandidateListUIElement` |
 | `ITfUIElementSink` 注册 | 通过 `ITfSource::AdviseSink(IID_ITfUIElementSink, ...)`（`ITfUIElementMgr` 自己没有 Advise 方法）。IID 直接用 `<ITfUIElementSink as Interface>::IID` |
 
+## 多显示器：候选窗跑到主屏 / 干脆不显示
+
+**症状**（2026-11-09；主屏 2560×1440 在右，副屏 1080×1920 竖屏在左）：
+
+- 在副屏的 EmEditor 里打字，候选窗出现在**主屏最左边**；
+- 在副屏的 Windows Terminal 里打字，候选窗**根本看不见**。
+
+看起来是两个 bug，其实是同一个：`candidate::show` 用
+`GetSystemMetrics(SM_CXSCREEN/SM_CYSCREEN)` 夹窗口。这两个数是**主屏**尺寸，而屏幕
+坐标的原点固定在主屏左上角：
+
+- 副屏在左 → 光标 x 是负数，`if px < 0 { px = 0 }` 把它钳到 0，正好是主屏左边界；
+- 副屏比主屏高 → 光标 y 可以到 1654（> 1440），窗口被摆到 `(0, 1654)`——这个点落在
+  两块屏之间**没有任何显示器的空白区**，屏幕上什么都没有。
+
+所以「位置错了」和「不见了」取决于被钳的是 x 还是 y。
+
+**修法**：新增 `src/screen.rs`。`work_at(x, y)` 用 `MonitorFromPoint` +
+`GetMonitorInfoW` 拿**光标所在那块屏**的工作区；`clamp_into` 是纯函数，单测直接用
+上面这套坐标断言（副屏 x 为负、y 超过主屏高度都能覆盖）。`candidate::show` 和
+`softkbd::show_at` 都改成按它算：行数裁剪、上下翻转、左右夹取、窗口最大宽度
+（`max_window_w`）全部按那块屏。
+
+**以后新加窗口的规矩**：凡是「跟着光标 / 浮窗走」的窗口，**不许**用
+`SM_CXSCREEN/SM_CYSCREEN`。`statusbar` 早就是这么做的（`clamp_to_monitor`），
+这次只是把候选窗和符号面板补齐。
+
+## 联想窗会吃掉一次回车（0.3.16）
+
+**症状**：打完一个词、联想窗还挂着时按回车，第一次只是关掉联想窗，第二次才换行。
+
+**根因**：`OnTestKeyDown` 在联想态对所有键返回 TRUE。经典宿主（记事本 / EmEditor /
+Windows Terminal）一旦在这儿认下这个键，`OnKeyDown` 再返回 FALSE 也补不回来——
+键已经从消息流里拿走了。所以「我们本来就不处理」的回车 / 退格都被吞掉一次。
+
+**修法**：`OnTestKeyDown` 里对回车、退格**先收联想窗、再返回 FALSE**，把键还给应用。
+其余键照旧认下来（字母要继续组词，数字要选联想词）。
+
+**一并改的**：单击 Shift 切中英时，手上那串拼音改成**按回车的语义原样上屏**
+（`commit_raw` / `commit_raw_segments`），不再提交选中的候选。Shift 一下 = 拼音
+上屏 + 切英文。想让 Shift 顺手选词是另一回事——那是空格。
+
 ## 调试手段
 
 **诊断日志已经删掉了。** 早期有一份 `src/log.rs`，往 `%TEMP%\feihe-trace.log` 打

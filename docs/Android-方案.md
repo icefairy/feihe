@@ -822,7 +822,7 @@ python -c "import zipfile;z=zipfile.ZipFile('app/build/outputs/apk/debug/app-deb
 print([(i.filename,i.compress_type) for i in z.infolist() if i.filename.startswith('lib/')])"
 ```
 
-真机上验只需要看状态条：它现在会显示 `引擎 0.3.15 (aarch64)`。打 `nihao` 时
+真机上验只需要看状态条：它现在会显示 `引擎 0.3.16 (aarch64)`。打 `nihao` 时
 应当在同一行看到 `nihao→nihc`——**这是屏幕上第一处真正来自 Rust 的东西**。
 
 ### 12.6 编译用签名（`android/keystore/`）

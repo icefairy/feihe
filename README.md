@@ -6,8 +6,8 @@
 
 Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
 
-**Windows 端当前版本 0.3.15** ｜ 安装包 2.53 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 384 项 Rust 单测 + 71 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
+**Windows 端当前版本 0.3.16** ｜ 安装包 2.53 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
+不联网、不弹窗、无账号、密码框不接管 ｜ 398 项 Rust 单测 + 94 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
 > 上档锁定、数字选词、离线语音输入、数据备份，已可装机（真机验收待补）。
@@ -166,6 +166,8 @@ v2 签名有没有开」。命令清单见 `docs/Android-方案.md` §12.3。
 | 联想 | 单字 / 两字 / 三字 / 更长（后缀回退）都联想；会读宿主前文，切窗口后第一个词也有上下文 |
 | 数字 / 符号页 | 3×3 九宫格 + 独立标点页，两页形状一致，切页键盘不跳 |
 | 离线语音 | 按住 🎤 说话、松手上屏；silero VAD 裁静音、paraformer 识别、句末补标点 |
+| 验证码提示 | 剪贴板里是验证码（或当前是数字框）时，候选条第一个位置出「验证码 123456」，点一下填进去 |
+| 剪贴板历史 | 状态条 📋 打开，最多 30 条、点一下上屏、长按删除；只在键盘出现 / 切输入框时抓（Android 10+ 不允许后台读） |
 | 数据备份 | 导出 / 导入 zip（系统文件选择器，不申请存储权限） |
 | 设置页 | 输入方式、方案、繁体、联想、常用词、候选个数、数字选词、语音开关、模型状态、隐私说明 |
 
@@ -173,7 +175,7 @@ v2 签名有没有开」。命令清单见 `docs/Android-方案.md` §12.3。
 
 ```bash
 cd android
-JAVA_HOME=D:/soft/jdk17 ./gradlew testDebugUnitTest   # 71 项 JVM 单测
+JAVA_HOME=D:/soft/jdk17 ./gradlew testDebugUnitTest   # 94 项 JVM 单测
 JAVA_HOME=D:/soft/jdk17 ./gradlew assembleDebug       # 同时交叉编译 Rust 引擎
 ```
 
@@ -431,7 +433,7 @@ jj 解决   bt 不同   um 什么   vd 知道   ux 首先   zx 在线
 `wfjmyu` 才出现。不限远近时，前缀匹配会把个人词库里所有「文件X」的短语全捞出来
 （实测 178 条，3 字词 4 字词一路排下去），想要的「文件」只在第一条，翻页翻半天。
 
-**单击 Shift** 切中英文（按住期间按过别的键就不算单击）。**`Shift + 字母` 直接上屏大写**：
+**单击 Shift** 切中英文（按住期间按过别的键就不算单击）。手上还有拼音串时，单击 Shift 会先把这串字母**按回车的语义原样上屏**、再切到英文——一下完成两件事。**`Shift + 字母` 直接上屏大写**：
 中文态下 Shift 不进编码，按住它敲 `A` 得到的就是 `A`，不会像以前那样和直接敲 `a` 没区别；
 已有组合串会先按当前候选结掉，再粘上这个大写字母（`ni` + `Shift+A` → `你好A`）。
 切到英文后所有按键原样进应用，候选窗不弹。
@@ -1072,7 +1074,7 @@ NSIS 安装包用 `%ProgramFiles%\Feihe\`（并会在安装时尽力清掉老的
 ## 测试
 
 ```bash
-# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选 / 高 DPI 换算，共 384 项）
+# 单元测试（双拼编码 / 词库查询 / 简繁 / 动态词频 / 自造词 / 分词 / 一简 / 二简 / 置顶 / 读音提示 / 辅助码 / 模糊音 / 拼写纠错 / 中文数字 / 算式 / 自定义短语 / 降权 / 联想 / 分段候选 / 高 DPI 换算，共 398 项）
 cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps1 里有）
 # 384 = feihe（TSF 壳）133 项 + feihe-core（平台无关）251 项。两个包都会跑，
 # 靠 Cargo.toml 的 default-members 保证——别去掉那行，否则 core 那 237 项会被静默跳过。
@@ -1080,7 +1082,7 @@ cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
 python tools/smoke_com.py
 
-# Android 侧 71 项 JVM 单测（键盘布局 / 上档状态机 / 数字选词 / 逐段选择 / 联想策略 / 句末标点 / PCM 换算）
+# Android 侧 94 项 JVM 单测（键盘布局 / 上档状态机 / 数字选词 / 逐段选择 / 联想策略 / 句末标点 / PCM 换算 / 验证码识别 / 剪贴板历史）
 cd android && ./gradlew testDebugUnitTest
 ```
 
@@ -1110,7 +1112,7 @@ cargo build --target x86_64-pc-windows-msvc --release
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.15.exe
+# 产物：dist\Feihe-Setup-0.3.16.exe
 ```
 
 **为什么必须提权**：输入法的 COM / TSF 注册要写
@@ -1173,7 +1175,7 @@ HKCU（0.3.0–0.3.8）。新版一律注册到 HKLM、装到 `%LOCALAPPDATA%\Fe
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File installer\build_setup.ps1
-# 产物：dist\Feihe-Setup-0.3.15.exe
+# 产物：dist\Feihe-Setup-0.3.16.exe
 ```
 
 `build_setup.ps1` 做四件事：
@@ -1642,5 +1644,5 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 手工验收步骤按里程碑分组，已移到 [`docs/验证清单.md`](docs/验证清单.md)
 （Windows 384 条 + Android 15 条）。不需要全跑——改到哪块就跑哪组，比如动
 `textservice.rs` 的按键路径至少要跑 M2 + 分词 + 回车三组。自动化那部分仍然是
-`cargo test --workspace`（384 项）+ `tools/smoke_com.py` + Android 的
-`gradlew testDebugUnitTest`（71 项）。
+`cargo test --workspace`（398 项）+ `tools/smoke_com.py` + Android 的
+`gradlew testDebugUnitTest`（94 项）。
