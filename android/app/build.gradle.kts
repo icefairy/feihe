@@ -15,6 +15,29 @@ plugins {
 //   - cargo（Rust 工具链）
 //   - aarch64-linux-android 目标（`rustup target add aarch64-linux-android`）
 //   - NDK 里的 clang（当链接器用）
+// ── 版本号 ─────────────────────────────────────────────────────────
+//
+// 以仓库根目录的 `Cargo.toml` 为**唯一真相**，和 `installer/build_setup.ps1` 一条规矩。
+// 以前这里是写死的 `"0.1.0-skeleton"`：升到 0.3.x 之后没人记得改，结果桌面的安装包
+// 叫 0.3.18、手机上装的还是 0.1.0——用户报版本号时会被直接带偏，而且「设置 → 应用」
+// 里看到的和引擎自己报的 `0.3.18` 对不上，像是两个软件。
+val appVersion: String = run {
+    val cargo = rootProject.file("../Cargo.toml")
+    val m = Regex("""(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)""").find(cargo.readText())
+        ?: throw GradleException("读不到 ${cargo.path} 里的 version，APK 版本号没法确定")
+    m.groupValues[1]
+}
+
+/**
+ * `versionCode`：semver 压成整数（major*10000 + minor*100 + patch）。
+ *
+ * 0.3.18 → 318。这样版本号升了 code 一定跟着升，不用人肉维护第二个数字；
+ * 也留了 100 个 patch、10000 个 minor 的余量。
+ */
+val appVersionCode: Int = appVersion.split(".").let { (maj, min, pat) ->
+    maj.toInt() * 10000 + min.toInt() * 100 + pat.toInt()
+}
+
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -129,8 +152,8 @@ android {
         // Android 7.0 以下的份额已经不值得为它牺牲任何 API。
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0-skeleton"
+        versionCode = appVersionCode
+        versionName = appVersion
 
         // Rust 侧只编了 arm64。写成显式的：不写的话 AGP 会为每个 ABI 找 .so，
         // 缺了就报「找不到 libfeihe_android.so」，看起来像是打包出错。
