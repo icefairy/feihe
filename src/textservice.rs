@@ -1382,12 +1382,24 @@ impl FeiheTextService_Impl {
         }
     }
 
-    /// 切中英：改状态、把没上屏的组合串提交掉、重绘浮窗
-    fn toggle_chinese(&self) {        let next = !insert::chinese();
-        insert::set_chinese(next);
-        if self.is_composing() {
-            self.commit_current();
+    /// 切中英：改状态、把没上屏的组合串提交掉、重绘浮窗。
+    ///
+    /// 手上还有拼音串时，**按回车的语义原样上屏**（`commit_raw`），不是「提交选中的
+    /// 候选」。用户按 Shift 想的是「别猜了，我就要这串字母」；「选第一个候选」是空格
+    /// 的事，两者混了会让「Shift 上屏」变成「Shift 帮我选词」。
+    ///
+    /// 于是单击 Shift 一举两得：拼音上屏 + 切到英文，正是用户要的一键两用。
+    fn toggle_chinese(&self) {
+        // 联想窗还开着就先收掉（联想态本来就没有输入状态，收窗不动文档）
+        self.dismiss_suggestion();
+        if !self.segments.borrow().is_empty() {
+            // 分词态和回车一样：已选中的段保留汉字，其余原样上屏
+            self.commit_raw_segments("");
+        } else if self.is_composing() {
+            self.commit_raw();
         }
+        let next = !insert::chinese();
+        insert::set_chinese(next);
         statusbar::repaint();
     }
 
@@ -2713,6 +2725,16 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         //
         // 放在英文态判断**之前**：英文态那段直接返回 FALSE，联想窗就再也收不掉了。
         if self.suggesting.get() {
+            // 回车 / 退格：**在这里就收掉联想窗并放行**。
+            //
+            // 不能照旧返回 TRUE：经典宿主（记事本 / EmEditor / Windows Terminal）
+            // 一旦在 OnTestKeyDown 认下这个键，OnKeyDown 再回 FALSE 也补不回来——
+            // 键已经不在队列里了。用户看到的就是「第一次回车只关掉联想窗，第二次
+            // 才换行」。收窗提前到这里，OnKeyDown 那条路照旧（WinUI3 不调 OnTestKeyDown）。
+            if vk == 0x0D || vk == 0x08 {
+                self.dismiss_suggestion();
+                return Ok(BOOL::from(false));
+            }
             return Ok(BOOL::from(true));
         }
         // 英文态：默认一个键都不吃，全部交给应用。

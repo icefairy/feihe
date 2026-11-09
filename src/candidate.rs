@@ -107,12 +107,15 @@ fn max_item_w() -> i32 {
 /// 即使窗口宽度顶到上限，也还能看出这是一块浮在桌面上的窗。
 const SCREEN_MARGIN_L: i32 = 8;
 
-/// 窗口允许的最大宽度：屏幕宽减去两侧留白，且不小于一个字的宽度。
+/// 窗口允许的最大宽度：**光标所在那块屏**的宽减去两侧留白，且不小于一个字的宽度。
 ///
 /// 抽成函数是为了让 layout 和 show 用同一个数——两处各算一次的话，
 /// 迟早会出现「布局按 800 排、显示按 900 夹」这种半截候选。
-fn max_window_w() -> i32 {
-    unsafe { (GetSystemMetrics(SM_CXSCREEN) - 2 * crate::dpi::px(SCREEN_MARGIN_L)).max(crate::dpi::px(160)) }
+///
+/// 宽度必须按光标所在的屏算，不能用主屏：竖屏副屏（1080 宽）上打字时按主屏
+/// （2560 宽）排出来的候选窗会有一半跑到屏幕外，见 `crate::screen`。
+fn max_window_w(screen_w: i32) -> i32 {
+    (screen_w - 2 * crate::dpi::px(SCREEN_MARGIN_L)).max(crate::dpi::px(160))
 }
 
 /// 一页最多几个候选（数字键 1-9）
@@ -737,7 +740,7 @@ struct Layout {
     hints: Vec<Vec<Option<&'static str>>>,
 }
 
-unsafe fn layout(items: &[String], top: usize, rows: usize) -> Layout {
+unsafe fn layout(items: &[String], top: usize, rows: usize, screen_w: i32) -> Layout {
     let hdc = GetDC(None);
     if hdc.is_invalid() {
         return Layout {
@@ -749,7 +752,7 @@ unsafe fn layout(items: &[String], top: usize, rows: usize) -> Layout {
     }
     SelectObject(hdc, crate::font::ui());
 
-    let window_w = max_window_w();
+    let window_w = max_window_w(screen_w);
     let mut width = 0;
     let mut spans = Vec::with_capacity(rows);
     let mut texts = Vec::with_capacity(rows);
@@ -876,6 +879,13 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
     // 是常见配置。必须在 layout 之前刷——宽度和行高都要用新的比例算。
     crate::dpi::update_for_point(x, y);
 
+    // **光标所在的那块屏**的工作区。后面所有「放不放得下」「往哪儿夹」都按它算，
+    // 不能用主屏尺寸：主屏左侧的副屏 x 是负数、竖屏副屏 y 会超过主屏高度，
+    // 按主屏夹的结果是候选窗跑到主屏边缘，或者落进两块屏之间的空白区（=看不见）。
+    // 见 `crate::screen` 的模块注释。
+    let area = crate::screen::work_at(x, y);
+    let area_w = (area.right - area.left).max(1);
+
     unsafe {
         let hwnd = ensure_window();
         if hwnd.is_invalid() {
@@ -885,9 +895,10 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
 
         // 屏幕放不下就砍行数：宁可少摊几行，也不能让窗口有一半在屏幕外
         // （在屏幕最下面打字是常态，候选只能往上长）。
-        let sh = GetSystemMetrics(SM_CYSCREEN);
         let lift = crate::dpi::px(6);
-        let fits = |n: usize| y + lift + height_of(n) <= sh || y - lift - height_of(n) >= 0;
+        let fits = |n: usize| {
+            y + lift + height_of(n) <= area.bottom || y - lift - height_of(n) >= area.top
+        };
         let mut rows = rows.min(pages);
         while rows > 1 && !fits(rows) {
             rows -= 1;
@@ -906,7 +917,7 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
             st.y = y;
             st.pressed = None;
             // layout 只量字宽、不回调任何东西，可以持锁跑
-            let lay = layout(&st.items, top, rows);
+            let lay = layout(&st.items, top, rows, area_w);
             // 候选不够一屏时行数会被截短，窗口高度要跟着缩，否则下半截是空白
             st.rows = lay.spans.len().max(1);
             st.spans = lay.spans;
@@ -915,24 +926,22 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
             (lay.w, height_of(st.rows))
         };
 
-        // 贴光标下方 6px，并夹在屏幕内
+        // 贴光标下方 6px，并夹进**光标所在那块屏**的工作区
         //
-        // w 已经在 layout 里被 max_window_w() 夹过一次，所以这里的
-        // px + w > sw 一般只会在「光标靠右」时成立。但保留这个夹子
+        // w 已经在 layout 里被 max_window_w(area_w) 夹过一次，所以这里的
+        // px + w > area.right 一般只会在「光标靠右」时成立。但保留这个夹子
         // 仍然必要——屏幕可能在弹窗的瞬间被拔掉（RDP、投屏）。
-        let sw = GetSystemMetrics(SM_CXSCREEN);
         let lift = crate::dpi::px(6);
-        let mut px = x;
         let mut py = y + lift;
-        if px + w > sw {
-            px = (sw - w).max(0);
-        } else if px < 0 {
-            px = 0;
+        if py + h > area.bottom {
+            // 下方放不下就翻到光标上方；上方也放不下（屏太矮、候选太多）时
+            // 交给 clamp_into 贴着底边摆，至少保证整窗可见。
+            let above = y - h - lift;
+            if above >= area.top {
+                py = above;
+            }
         }
-        if py + h > sh {
-            // 下方放不下就翻到光标上方
-            py = (y - h - lift).max(0);
-        }
+        let (px, py) = crate::screen::clamp_into(&area, x, py, w, h);
 
         let _ = SetWindowPos(
             hwnd,
@@ -1162,7 +1171,7 @@ mod tests {
             st.rows = ROWS;
         }
         let items: Vec<String> = words.iter().map(|s| s.to_string()).collect();
-        let lay = unsafe { layout(&items, 0, ROWS) };
+        let lay = unsafe { layout(&items, 0, ROWS, 1920) };
         let w = lay.w;
         assert!(w > 100 && lay.spans.len() == ROWS);
 

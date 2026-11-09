@@ -248,17 +248,15 @@ pub fn show_at(x: i32, y: i32) {
     crate::dpi::update_for_point(x, y);
     unsafe {
         let Some(h) = ensure_window() else { return };
-        let sw = GetSystemMetrics(SM_CXSCREEN);
-        let sh = GetSystemMetrics(SM_CYSCREEN);
-        let mut px = x;
+        // 按**浮窗所在那块屏**夹，不能用主屏尺寸：主屏左侧的副屏 x 是负数，
+        // 按主屏夹会把面板钳到主屏最左边（和候选窗同一个坑，见 `crate::screen`）。
+        let area = crate::screen::work_at(x, y);
         let mut py = y;
-        if px + width() > sw {
-            px = (sw - width()).max(0);
-        }
-        if py + height() > sh {
+        if py + height() > area.bottom {
             // 下方放不下就翻到上方
-            py = (py - height() - crate::dpi::px(34)).max(0);
+            py -= height() + crate::dpi::px(34);
         }
+        let (px, py) = crate::screen::clamp_into(&area, x, py, width(), height());
         let _ = SetWindowPos(
             h,
             Some(HWND_TOPMOST),

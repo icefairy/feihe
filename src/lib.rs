@@ -14,6 +14,7 @@ mod fullscreen;
 mod insert;
 mod nls;
 mod quick;
+mod screen;
 mod secure;
 mod settings;
 mod softkbd;
