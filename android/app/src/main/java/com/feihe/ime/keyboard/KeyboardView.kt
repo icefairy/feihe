@@ -31,6 +31,12 @@ object KeyboardView {
      */
     const val SHIFT_TAG = "feihe.shift"
 
+    /**
+     * 中/英键的 tag。切模式时**只改这一颗键的字**，不重建键盘——重建会闪，
+     * 而且用户刚按下的位置会短暂消失。
+     */
+    const val MODE_TAG = "feihe.mode"
+
     fun build(
         ctx: Context,
         rows: List<List<Key>>,
@@ -93,6 +99,19 @@ object KeyboardView {
         v.contentDescription = shiftAccessibilityLabel(state)
     }
 
+    /**
+     * 中/英键跟着当前模式走：中文态显示「中」，英文态显示「英」并染成强调色。
+     *
+     * 以前切了模式这颗键还写着「中」，用户按完看一眼会以为没生效——实际已经切了。
+     */
+    fun applyModeState(root: View?, chinese: Boolean) {
+        val v = root?.findViewWithTag<TextView>(MODE_TAG) ?: return
+        val p = Palette.of(root.context)
+        v.text = if (chinese) "中" else "英"
+        v.setTextColor(if (chinese) p.fnText else p.accent)
+        v.contentDescription = if (chinese) "中英切换，当前中文" else "中英切换，当前英文"
+    }
+
     /** ⇧ / ⇪：一次性与锁定必须长得不一样。 */
     private fun shiftLabel(state: ShiftState): String =
         if (state == ShiftState.LOCKED) "⇪" else "⇧"
@@ -134,6 +153,8 @@ object KeyboardView {
             setOnClickListener { onKey(key) }
         }
         if (key.kind == KeyKind.SHIFT) view.tag = SHIFT_TAG
+        // 中/英键要能在切模式时就地改字（中 ⇄ 英），所以打上标记。
+        if (key.kind == KeyKind.MODE) view.tag = MODE_TAG
 
         // 删除键长按连续删。手感和搜狗对齐：先删一个，然后约 50ms 一个。
         // 用 setOnLongClickListener 而不是自己算触摸时长——输入法窗口里
@@ -186,8 +207,9 @@ object KeyboardView {
         val p = Palette.of(ctx)
         val hint = TextView(ctx).apply {
             text = key.swipe
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
-            setTextColor(p.hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            // 用「次要文字」而不是「最淡的提示」：键帽是白底，最淡那一档几乎看不见
+            setTextColor(p.sub)
             setPadding(dp(ctx, 4f), dp(ctx, 1f), dp(ctx, 4f), 0)
             isClickable = false
         }
@@ -210,10 +232,29 @@ object KeyboardView {
             )
             contentDescription = "按键 ${key.label}，上滑输入 ${key.swipe}"
         }
-        val threshold = dp(ctx, 16f).toFloat()
+        val baseText = keyView.text
+        val basePx = keyView.textSize
+        val baseColor = keyView.currentTextColor
+        var previewing = false
+        // 上滑到位就把键帽换成要上屏的字符：键盘上没有「悬浮气泡」那种额外窗口
+        // （输入法窗口里加 PopupWindow 很容易抢焦点/被系统盖住），改成原地预览，
+        // 效果一样看得见。
+        fun preview(on: Boolean) {
+            if (on == previewing) return
+            previewing = on
+            keyView.text = if (on) key.swipe ?: baseText else baseText
+            keyView.setTextSize(
+                TypedValue.COMPLEX_UNIT_PX,
+                if (on) basePx * 1.1f else basePx,
+            )
+            keyView.setTextColor(if (on) p.accent else baseColor)
+        }
+        val threshold = dp(ctx, 14f).toFloat()
         var downY = 0f
         var swiped = false
-        holder.setOnTouchListener { v, e ->
+        // **监听必须挂在键本身**：事件先派给可点的子 View，挂在外层 FrameLayout 上
+        // 永远收不到 DOWN（被 keyView 吃掉了），表现就是「上滑完全没反应」。
+        keyView.setOnTouchListener { v, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downY = e.rawY
@@ -227,11 +268,13 @@ object KeyboardView {
                     if (!swiped && downY - e.rawY > threshold) {
                         swiped = true
                         keyView.isPressed = false
+                        preview(true)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     keyView.isPressed = false
+                    preview(false)
                     if (swiped) {
                         key.swipe?.let { onKey(Key(it, KeyKind.TEXT, it)) }
                     } else {
@@ -241,6 +284,7 @@ object KeyboardView {
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     keyView.isPressed = false
+                    preview(false)
                     swiped = false
                     false
                 }

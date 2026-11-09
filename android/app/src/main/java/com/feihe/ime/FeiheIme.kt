@@ -699,6 +699,8 @@ class FeiheIme : InputMethodService() {
                 onLongKey = { onLongKey(it) },
             ) { onKey(it) },
         )
+        // 建完就把中/英键的字刷成当前模式：换页重建后不能又变回「中」
+        KeyboardView.applyModeState(host, chinese)
         refreshStatus()
     }
 
@@ -890,6 +892,8 @@ class FeiheIme : InputMethodService() {
                 chinese = !chinese
                 shiftState = ShiftState.OFF
                 KeyboardView.applyShiftState(keyboardHost, shiftState)
+                // 键上的字要跟着变：中文态「中」，英文态「英」
+                KeyboardView.applyModeState(keyboardHost, chinese)
                 // 切英文时把中文候选丢掉：那批候选是按中文码查的，留着只会误导
                 forgetContext()
                 // 快捷输入只在中文态存在；切到英文时手上那截 `/rq` 不能留在组合态里
