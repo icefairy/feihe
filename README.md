@@ -7,7 +7,7 @@
 Windows 侧是 TSF（Text Services Framework）中文输入法，Rust + windows-rs 实现 COM 组件。
 
 **Windows 端当前版本 0.3.18** ｜ 安装包 2.54 MB ｜ 装完约 12.6 MB ｜ 单字 8573 ｜ 词条 74869 ｜
-不联网、不弹窗、无账号、密码框不接管 ｜ 402 项 Rust 单测 + 94 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
+不联网、不弹窗、无账号、密码框不接管 ｜ 402 项 Rust 单测 + 97 项 Android JVM 单测 ｜ 安装需要管理员（注册写 HKLM）
 
 > **Android 版**见 [「Android 输入法」](#android-输入法) 一节：26 键键盘、双拼/全拼、逐段选择、
 > 上档锁定、数字选词、离线语音输入、数据备份，已可装机（真机验收待补）。
@@ -161,6 +161,9 @@ v2 签名有没有开」。命令清单见 `docs/Android-方案.md` §12.3。
 | 双拼 / 全拼 | 双拼默认，查不到时自动按全拼再试；全拼模式 `xian` 出「先」 |
 | 真候选 | 7.5 万条词库 + 动态词频 + 置顶 / 降权 / 自造词，与桌面同一份 |
 | 逐段选择 | 长串打 `vhsjli` 出「张三李」，候选条画 `[张三][李]`，点哪段改哪段 |
+| 辅助码 | 候选条最左边「形」按钮：音码之后打形码把同音字筛掉。**逐段选择时按段筛、跨段保持**，造词不用翻页。设置里选关闭 / 自然码 / 小鹤 |
+| 模糊音 | 9 条（z=zh / n=l / an=ang …），设置页一条一个开关，默认全关；和桌面同一份配置 |
+| 置顶 / 降权 | **长按候选**弹菜单，选「置顶」或「降权」，立刻重排；分段视图里长按只作用于当前段的码 |
 | 数字选词 | 有候选时显示 1–9，点数字选词；设置里可关，不挤占字母键高度 |
 | 上档锁定 | 单击 ⇧ 一次性大写，**长按**锁定（⇪），再点解除 |
 | 联想 | 单字 / 两字 / 三字 / 更长（后缀回退）都联想；会读宿主前文，切窗口后第一个词也有上下文 |
@@ -169,13 +172,13 @@ v2 签名有没有开」。命令清单见 `docs/Android-方案.md` §12.3。
 | 验证码提示 | 剪贴板里是验证码（或当前是数字框）时，候选条第一个位置出「验证码 123456」，点一下填进去 |
 | 剪贴板历史 | 状态条 📋 打开，最多 30 条、点一下上屏、长按删除；只在键盘出现 / 切输入框时抓（Android 10+ 不允许后台读） |
 | 数据备份 | 导出 / 导入 zip（系统文件选择器，不申请存储权限） |
-| 设置页 | 输入方式、方案、繁体、联想、常用词、候选个数、数字选词、语音开关、模型状态、隐私说明 |
+| 设置页 | 输入方式、方案、辅助码、模糊音、繁体、联想、常用词、候选个数、数字选词、学习数据清理、语音开关、模型状态、隐私说明 |
 
 ### 构建与验证
 
 ```bash
 cd android
-JAVA_HOME=D:/soft/jdk17 ./gradlew testDebugUnitTest   # 94 项 JVM 单测
+JAVA_HOME=D:/soft/jdk17 ./gradlew testDebugUnitTest   # 97 项 JVM 单测
 JAVA_HOME=D:/soft/jdk17 ./gradlew assembleDebug       # 同时交叉编译 Rust 引擎
 ```
 
@@ -1103,7 +1106,7 @@ cargo test --release          # 需先让 PATH 含 llvm-mingw 的 bin（build.ps
 # COM 骨架冒烟测试：加载 DLL → DllGetClassObject → CreateInstance → 引用计数归零
 python tools/smoke_com.py
 
-# Android 侧 94 项 JVM 单测（键盘布局 / 上档状态机 / 数字选词 / 逐段选择 / 联想策略 / 句末标点 / PCM 换算 / 验证码识别 / 剪贴板历史）
+# Android 侧 97 项 JVM 单测（键盘布局 / 上档状态机 / 数字选词 / 逐段选择 / 联想策略 / 句末标点 / PCM 换算 / 验证码识别 / 剪贴板历史 / 形码按词选择）
 cd android && ./gradlew testDebugUnitTest
 ```
 
@@ -1666,4 +1669,4 @@ python tools/import_sogou.py --dir "D:\soft\sogoupinyin\用户数据\SogouPY.use
 （Windows 384 条 + Android 15 条）。不需要全跑——改到哪块就跑哪组，比如动
 `textservice.rs` 的按键路径至少要跑 M2 + 分词 + 回车三组。自动化那部分仍然是
 `cargo test --workspace`（402 项）+ `tools/smoke_com.py` + Android 的
-`gradlew testDebugUnitTest`（94 项）。
+`gradlew testDebugUnitTest`（97 项）。

@@ -16,6 +16,14 @@ object NativeEngine {
 
     private const val TAG = "FeiheIme"
 
+    /**
+     * 辅助码筛选一次要多少个候选。
+     *
+     * 比普通候选（9 个）大得多：形码筛完通常只剩一两个，但「同形码不同字」偶尔会
+     * 有十几个（小鹤只打 1 键时）。手机上候选条是横向滚动，多给几个不用翻页。
+     */
+    private const val ASSIST_LIMIT = 50
+
     /** 加载过一次就不再重试：失败是确定性的，每次按键都 try 一遍纯属浪费。 */
     private var state: LoadState = LoadState.NotTried
 
@@ -106,6 +114,60 @@ object NativeEngine {
         return Lookup(lines[0], words, segments)
     }
 
+    /**
+     * 带辅助码筛选的候选：**一个音节**（普通组合态）或**一个分段的码**（逐段选择时）。
+     *
+     * 和 [lookupInput] 只差一个 `assist`。形码怎么算、筛哪些字全在 core，和 Windows
+     * 端同一张表——壳这边一条匹配规则都不写，否则两端迟早筛出不同的字。
+     *
+     * 返回空表 = 真筛空了（形码打错）。调用方要如实显示「没有候选」，**不能**回退成
+     * 不筛，否则用户会以为形码没生效。
+     */
+    fun lookupAssist(
+        input: String,
+        pinyinMode: Boolean,
+        assist: String,
+        limit: Int = ASSIST_LIMIT,
+    ): List<String> {
+        if (input.isEmpty() || assist.isEmpty() || !ensureLoaded()) return emptyList()
+        val raw = runCatching { lookupAssistNative(input, pinyinMode, assist, limit) }
+            .getOrElse { return emptyList() }
+        return if (raw.isEmpty()) emptyList() else raw.split('\n').filter { it.isNotEmpty() }
+    }
+
+    /**
+     * 把当前剪贴板文本交给 Rust 侧，给 `/fc` 反查用。
+     *
+     * core 的 `fancha` 不收闭包（它不许碰系统 API），所以只能这样中转。传空串 =
+     * 清空：读不到新内容时，绝不能让 `/fc` 拿旧文本反查。
+     */
+    fun setClipboard(text: String) {
+        if (!ensureLoaded()) return
+        runCatching { setClipboardNative(text) }
+    }
+
+    /** 置顶 / 取消置顶。`code` 用 [Lookup.code]（查词用的双拼码），不是原始按键。 */
+    fun togglePin(code: String, word: String): Boolean {
+        if (code.isEmpty() || word.isEmpty() || !ensureLoaded()) return false
+        return runCatching { togglePinNative(code, word) }.getOrDefault(false)
+    }
+
+    /** 降权 / 取消降权。 */
+    fun toggleDemote(code: String, word: String): Boolean {
+        if (code.isEmpty() || word.isEmpty() || !ensureLoaded()) return false
+        return runCatching { toggleDemoteNative(code, word) }.getOrDefault(false)
+    }
+
+    /**
+     * 清空一类学习数据，返回清掉几条。
+     *
+     * `kind`：`freq` 动态词频 / `phrase` 自造词 / `pin` 置顶 / `demote` 降权。
+     */
+    fun clearData(kind: String): Int {
+        if (!ensureLoaded()) return 0
+        return runCatching { clearDataNative(kind) }.getOrDefault(0)
+    }
+
     /** [lookupInput] 的返回值。`segments` 非空 = words[0] 是各段第一名拼成的整句。 */
     data class Lookup(
         val code: String,
@@ -157,6 +219,10 @@ object NativeEngine {
         val learn: Boolean,
         /** 玄学分类词库（干支、易经、奇门、六壬、六爻、神煞），默认关。 */
         val xuanxue: Boolean,
+        /** 辅助码方案：off / ziranma / xiaohe。和 Windows 端同一份配置。 */
+        val assistMode: String,
+        /** 模糊音规则，逗号分隔（`z_zh,n_l`），全关是空串。和 Windows 端同一份配置。 */
+        val fuzzy: String,
     )
 
     fun settings(): Settings? {
@@ -177,6 +243,8 @@ object NativeEngine {
             suggest = map["suggest"] == "1",
             learn = map["learn"] == "1",
             xuanxue = map["xuanxue"] == "1",
+            assistMode = map["assist_mode"] ?: "xiaohe",
+            fuzzy = map["fuzzy"] ?: "",
         )
     }
 
@@ -315,6 +383,21 @@ object NativeEngine {
     private external fun initNative(dataDir: String, utcOffsetMinutes: Int)
 
     private external fun lookupInputNative(input: String, pinyinMode: Boolean, limit: Int): String
+
+    private external fun setClipboardNative(text: String)
+
+    private external fun togglePinNative(code: String, word: String): Boolean
+
+    private external fun toggleDemoteNative(code: String, word: String): Boolean
+
+    private external fun clearDataNative(kind: String): Int
+
+    private external fun lookupAssistNative(
+        input: String,
+        pinyinMode: Boolean,
+        assist: String,
+        limit: Int,
+    ): String
 
 
     private external fun suggestNative(prev: String, limit: Int): String

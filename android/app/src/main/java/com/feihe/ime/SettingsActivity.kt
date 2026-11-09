@@ -51,6 +51,7 @@ class SettingsActivity : Activity() {
     private var schemeBox: LinearLayout? = null
     private var inputBox: LinearLayout? = null
     private var candidateBox: LinearLayout? = null
+    private var assistBox: LinearLayout? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,6 +106,12 @@ class SettingsActivity : Activity() {
         list.addView(card("双拼方案", schemeBox!!))
         renderScheme()
 
+        // 辅助码：和 Windows 端同一份配置（`assist_mode`）。手机上候选条最左边有
+        // 「形」按钮，点一下开始打形码——没有物理 Tab 键，所以入口做成了按钮。
+        assistBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        list.addView(card("辅助码", assistBox!!))
+        renderAssist()
+
         // 候选个数：手机候选条是单行横向滚动，"行数"在这里就是"一次给几个"。
         // 纯界面开关（UiPrefs），引擎没加载也能改，所以 alwaysEnabled。
         candidateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -140,6 +147,21 @@ class SettingsActivity : Activity() {
                     set("xuanxue", it)
                     cfg = cfg?.copy(xuanxue = it)
                 },
+            ),
+        )
+
+        // 模糊音：和 Windows 端同一份配置（`fuzzy`）。默认全关——普通话标准的人
+        // 开了只会多出重码，只有真有口音才值得勾。
+        list.addView(card("模糊音", fuzzyCard()))
+
+        // 学习数据清理。以前这三样只能靠覆盖备份，手机上根本没有出口。
+        list.addView(
+            card(
+                "学习数据",
+                actionRow("清空动态词频", "忘掉「哪个词该排前面」的学习结果") { confirmClear("freq", "词频") },
+                actionRow("清空自造词", "删掉逐段拼出来的词，下次要重新造") { confirmClear("phrase", "自造词") },
+                actionRow("清空置顶", "取消所有手动置顶") { confirmClear("pin", "置顶") },
+                actionRow("清空降权", "取消所有手动降权") { confirmClear("demote", "降权") },
             ),
         )
 
@@ -251,6 +273,41 @@ class SettingsActivity : Activity() {
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f),
         )
         return root
+    }
+
+    /**
+     * 模糊音九条，一条一个开关。
+     *
+     * 写的是逗号分隔的规则名（`z_zh,n_l`），core 的 `Rules::from_key` 认这个格式；
+     * **和 Windows 端同一份配置**，这边勾完回到电脑上也是同一套。
+     */
+    private fun fuzzyCard(): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val on = (cfg?.fuzzy ?: "").split(',').filter { it.isNotEmpty() }.toMutableSet()
+        FUZZY_RULES.forEach { (key, label, desc) ->
+            box.addView(
+                switchRow(label, desc, on.contains(key)) { checked ->
+                    if (checked) on.add(key) else on.remove(key)
+                    val v = on.joinToString(",")
+                    set("fuzzy", v)
+                    cfg = cfg?.copy(fuzzy = v)
+                },
+            )
+        }
+        return box
+    }
+
+    /** 清空一类学习数据，先确认一次——这几项都不可撤销。 */
+    private fun confirmClear(kind: String, label: String) {
+        AlertDialog.Builder(this)
+            .setTitle("清空$label")
+            .setMessage("不可撤销，确定吗？")
+            .setPositiveButton("清空") { _, _ ->
+                val n = NativeEngine.clearData(kind)
+                toast(if (n > 0) "已清空 $n 条$label" else "本来就是空的")
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun card(title: String, vararg rows: View): View {
@@ -385,6 +442,33 @@ class SettingsActivity : Activity() {
                     set("scheme", key)
                     cfg = cfg?.copy(scheme = key)
                     renderScheme()
+                },
+            )
+        }
+    }
+
+    /**
+     * 辅助码方案：关闭 / 自然码（1 键）/ 小鹤音形（2 键）。
+     *
+     * 写的是 `config.ini` 的 `assist_mode`，**和 Windows 端同一个字段**：手机上改成
+     * 自然码，回到电脑上也是自然码。默认小鹤——双拼方案默认就是小鹤，配套的形码
+     * 是官方码。
+     */
+    private fun renderAssist() {
+        val box = assistBox ?: return
+        box.removeAllViews()
+        val cur = cfg?.assistMode ?: "xiaohe"
+        val rows = listOf(
+            Triple("off", "关闭", "不启用。候选条上不会出现「形」按钮"),
+            Triple("ziranma", "自然码辅助码（1 键）", "打部首读音首字母：的 b、打 s、机 m"),
+            Triple("xiaohe", "小鹤音形（2 键，默认）", "首末部件各一键：劫 tl、狱 qq、机 mj"),
+        )
+        rows.forEach { (key, label, desc) ->
+            box.addView(
+                choiceRow(label, cur == key, cfg != null, desc) {
+                    set("assist_mode", key)
+                    cfg = cfg?.copy(assistMode = key)
+                    renderAssist()
                 },
             )
         }
@@ -822,6 +906,19 @@ class SettingsActivity : Activity() {
     private val DANGER get() = palette.danger
 
     private companion object {
+        /** 模糊音规则（键、标题、说明）。顺序和 core 的 `fuzzy::NAMES` 一致。 */
+        val FUZZY_RULES = listOf(
+            Triple("z_zh", "z = zh", "打 z 也出 zh 的字（自己 / 志己）"),
+            Triple("c_ch", "c = ch", "打 c 也出 ch 的字"),
+            Triple("s_sh", "s = sh", "打 s 也出 sh 的字（四 / 是）"),
+            Triple("n_l", "n = l", "南方口音：南 / 兰 不分"),
+            Triple("f_h", "f = h", "福建口音：发 / 花 不分"),
+            Triple("l_r", "l = r", "打 l 也出 r 的字"),
+            Triple("an_ang", "an = ang", "前后鼻音：安 / 昂 不分"),
+            Triple("en_eng", "en = eng", "前后鼻音：恩 / 鞥 不分"),
+            Triple("in_ing", "in = ing", "前后鼻音：因 / 英 不分"),
+        )
+
         /** 文件选择器的请求码。两个值够用就行，别和别的 startActivityForResult 撞。 */
         const val REQ_EXPORT = 1001
         const val REQ_IMPORT = 1002

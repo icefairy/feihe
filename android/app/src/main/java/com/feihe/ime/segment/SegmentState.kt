@@ -59,6 +59,27 @@ data class SegmentState(
         )
     }
 
+    /**
+     * 按**词**选（形码态用）。
+     *
+     * 形码筛过之后，界面上是筛过的子集，下标和 [segments] 对不上；用词本身去定位
+     * 才不会选错（未筛选的列表仍走 [choose]）。
+     *
+     * [keepOpen] = 选完自动展开**下一段**：形码态跨段保持，用户不用再点一下。
+     * 已经是最后一段时回到 chip 视图（focus = -1）。
+     */
+    fun chooseWord(word: String, keepOpen: Boolean = false): SegmentState {
+        if (focus !in segments.indices) return this
+        val i = segments[focus].indexOf(word)
+        if (i < 0) return this
+        val next = if (keepOpen && focus + 1 < segments.size && segments[focus + 1].isNotEmpty()) {
+            focus + 1
+        } else {
+            -1
+        }
+        return copy(selected = selected.toMutableList().also { it[focus] = i }, focus = next)
+    }
+
     /** chip 视图里第 i 段显示的词。 */
     fun wordAt(index: Int): String =
         if (index in segments.indices && selected[index] in segments[index].indices) {

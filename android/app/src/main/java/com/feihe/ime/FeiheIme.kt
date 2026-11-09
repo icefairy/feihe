@@ -1,5 +1,6 @@
 package com.feihe.ime
 
+import android.app.AlertDialog
 import android.content.ClipboardManager
 import android.content.Intent
 import android.database.ContentObserver
@@ -182,6 +183,18 @@ class FeiheIme : InputMethodService() {
     /** 候选条上要提示的验证码；null = 没有。只在没有候选时显示，避免顶掉候选的位置。 */
     private var otpCode: String? = null
 
+    /** 辅助码方案：off / ziranma / xiaohe。和 config.ini 的 assist_mode 同一个字段。 */
+    private var assistMode = "off"
+
+    /** 形码态是否打开（候选条上的「形」点一下切换）。 */
+    private var assistActive = false
+
+    /** 已经打进去的形码字母。打满（自然码 1 / 小鹤 2）之后多按的键会被吞掉。 */
+    private val assistKeys = StringBuilder()
+
+    /** 形码态下当前**段**的筛选结果。普通组合态不用它，直接改写 [candidates]。 */
+    private var assistWords: List<String> = emptyList()
+
     /** 剪贴板历史。纯逻辑在 [ClipHistory]，这里只管读、存、画。 */
     private var clipEntries: List<ClipHistory.Entry> = emptyList()
     private var clipPanel: LinearLayout? = null
@@ -229,7 +242,10 @@ class FeiheIme : InputMethodService() {
      * 出现」（`onStartInputView` / `onWindowShown`），用户从设置页返回就能用上。
      */
     private fun readInputMode() {
-        pinyinMode = NativeEngine.settings()?.pinyin ?: pinyinMode
+        val s = NativeEngine.settings()
+        pinyinMode = s?.pinyin ?: pinyinMode
+        // 辅助码方案在设置页改完，回到键盘要立刻生效——和输入方式同一个时机重读。
+        assistMode = s?.assistMode ?: assistMode
     }
 
     /**
@@ -313,6 +329,8 @@ class FeiheIme : InputMethodService() {
 
         if (!HostContext.canRead(fieldType)) {
             otpCode = null
+            // 密码框连「上一次的剪贴板」都不该留在引擎里：/fc 会拿它反查
+            NativeEngine.setClipboard("")
             return
         }
         val cm = getSystemService(ClipboardManager::class.java) ?: return
@@ -322,6 +340,8 @@ class FeiheIme : InputMethodService() {
         }.getOrNull()
         if (text.isNullOrBlank()) return
 
+        // 给 /fc 反查用（core 收不了闭包，只能这样中转）
+        NativeEngine.setClipboard(text)
         rememberClip(text)
 
         // 有数字框 / hint 里的关键词兜底：剪贴板里是验证码，但当前框是普通文本框时
@@ -701,6 +721,15 @@ class FeiheIme : InputMethodService() {
     private fun onKey(key: Key) {
         when (key.kind) {
             KeyKind.CHAR -> {
+                // 形码态：字母归形码，不延长编码。打满之后多按的直接吞掉——放它去
+                // 延长编码会重新分段/重查，刚筛出来的那一段就没了（桌面端同一条规则）。
+                if (assistActive) {
+                    if (assistKeys.length < assistMaxKeys()) {
+                        assistKeys.append(key.code)
+                        refreshAssist()
+                    }
+                    return
+                }
                 // **联想在打字时保留**（原来一敲字母就清掉）。那个老决定的理由是
                 // "留着旧联想等于把几分钟前的上下文摆在手指下面"，但现在两处已经变了：
                 // ① onStartInput 会读宿主前文重设 prevWord，切窗口后不再是陈旧的上下文；
@@ -734,6 +763,9 @@ class FeiheIme : InputMethodService() {
                 // 别的字母还在组合中（`nihao` 打到一半）时按 `/`，应当照旧上屏拼音
                 // 再打斜杠，否则会凭空把用户打了一半的拼音吞掉。
                 if (chinese && pending.isEmpty() && key.code == NativeEngine.quickPrefix()) {
+                    // /fc 要读剪贴板：进快捷输入前强制重读一次，否则用户刚复制的字
+                    // 不在引擎里（键盘弹出时读的那份可能已经旧了）。
+                    readClipboard(force = true)
                     quickMode = true
                     quickWords = emptyList()
                     pushComposing()
@@ -744,6 +776,16 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.DELETE -> {
+                // 形码态：先删形码；删空之后再按一次退出形码态（不回退去删拼音）。
+                if (assistActive) {
+                    if (assistKeys.isNotEmpty()) {
+                        assistKeys.deleteCharAt(assistKeys.length - 1)
+                    } else {
+                        assistActive = false
+                    }
+                    refreshAssist()
+                    return
+                }
                 // 快捷输入态：退格删码；删到只剩引导符时再按一下，整个退出。
                 // 不能在这里「删完就直接退出」——`/uui` 删回 `/` 时用户还想重打，
                 // 突然退出会和「打一半字消失」一样莫名其妙。
@@ -831,6 +873,9 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.MODE -> {
+                // 切中英 = 上下文变了：形码态必须退掉，否则英文态下打的字母还会被
+                // 当成形码吃掉（形码只在中文态有意义）。
+                resetAssist()
                 chinese = !chinese
                 shiftState = ShiftState.OFF
                 KeyboardView.applyShiftState(keyboardHost, shiftState)
@@ -910,6 +955,72 @@ class FeiheIme : InputMethodService() {
         ic.setComposingText(pending.toString(), 1)
         refreshCandidates()
         refreshStatus()
+    }
+
+    /** 形码最多几键：自然码 1、小鹤 2、关闭 0。和 core 的 `AssistMode::max_keys` 对齐。 */
+    private fun assistMaxKeys(): Int = when (assistMode) {
+        "ziranma" -> 1
+        "xiaohe" -> 2
+        else -> 0
+    }
+
+    /**
+     * 现在该不该出现「形」按钮。
+     *
+     * 只有「中文态 + 正在打字（或展开了某一段）+ 方案没关」这一种情况。英文态、快捷
+     * 输入、刚上屏只剩联想的时候都没有可筛的码，不出现。
+     */
+    private fun assistAvailable(): Boolean =
+        assistMaxKeys() > 0 && chinese && !quickMode &&
+            (pending.isNotEmpty() || (segmentState?.focus ?: -1) >= 0)
+
+    private fun resetAssist() {
+        assistActive = false
+        assistKeys.setLength(0)
+        assistWords = emptyList()
+    }
+
+    /** 点「形」：进/出形码态。进出都清空已打的形码——上一次的筛选不该带过来。 */
+    private fun toggleAssist() {
+        if (!assistActive && !assistAvailable()) return
+        assistActive = !assistActive
+        assistKeys.setLength(0)
+        assistWords = emptyList()
+        refreshAssist()
+    }
+
+    /**
+     * 形码变了之后重算候选。
+     *
+     * 分段态**不能**走 [refreshCandidates]：那条路会 `refreshSegmentMode()` 重建整个
+     * SegmentState，用户刚展开的那一段和已选的词全被冲掉。所以这里分开处理。
+     */
+    private fun refreshAssist() {
+        if (segmentState != null) {
+            updateAssistWords()
+            renderCandidates()
+            return
+        }
+        if (!assistActive || assistKeys.isEmpty()) {
+            refreshCandidates()
+            return
+        }
+        candidates = NativeEngine.lookupAssist(
+            pending.toString(),
+            pinyinMode,
+            assistKeys.toString(),
+        )
+        renderCandidates()
+    }
+
+    /** 重算当前展开段的筛选结果。段码来自 `pendingSegments`（和 segments 同序）。 */
+    private fun updateAssistWords() {
+        assistWords = emptyList()
+        if (!assistActive || assistKeys.isEmpty()) return
+        val st = segmentState ?: return
+        if (st.focus < 0) return
+        val code = pendingSegments.getOrNull(st.focus)?.code ?: return
+        assistWords = NativeEngine.lookupAssist(code, pinyinMode, assistKeys.toString())
     }
 
     /**
@@ -1013,7 +1124,7 @@ class FeiheIme : InputMethodService() {
         var i = 0
         if (otp != null) bindOtpView(bar.getChildAt(i++) as TextView, otp)
         candidates.forEachIndexed { idx, word ->
-            bindCandidateView(bar.getChildAt(i++) as TextView, word, idx == 0)
+            bindCandidateView(bar.getChildAt(i++) as TextView, word, idx == 0, code)
         }
         if (suggestions.isNotEmpty()) {
             bindSeparatorView(bar.getChildAt(i++) as TextView)
@@ -1024,7 +1135,12 @@ class FeiheIme : InputMethodService() {
     }
 
     /** 普通候选项。每个视觉属性都重设：这一格可能是从分段 chip 复用来的，带背景。 */
-    private fun bindCandidateView(v: TextView, word: String, first: Boolean) {
+    private fun bindCandidateView(
+        v: TextView,
+        word: String,
+        first: Boolean,
+        pinCode: String? = null,
+    ) {
         v.background = null
         v.text = word
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
@@ -1033,6 +1149,52 @@ class FeiheIme : InputMethodService() {
         val p = Palette.of(this)
         v.setTextColor(if (first) p.accent else p.text)
         v.setOnClickListener { commitWord(word) }
+        // 长按置顶/降权。手机上这是**唯一**纠正候选顺序的手势（没有右键、
+        // 没有 Ctrl+点击）。没有码的候选（快捷输入结果）不给菜单——它不属于词库。
+        v.setOnLongClickListener {
+            if (pinCode == null) {
+                false
+            } else {
+                showCandidateMenu(word, pinCode)
+                true
+            }
+        }
+    }
+
+    /**
+     * 长按候选弹出的菜单：置顶 / 降权。
+     *
+     * 两项放一个弹窗里，而不是做成两种手势：手机候选条只有单击可用，再切一个
+     * 「长按 + 滑动」之类的组合没人记得住。选完立刻重查，用户能马上看到这一项挪到哪。
+     *
+     * [reopen] ≥ 0 时（分段视图里长按）重查后把这一段重新展开——否则用户刚改完
+     * 一段，界面就跳回 chip 视图，还得再点一次。
+     */
+    private fun showCandidateMenu(word: String, code: String, reopen: Int = -1) {
+        AlertDialog.Builder(this)
+            .setTitle(word)
+            .setItems(arrayOf("置顶", "降权")) { _, which ->
+                val on = if (which == 0) {
+                    NativeEngine.togglePin(code, word)
+                } else {
+                    NativeEngine.toggleDemote(code, word)
+                }
+                Toast.makeText(
+                    this,
+                    if (which == 0) {
+                        if (on) "已置顶「$word」" else "已取消置顶"
+                    } else {
+                        if (on) "已降权「$word」" else "已取消降权"
+                    },
+                    Toast.LENGTH_SHORT,
+                ).show()
+                refreshCandidates()
+                if (reopen >= 0) {
+                    segmentState = segmentState?.open(reopen)
+                    renderCandidates()
+                }
+            }
+            .show()
     }
 
     /**
@@ -1053,6 +1215,24 @@ class FeiheIme : InputMethodService() {
         clearComposing()
         commitText(code)
         refreshCandidates()
+    }
+
+    /**
+     * 「形」按钮。**文案里必须带上已打的形码**（`形 tl`）：形码是看不见的状态，
+     * 只亮一个按钮的话，用户不知道刚才那两个键到底吃进去没有。
+     */
+    private fun bindAssistView(v: TextView) {
+        v.background = null
+        val p = Palette.of(this)
+        v.text = when {
+            !assistActive -> "形"
+            assistKeys.isEmpty() -> "形 _"
+            else -> "形 $assistKeys"
+        }
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        v.setPadding(dp(10f), 0, dp(10f), 0)
+        v.setTextColor(if (assistActive) p.accent else p.sub)
+        v.setOnClickListener { toggleAssist() }
     }
 
     /** 候选和联想之间的细竖线，不可点。 */
@@ -1094,24 +1274,56 @@ class FeiheIme : InputMethodService() {
                     setTextColor(Palette.of(this@FeiheIme).sub)
                     setPadding(dp(10f), 0, dp(14f), 0)
                     setOnClickListener {
+                        // 回到 chip 视图 = 没有「当前段」了，形码态一起退掉：
+                        // 留着「亮着但没目标」的按钮，用户会以为它坏了。
+                        resetAssist()
                         segmentState = state.back()
                         renderCandidates()
                     }
                 },
             )
-            for ((i, word) in state.focusedWords().withIndex()) {
+            // 形码按钮：分段态下它筛的是**当前这一段**，所以只在展开某一段时出现。
+            if (assistAvailable()) {
+                bar.addView(TextView(this).also { bindAssistView(it) })
+            }
+            // 形码态下候选是筛过的子集，**必须用它**（哪怕是空表）：拿未筛的列表顶
+            // 上去，用户会以为形码没生效。
+            val words = if (assistActive) assistWords else state.focusedWords()
+            for (word in words) {
                 bar.addView(
                     TextView(this).apply {
                         text = word
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                         setPadding(dp(12f), 0, dp(12f), 0)
                         val p = Palette.of(this@FeiheIme)
-                        setTextColor(
-                            if (i == state.selected[state.focus]) p.accent else p.text
-                        )
+                        // 高亮按**词**比，不按下标：筛选后下标和 segments 对不上
+                        setTextColor(if (word == state.wordAt(state.focus)) p.accent else p.text)
+                        // 长按置顶/降权：分段态的码是**这一段的**，不是整串
+                        setOnLongClickListener {
+                            val segCode = pendingSegments.getOrNull(state.focus)?.code
+                            if (segCode.isNullOrEmpty()) {
+                                false
+                            } else {
+                                showCandidateMenu(word, segCode, reopen = state.focus)
+                                true
+                            }
+                        }
                         setOnClickListener {
-                            segmentState = state.choose(i)
-                            renderCandidates()
+                            if (assistActive) {
+                                // 按词选（下标是筛过的），选完自动展开下一段
+                                val next = state.chooseWord(word, keepOpen = true)
+                                segmentState = next
+                                // 换段清形码；已经是最后一段就退出形码态
+                                assistKeys.setLength(0)
+                                if (next.focus < 0) assistActive = false
+                                updateAssistWords()
+                                renderCandidates()
+                            } else {
+                                // 未筛选时下标就在当前段里，直接换算回去
+                                val idx = state.focusedWords().indexOf(word)
+                                segmentState = state.choose(idx)
+                                renderCandidates()
+                            }
                         }
                     },
                 )
@@ -1137,6 +1349,9 @@ class FeiheIme : InputMethodService() {
                     }
                     setOnClickListener {
                         segmentState = state.open(i)
+                        // 换一段 = 换一个字，上一段的形码不能再筛这一段
+                        assistKeys.setLength(0)
+                        updateAssistWords()
                         renderCandidates()
                     }
                 },
@@ -1216,6 +1431,8 @@ class FeiheIme : InputMethodService() {
         pendingSegments = emptyList()
         // 整句上屏后组合结束，分段态必须一起收掉，否则候选条会留着一排旧 chip
         segmentState = null
+        // 形码跟着这次组合一起结束：留着的话下一个词的候选会被上一词的形码筛空
+        resetAssist()
         suggestions = if (thenSuggest && chinese) {
             NativeEngine.suggest(word, SUGGEST_LIMIT)
         } else {
@@ -1239,6 +1456,7 @@ class FeiheIme : InputMethodService() {
         candidates = emptyList()
         pendingSegments = emptyList()
         segmentState = null
+        resetAssist()
         suggestions = NativeEngine.suggest(word, SUGGEST_LIMIT)
         renderCandidates()
         refreshStatus()
@@ -1279,6 +1497,7 @@ class FeiheIme : InputMethodService() {
     }
 
     private fun clearComposing() {
+        resetAssist()
         quickMode = false
         quickWords = emptyList()
         pending.setLength(0)

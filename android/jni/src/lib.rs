@@ -19,7 +19,7 @@
 //! 表现为 `UnsatisfiedLinkError`，而这只有装到真机上才会发现。
 
 use jni::objects::{JClass, JString};
-use jni::sys::{jboolean, jstring};
+use jni::sys::{jboolean, jint, jstring};
 use jni::JNIEnv;
 
 /// 建一个 Java 字符串。失败（OOM / JNI 异常）时返回 null——这是唯一该返回 null
@@ -119,7 +119,104 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_initNative<'local>
         // 和 `config.scheme` 是两处状态。Windows 端在 `Activate` 里做，Android 没有
         // 那个时机，只能在 init 里做一次 + 设置里改的时候再做一次。
         feihe_core::dict::set_scheme(feihe_core::config::get().scheme);
+        // `/fc` 反查要读剪贴板。core 只收一个 `fn() -> Option<String>`（它不许碰
+        // 系统 API），Android 这边拿不到能捕获 Context 的闭包，所以用下面那个
+        // 进程级静态中转：Kotlin 读完剪贴板推上来，core 要的时候再取。
+        feihe_core::fancha::set_clipboard_reader(clipboard_for_core);
     });
+}
+
+// ── 剪贴板桥（给 `/fc` 反查用）──────────────────────────────────────
+//
+// core 的 `fancha` 只接受一个 `fn() -> Option<String>`，不允许闭包捕获 `Context`。
+// 所以 Kotlin 每次读到剪贴板就把文本推上来，core 需要时取最后一份——
+// **不缓存到磁盘、不打日志**，和输入法自己的「不联网」是同一条线。
+
+static CLIP: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn clipboard_for_core() -> Option<String> {
+    CLIP.lock().ok().and_then(|g| g.clone())
+}
+
+/// `NativeEngine.setClipboardNative(text)` —— 把当前剪贴板文本交给 Rust 侧。
+///
+/// 空串等于「清空」：用户复制了新内容但读不到时，不能让 `/fc` 拿旧文本反查。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_setClipboardNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    text: JString<'local>,
+) {
+    let t = read_string(&mut env, &text);
+    if let Ok(mut g) = CLIP.lock() {
+        *g = if t.is_empty() { None } else { Some(t) };
+    }
+}
+
+/// `NativeEngine.togglePinNative(code, word)` —— 置顶 / 取消置顶，返回「现在是不是置顶」。
+///
+/// 长按候选走这条。`code` 必须是**查词用的双拼码**（`lookup_input` 返回的那个），
+/// 不是用户敲的原始字母——全拼模式下两者不同。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_togglePinNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    code: JString<'local>,
+    word: JString<'local>,
+) -> jboolean {
+    let c = read_string(&mut env, &code);
+    let w = read_string(&mut env, &word);
+    let on = std::panic::catch_unwind(|| {
+        if c.is_empty() || w.is_empty() {
+            false
+        } else {
+            feihe_core::pin::toggle(&c, &w)
+        }
+    })
+    .unwrap_or(false);
+    if on { 1 } else { 0 }
+}
+
+/// `NativeEngine.toggleDemoteNative(code, word)` —— 降权 / 取消降权。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_toggleDemoteNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    code: JString<'local>,
+    word: JString<'local>,
+) -> jboolean {
+    let c = read_string(&mut env, &code);
+    let w = read_string(&mut env, &word);
+    let on = std::panic::catch_unwind(|| {
+        if c.is_empty() || w.is_empty() {
+            false
+        } else {
+            feihe_core::demote::toggle(&c, &w)
+        }
+    })
+    .unwrap_or(false);
+    if on { 1 } else { 0 }
+}
+
+/// `NativeEngine.clearDataNative(kind)` —— 清空一类学习数据，返回清掉几条。
+///
+/// `kind`：`freq`（动态词频）/ `phrase`（自造词）/ `pin`（置顶）/ `demote`（降权）。
+/// 不认识的 kind 返回 0（不报错），调用方按「没清掉」处理即可。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_clearDataNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    kind: JString<'local>,
+) -> jint {
+    let k = read_string(&mut env, &kind);
+    std::panic::catch_unwind(|| match k.as_str() {
+        "freq" => feihe_core::freq::clear() as i32,
+        "phrase" => feihe_core::phrase::clear() as i32,
+        "pin" => feihe_core::pin::clear() as i32,
+        "demote" => feihe_core::demote::clear() as i32,
+        _ => 0,
+    })
+    .unwrap_or(0)
 }
 
 /// `NativeEngine.lookupInputNative(input, pinyinMode, limit)` —— 按键串 → 码 + 候选。
@@ -168,6 +265,45 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupInputNative<
             }
         }
         out
+    })
+    .unwrap_or_default();
+    make_string(&mut env, &text)
+}
+
+/// `NativeEngine.lookupAssistNative(input, pinyinMode, assist, limit)` —— 带辅助码筛选的候选。
+///
+/// 返回 `\n` 分隔的候选（空串 = 没有）。**不返回分段**：辅助码在手机上只对
+/// 「一个音节 / 一个段」生效，分段仍由普通 `lookupInput` 给。
+///
+/// 辅助码方案从 `config.ini` 的 `assist_mode` 读（和 Windows 端同一个字段），
+/// 不额外开参数——两端各存一份「现在用哪套形码」迟早会对不上。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupAssistNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    input: JString<'local>,
+    pinyin_mode: jboolean,
+    assist: JString<'local>,
+    limit: i32,
+) -> jstring {
+    let input = read_string(&mut env, &input);
+    let assist = read_string(&mut env, &assist);
+    let text = std::panic::catch_unwind(move || {
+        if input.is_empty() || assist.is_empty() {
+            return String::new();
+        }
+        let mode = feihe_core::config::get().assist_mode;
+        let n = limit.clamp(1, 60) as usize;
+        let words = if pinyin_mode != 0 {
+            feihe_core::dict::lookup_pinyin_filtered(&input, &assist, mode, n)
+        } else {
+            feihe_core::dict::lookup_filtered(&input, &assist, mode, n)
+        };
+        words
+            .iter()
+            .map(|w| w.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n")
     })
     .unwrap_or_default();
     make_string(&mut env, &text)
@@ -282,6 +418,14 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_setConfigNative<'l
             // 走 `set_xuanxue` 而不是 `update`：它要同时刷新原子镜像，
             // 而查词热路径读的是镜像（见 `config::xuanxue()`）。
             "xuanxue" => feihe_core::config::set_xuanxue(on),
+            // 辅助码方案（off / ziranma / xiaohe）。**和 Windows 端同一个键**，
+            // 用户在手机上改完，回到电脑上看到的也是同一套。
+            "fuzzy" => {
+                feihe_core::config::update(|c| c.fuzzy = feihe_core::fuzzy::Rules::from_key(&v))
+            }
+            "assist_mode" => {
+                feihe_core::config::update(|c| c.assist_mode = feihe_core::assist::AssistMode::from_key(&v))
+            }
             _ => {}
         }
     });

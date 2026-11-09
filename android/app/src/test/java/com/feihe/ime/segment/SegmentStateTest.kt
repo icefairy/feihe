@@ -80,4 +80,34 @@ class SegmentStateTest {
         assertEquals("张三", two.wordAt(0))
         assertEquals("", two.wordAt(9))
     }
+
+    /**
+     * 形码态按**词**选：界面上的下标来自筛过的子集，不能拿去索引原列表。
+     * 这条错了的表现是「点了甲，上去的是乙」——而且是间歇性的（取决于筛出几个）。
+     */
+    @Test
+    fun `chooseWord 按词定位下标`() {
+        val s = two.open(0).chooseWord("章三")
+        assertEquals(2, s.selected[0])
+        assertEquals("章三李", s.sentence())
+        assertEquals("选完回到 chip 视图", -1, s.focus)
+    }
+
+    /** 形码态跨段保持：选完自动展开下一段，最后一段则收起。 */
+    @Test
+    fun `chooseWord keepOpen 展开下一段`() {
+        val s = two.open(0).chooseWord("张三", keepOpen = true)
+        assertEquals(1, s.focus)
+        val last = s.chooseWord("李", keepOpen = true)
+        assertEquals(-1, last.focus)
+        assertEquals("张三李", last.sentence())
+    }
+
+    /** 词不在这段里（比如筛空后点到了残影）→ 原样返回，什么都不改。 */
+    @Test
+    fun `chooseWord 不认识的词不动状态`() {
+        val s = two.open(0)
+        assertEquals(s, s.chooseWord("不存在"))
+        assertEquals(two, two.chooseWord("张三"))
+    }
 }
