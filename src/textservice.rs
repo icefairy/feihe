@@ -865,6 +865,10 @@ impl FeiheTextService {
             v if v == VK_OEM_PERIOD.0 as u8 => Punct::One("。"),
             v if v == VK_OEM_1.0 as u8 => Punct::One("；"),
             v if v == VK_OEM_5.0 as u8 => Punct::One("、"),
+            // 反引号（Tab 上方、1 左边那个键）：中文里它是**间隔号** `·`，
+            // 打人名（弗拉基米尔·普京）、书名、日期分隔时都要用。搜狗也是这么放的，
+            // 而 Shift+` 仍然是全角波浪线 `～`（见 SHIFT_PUNCT）。
+            v if v == VK_OEM_3.0 as u8 => Punct::One("·"),
             v if v == VK_OEM_4.0 as u8 => Punct::One("【"),
             v if v == VK_OEM_6.0 as u8 => Punct::One("】"),
             v if v == VK_OEM_7.0 as u8 => Punct::One("’"),
@@ -3775,8 +3779,8 @@ mod tests {
         // `/` 只在**已有编码**时当标点（编码为空时它是快捷输入引导符）；
         // 全角模式下给全角，别让用户打出一个半角斜杠夹在汉字中间
         assert_eq!(flat(S::fullwidth_punct(VK_OEM_2.0 as u8)), Some("／"));
-        // 反引号既不是引导符也不是间隔号，原样交给应用
-        assert_eq!(S::fullwidth_punct(VK_OEM_3.0 as u8), None);
+        // 反引号 = 间隔号（人名中间那个点），和搜狗一致；Shift+` 仍是 `～`
+        assert_eq!(flat(S::fullwidth_punct(VK_OEM_3.0 as u8)), Some("·"));
         // 字母键不是标点
         assert_eq!(S::fullwidth_punct(0x41), None);
     }
