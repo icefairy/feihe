@@ -86,10 +86,15 @@ class SymbolLayoutTest {
      * 用户报过「符号页找不到顿号」，所以这条钉死——两页各有一个、且都能直接上屏。
      */
     @Test
-    fun `字母页和符号页都有顿号`() {
+    fun `顿号在符号页有实体键，在字母页走上滑`() {
+        // 2026-11-12 改：字母页的独立顿号键被去掉了（用户要求空格旁不留标点），
+        // 但「顿号必须一按就到」这条不许退——它现在在 m 键的上滑里。
         val letters = QwertyLayout.rows.flatten().filter { it.label == "、" }
-        assertEquals("字母页应有一个顿号键", 1, letters.size)
-        assertEquals(KeyKind.PUNCT, letters[0].kind)
+        assertEquals("字母页不该再有实体顿号键", 0, letters.size)
+        assertTrue(
+            "字母页必须还能打出顿号（m 键上滑）",
+            QwertyLayout.rows.flatten().any { it.swipe == "、" },
+        )
         val symbols = SymbolLayout.rows.flatten().filter { it.label == "、" }
         assertEquals("符号页应有一个顿号键", 1, symbols.size)
         assertEquals(KeyKind.TEXT, symbols[0].kind)

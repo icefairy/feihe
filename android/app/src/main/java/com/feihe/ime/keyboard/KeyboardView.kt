@@ -172,13 +172,11 @@ object KeyboardView {
             }
         }
 
-        // 上档长按 = 锁定/解锁。**不用双击**：和「连按两下打两个大写」抢时间窗口，
-        // 阈值松了误触、紧了按不出来；长按是这套键盘已有的手势（⌫ 长按连续删）。
+        // 上档双击 = 锁定/解锁（单击仍是一次性）。判时间戳的状态在 FeiheIme 里，
+        // 这里只把「这一次点击的时间」传出去，保持 KeyboardView 无状态。
         if (key.kind == KeyKind.SHIFT) {
-            view.setOnLongClickListener {
-                onLongKey(key)
-                true
-            }
+            view.setOnClickListener { onKey(key) }
+            return view
         }
         // 有上滑字符的键要包一层：键帽右上角画小字，并接管触摸判方向。
         // 长按类（⌫/⇧）没有上滑，两套手势不会撞。
@@ -323,7 +321,7 @@ object KeyboardView {
     }
 
     private fun accessibilityLabel(key: Key, shift: ShiftState = ShiftState.OFF): String = when (key.kind) {
-        KeyKind.CHAR, KeyKind.TEXT -> key.label
+        KeyKind.CHAR, KeyKind.TEXT -> key.label.ifEmpty { "空白键" }
         KeyKind.DELETE -> "删除"
         KeyKind.SHIFT -> shiftAccessibilityLabel(shift)
         KeyKind.SPACE -> "空格"
@@ -333,7 +331,30 @@ object KeyboardView {
         KeyKind.SELECT -> "选第 ${key.code} 个候选"
         // 按钮上写的是「123」/「ABC」/「符」/「😊」，读屏念这些没意义，念出「切到哪」才行
         KeyKind.PAGE -> accessibilityPageLabel(key.code)
+        KeyKind.NAV -> navAccessibilityLabel(key.code)
     }
+
+    /**
+     * 导航键的读屏文案。
+     *
+     * 方向键的 label 本来就是「←」，读屏念出来是「左箭头」而不是「左移光标」——
+     * 对看不见屏幕的人，「左箭头」这四个字不能告诉他按下去会发生什么。
+     */
+    private fun navAccessibilityLabel(code: String): String =
+        NavAction.of(code)?.let {
+            when (it) {
+                NavAction.LEFT -> "光标左移"
+                NavAction.RIGHT -> "光标右移"
+                NavAction.UP -> "光标上移"
+                NavAction.DOWN -> "光标下移"
+                NavAction.SELECT_ALL -> "全选"
+                NavAction.COPY -> "复制"
+                NavAction.PASTE -> "粘贴"
+                NavAction.CUT -> "剪切"
+                NavAction.LINE_START -> "移到行首"
+                NavAction.LINE_END -> "移到行尾"
+            }
+        } ?: "控制键"
 
     /**
      * 换页键的读屏文案。

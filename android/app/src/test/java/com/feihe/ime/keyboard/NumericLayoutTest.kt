@@ -73,4 +73,41 @@ class NumericLayoutTest {
         val codes = NumericLayout.textCodes
         assertEquals("数字页上有重复字符：$codes", codes.size, codes.toSet().size)
     }
+
+    // ── 上滑运算符号（2026-11-12 新增）────────────────────────────
+
+    @Test
+    fun `数字键都有上滑字符`() {
+        for (d in '0'..'9') {
+            val key = NumericLayout.rows.flatten().first { it.code == d.toString() }
+            assertTrue("数字 $d 没有上滑字符", key.swipe != null)
+        }
+    }
+
+    @Test
+    fun `上滑有加减乘除和等号`() {
+        val swipes = NumericLayout.swipeCodes
+        for (op in listOf("+", "-", "×", "÷", "=", "%")) {
+            assertTrue("数字页上滑缺运算符 $op", op in swipes)
+        }
+    }
+
+    @Test
+    fun `上滑里也有斜杠`() {
+        assertTrue("数字页上滑也该有 /，填日期/分数时常用", "/" in NumericLayout.swipeCodes)
+    }
+
+    @Test
+    fun `上滑字符和主字符不撞车`() {
+        val mains = NumericLayout.textCodes.toSet()
+        for (s in NumericLayout.swipeCodes) {
+            assertFalse("上滑的「$s」和主字符重复了", s in mains)
+        }
+    }
+
+    @Test
+    fun `上滑字符互不重复`() {
+        val swipes = NumericLayout.swipeCodes
+        assertEquals("数字页上滑有重复：$swipes", swipes.size, swipes.toSet().size)
+    }
 }

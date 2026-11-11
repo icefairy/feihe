@@ -75,6 +75,57 @@ class InputAssistTest {
         assertFalse(ShiftMachine.upper(ShiftState.OFF))
     }
 
+    // ── 双击锁定（2026-11-12 新行为）──────────────────────────────
+    //
+    // 这一组钉的是「按两下锁、再按两下解」：它是用户明确要的手势，而这个手势
+    // 唯一的风险是把自己和「连按两下打两个大写」搞混。判定窗口 = 300ms。
+
+    @Test
+    fun `双击上档进入锁定`() {
+        val t0 = 1000L
+        // 第一下：OFF → ONCE
+        val (s1, d1) = ShiftMachine.onTapWithTime(ShiftState.OFF, 0L, t0)
+        assertEquals(ShiftState.ONCE, s1)
+        assertFalse("第一下不该判成双击", d1)
+        // 第二下（150ms 后）：ONCE → LOCKED
+        val (s2, d2) = ShiftMachine.onTapWithTime(s1, t0, t0 + 150)
+        assertEquals(ShiftState.LOCKED, s2)
+        assertTrue("第二下应判成双击", d2)
+    }
+
+    @Test
+    fun `锁定态双击解锁`() {
+        val t = 5000L
+        val (s, d) = ShiftMachine.onTapWithTime(ShiftState.LOCKED, t, t + 100)
+        assertEquals(ShiftState.OFF, s)
+        assertTrue(d)
+    }
+
+    @Test
+    fun `超过双击窗口就当成两次独立单击`() {
+        val t = 1000L
+        val gap = ShiftMachine.DOUBLE_TAP_MS + 1
+        // 第一下 ONCE，第二下（超时）应落回 OFF，而不是锁定
+        val (s, d) = ShiftMachine.onTapWithTime(ShiftState.ONCE, t, t + gap)
+        assertEquals(ShiftState.OFF, s)
+        assertFalse("超窗口不该判成双击", d)
+    }
+
+    @Test
+    fun `刚好等于窗口边界也算双击`() {
+        val t = 1000L
+        val (s, d) = ShiftMachine.onTapWithTime(ShiftState.ONCE, t, t + ShiftMachine.DOUBLE_TAP_MS)
+        assertEquals(ShiftState.LOCKED, s)
+        assertTrue(d)
+    }
+
+    @Test
+    fun `没有上一次点击时永远不是双击`() {
+        val (s, d) = ShiftMachine.onTapWithTime(ShiftState.OFF, 0L, 999999L)
+        assertEquals(ShiftState.ONCE, s)
+        assertFalse(d)
+    }
+
     // ── 数字选词 ────────────────────────────────────────────────────
 
     @Test

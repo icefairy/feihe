@@ -31,6 +31,9 @@ enum class Page {
     DIGITS,
     SYMBOLS,
     EMOJI,
+
+    /** 光标与编辑控制（方向键 / 剪切复制粘贴 / 全选）。 */
+    NAV,
 }
 
 enum class KeyKind {
@@ -49,7 +52,7 @@ enum class KeyKind {
     /** 删除：短按删一个 char，长按连续删 */
     DELETE,
 
-    /** 上档（一次性）：按一下点亮，下一个字母大写，打完自动落下 */
+    /** 上档（一次性）：按一下点亮，下一个字母大写，打完自动落下；双击锁定 */
     SHIFT,
 
     SPACE,
@@ -77,6 +80,20 @@ enum class KeyKind {
      * 这一行只在有候选时出现，详见 [NumberSelectLayout] 和 `docs/后续待办.md` A2。
      */
     SELECT,
+
+    /**
+     * 光标 / 编辑控制键。code 是 [NavAction] 的枚举名。
+     *
+     * ## 为什么必须是独立的 kind
+     *
+     * 上下左右和复制粘贴**都不能用 commitText 实现**：光标移动要发 KEYCODE_DPAD_*，
+     * 复制粘贴要调 InputConnection.performContextMenuAction。用 TEXT 会变成往文本框
+     * 里插入一串字符——这正是「点了左键结果打了个箭头符号」的那种 bug。
+     *
+     * 而且光靠 INJECT_EVENTS 未必够：某些宿主（尤其是 Electron/WebView 里的输入框）
+     * 对 KEYCODE_DPAD_LEFT 没反应，只认 setSelection。所以实现里两条路都走。
+     */
+    NAV,
 }
 
 /**
@@ -95,8 +112,18 @@ object QwertyLayout {
     /**
      * 26 个字母键的**上滑字符**（键帽右上角那行小字）。
      *
-     * 排布照手机中文输入法的惯例：第一排 1–0，第二排常见符号，第三排中英文都最常用
-     * 的标点（中文态下直接上中文标点，和搜狗一致）。
+     * 排布照手机中文输入法的惯例：第一排 1–0，第二排符号，第三排中文最常用的标点。
+     *
+     * ## 为什么第三排是 9 个而不是 7 个
+     *
+     * 字母页底部原来还有 `，` `、` `。` 三个独立标点键，挤在空格两边。这一版把它们
+     * **全部收进上滑**（`c` `m` `v`），空格两侧只留功能键——拇指盲按空格时不再
+     * 蹭到标点，误触率直降。代价是标点得滑一下才出来，所以第三排的配额必须放宽：
+     *
+     * - `z x c v` = `！？，。`：中文断句四件套，滑的距离最短、位置最好记
+     * - `b n m` = `：；、`：次常用的三个
+     * - **`/` 单独占 `l` 的上滑**：以前整个键盘都打不出斜杠（只能去符号页），
+     *   而它其实是输入网址、路径、日期时最刚需的符号之一
      *
      * **只在这一张表里改**：键帽小字、上滑动作、单测三处都读它。
      */
@@ -104,7 +131,7 @@ object QwertyLayout {
         'q' to "1", 'w' to "2", 'e' to "3", 'r' to "4", 't' to "5",
         'y' to "6", 'u' to "7", 'i' to "8", 'o' to "9", 'p' to "0",
         'a' to "@", 's' to "#", 'd' to "¥", 'f' to "%", 'g' to "&",
-        'h' to "*", 'j' to "-", 'k' to "(", 'l' to ")",
+        'h' to "*", 'j' to "-", 'k' to "(", 'l' to "/",
         'z' to "！", 'x' to "？", 'c' to "，", 'v' to "。",
         'b' to "：", 'n' to "；", 'm' to "、",
     )
@@ -121,26 +148,29 @@ object QwertyLayout {
         listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l').map(::ch),
 
         // 第三排：Shift + 7 字母 + 删除
+        //
+        // 关于底排标点键：`，` `、` `。` 原来在这里占三个位置（夹在空格两边），已按
+        // 用户要求**全部去掉**，改由 `c`/`m`/`v` 上滑输入。空格两侧现在只有功能键，
+        // 拇指盲按时不会再蹭到标点。
         listOf(Key("⇧", KeyKind.SHIFT, weight = 1.5f)) +
             listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map(::ch) +
             listOf(Key("⌫", KeyKind.DELETE, weight = 1.5f)),
 
-        // 第四排：数字页 / 中英 / 逗号 / 空格 / 句号 / 回车
+        // 第四排：数字页 / 中英 / 表情 / 控制 / 空格 / 回车
         //
-        // 「123」放在最左是搜狗/豆包那一排的肌肉记忆；字母页上没有任何地方能打
-        // 数字，这个键是唯一入口。
+        // 原来这里是「123 中 😊 ，、␣ 。↵」，去掉三个标点后空出两个位置，正好装下
+        // 「导航」页入口。空格权重从 2.1 提到 3.4（总权重仍是 8.2，见单测），
+        // 因为它是这一排唯一会被盲按的键，标点腾出来的宽度应该给它。
         listOf(
             Key("123", KeyKind.PAGE, "digits", weight = 1f),
             Key("中", KeyKind.MODE, weight = 1f),
             // 表情入口。以前只有数字页/符号页底部有 😊，字母页上找不到——
             // 而聊天时八成时间都在字母页。
             Key("😊", KeyKind.PAGE, "emoji", weight = 0.8f),
-            Key("，", KeyKind.PUNCT, "，", weight = 0.8f),
-            // 顿号单独一个键：中文里列举报菜名、地名天天用，藏在符号页里等于没有
-            Key("、", KeyKind.PUNCT, "、", weight = 0.8f),
-            Key("", KeyKind.SPACE, weight = 2.1f),
-            Key("。", KeyKind.PUNCT, "。", weight = 0.8f),
-            Key("↵", KeyKind.ENTER, weight = 0.9f),
+            // 光标/编辑控制入口：方向键、复制粘贴、全选。手机上编长文刚需。
+            Key("⌘", KeyKind.PAGE, "nav", weight = 0.8f),
+            Key("", KeyKind.SPACE, weight = 3.4f),
+            Key("↵", KeyKind.ENTER, weight = 1.2f),
         ),
     )
 
@@ -204,10 +234,33 @@ private val NAV_LETTERS = Key("ABC", KeyKind.PAGE, "letters", weight = 0.8f)
 private val NAV_DIGITS = Key("123", KeyKind.PAGE, "digits", weight = 0.8f)
 private val NAV_SYMBOLS = Key("符", KeyKind.PAGE, "symbols", weight = 0.8f)
 private val NAV_EMOJI = Key("😊", KeyKind.PAGE, "emoji", weight = 0.8f)
+private val NAV_NAV = Key("⌘", KeyKind.PAGE, "nav", weight = 0.8f)
 
 object NumericLayout {
 
-    private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f)
+    /**
+     * 数字键的上滑字符：**运算符号 + 最常用的两个标点**。
+     *
+     * ## 为什么是这一组
+     *
+     * 数字页的天然用途是算账、填表、写日期，所以上滑给的是 + − × ÷ = % ：按数字
+     * 时手指正好在那儿，滑一下就出运算符，不用切到符号页再切回来。
+     *
+     * `0` 的上滑给 `：`（时间/比例写法）、`，`/`。` 两键上滑给 `；`/`～`——
+     * 它们本来就在底部显示中文标点，上滑换成同族的下一个最顺。
+     *
+     * **不做 `(` `)` 的上滑**：它们在字母页 `k` 上有，而数字页这两格要留给
+     * 「小数点和正负号之外更常用的东西」——实际填表时 `(` 出现频率远低于 `%`。
+     */
+    val SWIPE: Map<String, String> = mapOf(
+        "1" to "+", "2" to "-", "3" to "×",
+        "4" to "÷", "5" to "=", "6" to "%",
+        "7" to "(", "8" to ")", "9" to "/",
+        "0" to "：",
+        "，" to "；", "。" to "～",
+    )
+
+    private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f, swipe = SWIPE[s])
 
     val rows: List<List<Key>> = listOf(
         listOf("1", "2", "3").map(::txt),
@@ -222,6 +275,10 @@ object NumericLayout {
     /** 所有直接上屏的字符。测试用：不许有重复，也不许混进字母。 */
     val textCodes: List<String>
         get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
+
+    /** 所有上滑字符。测试用：不许和主字符撞车，也不许重复。 */
+    val swipeCodes: List<String>
+        get() = rows.flatten().mapNotNull { it.swipe }
 }
 
 /**
@@ -230,7 +287,23 @@ object NumericLayout {
  */
 object SymbolLayout {
 
-    private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f)
+    /**
+     * 符号键的上滑字符：**同族的下一个**。
+     *
+     * 符号页的每一格已经放了三列最常用的标点，上滑补的是「同一个键位上、稍微少用
+     * 一点但一旦要用就必须找到」的那些：书名号、方括号、花括号、斜杠反斜杠、引号。
+     *
+     * 为什么不直接把它们铺成第 6 行：紧凑页的高度是按「5 行 × 36dp ≈ 字母页 4 行」
+     * 算死的（见 [NumericLayout] 的注释），加一行会让切页时输入框往上跳。
+     */
+    val SWIPE: Map<String, String> = mapOf(
+        "，" to "<", "。" to ">", "、" to "|",
+        "！" to "“", "？" to "”", "：" to "‘",
+        "；" to "’", "（" to "《", "）" to "》",
+        "…" to "[", "—" to "]", "·" to "\\",
+    )
+
+    private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f, swipe = SWIPE[s])
 
     val rows: List<List<Key>> = listOf(
         // 顿号跟逗号、句号放一排：它们是同一类「断句」标点，列举报菜名用得最多。
@@ -244,6 +317,9 @@ object SymbolLayout {
 
     val textCodes: List<String>
         get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
+
+    val swipeCodes: List<String>
+        get() = rows.flatten().mapNotNull { it.swipe }
 }
 
 /**
@@ -324,6 +400,42 @@ object NumberSelectLayout {
     const val ROW_HEIGHT_DP = 30f
 }
 
+/**
+ * 光标与编辑控制页。
+ *
+ * ## 为什么方向键要 4 个独立格子 + 中间留空
+ *
+ * 十字布局（上 / 左-右 / 下）的唯一价值就是**拇指不用看也能找到中间那颗**。做成
+ * 一行四个 `← ↑ ↓ →` 看着整齐，实际每次都得扫一眼确认方向——比直接点文本框还慢。
+ * 所以这里按十字摆：第 2 行 `(空) ↑ (空)`，第 3 行 `← ↓ →`。
+ *
+ * ## 为什么复制/粘贴不合并成一个「剪贴板」键
+ *
+ * 手机上复制和粘贴是两个完全不同的时刻（复制时人还在原文里，粘贴时人已经跳到
+ * 目标位置）。合并成一个键就得先判断"现在该复制还是该粘贴"，而输入法**猜不准**：
+ * 有选区就复制这个规则在聊天框里经常把用户的草稿覆盖掉。所以两个键各占一格。
+ *
+ * ## 权重
+ *
+ * 3 列，每格 2 → 合计 6，和其它紧凑页完全一致（换页时键宽不错位）。
+ * 第 1、3 行的空位用**真实的空键**占住而不是少放一个：少放会让 `↑` 被拉成整行宽。
+ */
+object NavLayout {
+
+    private fun nav(label: String, action: NavAction) =
+        Key(label, KeyKind.NAV, action.name, weight = 2f)
+
+    private fun blank() = Key("", KeyKind.TEXT, "", weight = 2f)
+
+    val rows: List<List<Key>> = listOf(
+        listOf(nav("全选", NavAction.SELECT_ALL), nav("复制", NavAction.COPY), nav("粘贴", NavAction.PASTE)),
+        listOf(blank(), nav("↑", NavAction.UP), blank()),
+        listOf(nav("←", NavAction.LEFT), nav("↓", NavAction.DOWN), nav("→", NavAction.RIGHT)),
+        listOf(nav("剪切", NavAction.CUT), nav("行首", NavAction.LINE_START), nav("行尾", NavAction.LINE_END)),
+        compactFunctionRow(listOf(NAV_LETTERS, NAV_DIGITS, NAV_SYMBOLS)),
+    )
+}
+
 /** 给壳用的一张小表：页 → 行数据 + 行高。避免 FeiheIme 里散落三个 when。 */
 object KeyboardPages {
     fun rows(page: Page): List<List<Key>> = when (page) {
@@ -331,6 +443,7 @@ object KeyboardPages {
         Page.DIGITS -> NumericLayout.rows
         Page.SYMBOLS -> SymbolLayout.rows
         Page.EMOJI -> EmojiLayout.rows
+        Page.NAV -> NavLayout.rows
     }
 
     /** 见 [NumericLayout] 里的高度计算：紧凑页 36dp，总和与字母页 46dp×4 相当。 */
@@ -341,5 +454,6 @@ object KeyboardPages {
         Page.DIGITS -> "数字"
         Page.SYMBOLS -> "符号"
         Page.EMOJI -> "表情"
+        Page.NAV -> "控制"
     }
 }

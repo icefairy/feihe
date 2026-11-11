@@ -18,6 +18,9 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.Toast
 import android.view.inputmethod.EditorInfo
+import android.view.KeyEvent
+import android.view.inputmethod.ExtractedTextRequest
+import android.view.inputmethod.InputConnection
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -30,10 +33,13 @@ import com.feihe.ime.segment.SegmentState
 import com.feihe.ime.suggest.CandidateBarPolicy
 import com.feihe.ime.suggest.HostContext
 import com.feihe.ime.voice.VoiceRecorder
+import com.feihe.ime.keyboard.CandidateGrid
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
 import com.feihe.ime.keyboard.KeyboardView
 import com.feihe.ime.keyboard.KeyboardPages
+import com.feihe.ime.keyboard.NavAction
+import com.feihe.ime.keyboard.NavCursor
 import com.feihe.ime.keyboard.NumberSelect
 import com.feihe.ime.keyboard.NumberSelectLayout
 import com.feihe.ime.keyboard.Page
@@ -142,11 +148,33 @@ class FeiheIme : InputMethodService() {
     /**
      * 上档三态：关 / 一次性 / 锁定。
      *
-     * **单击 ⇧ = 一次性**（打完一个字母自动落下），**长按 ⇧ = 锁定**（连续大写，
-     * 再点一下解除）。不用双击：键盘里 ⌫ 长按已是既有手势，双击会和「连按两下打两个
-     * 大写」抢时间窗口。状态迁移全在 [ShiftMachine] 里，那边有 JVM 单测盯着。
+     * **单击 ⇧ = 一次性**（打完一个字母自动落下），**双击 ⇧ = 锁定**（连续大写，
+     * 再双击解除）。状态迁移全在 [ShiftMachine] 里，那边有 JVM 单测盯着。
+     *
+     * 2026-11-12 改：手势从「长按锁定」换成「双击锁定」。理由见 [ShiftMachine.onTapWithTime]。
      */
     private var shiftState = ShiftState.OFF
+
+    /**
+     * 上一次点击 ⇧ 的时间戳（毫秒，0 = 没有上一次）。
+     *
+     * 双击判定需要**跨两次点击**记住时间，所以状态只能放在这里：KeyboardView 是
+     * 无状态的 object，键盘页一重建它的成员就被清了，双击永远判不出来。
+     * 换页 / 切中英 / 上屏标点这些「上下文断开」的地方要把它归零。
+     */
+    private var lastShiftTapAt = 0L
+
+    /**
+     * 候选条是否展开成多行。
+     *
+     * 触屏和键鼠的关键差别：电脑要按数字键选词，所以候选一行就够（数字即编号）；
+     * 手机上直接用手指点，**一行反而只露出 5~7 个、还要翻页**。展开成多行之后
+     * 一屏能看见十几个，点哪个是哪个，不需要任何编号。
+     *
+     * 展开时行高、候选条总高都会变——输入视图高度变化不会触发宿主 resize（我们
+     * 一直在同一个 InputView 里改子 View），见 [renderCandidates]。
+     */
+    private var candidateExpanded = false
 
     /** 「数字选词行」开关。设置页可关；关掉后这行连组合态都不出现。 */
     private var showNumberRow = true
@@ -161,6 +189,14 @@ class FeiheIme : InputMethodService() {
     private var voiceEnabled = true
     private var candidateBar: LinearLayout? = null
     private var candidateScroll: HorizontalScrollView? = null
+
+    /**
+     * 候选条的行容器（纵向）。收起时里面只有 [candidateBar] 一行，展开时有多行。
+     *
+     * 不用一个 LinearLayout 改 orientation：改了之后 weight 的方向语义跟着变，
+     * 复用池里的子 View 会错位。
+     */
+    private var candidateColumn: LinearLayout? = null
 
     /** 顶部那一行（状态栏 / 候选条共用），固定高度见 [TOP_SLOT_DP]。 */
     private var topSlot: FrameLayout? = null
@@ -631,22 +667,25 @@ class FeiheIme : InputMethodService() {
             ),
         )
 
-        // 候选条：一条横向可滚动的行。**不能是 Dialog**——输入法窗口层级特殊，
-        // Dialog 会被系统盖住；它必须是 InputView 的一部分。
-        candidateBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8f), 0, dp(8f), 0)
+        // 候选条：**纵向容器**，收起时只有一行（横向铺开、可横滑），展开时最多 3 行。
+        // **不能是 Dialog**——输入法窗口层级特殊，Dialog 会被系统盖住；它必须是
+        // InputView 的一部分。
+        //
+        // 为什么要纵向容器而不是「一个 LinearLayout 按需改成 VERTICAL」：orientation
+        // 改了之后所有子 View 的 LayoutParams 语义都变了（weight 从横向变纵向），
+        // 复用池会错位。分成「容器 + 若干行」两层，每行永远是横向的，复用逻辑不变。
+        candidateColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
         }
         candidateScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
-            addView(candidateBar)
+            addView(candidateColumn)
         }
         root.addView(
             candidateScroll,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(40f),
+                dp(CANDIDATE_ROW_DP),
             ),
         )
 
@@ -689,6 +728,9 @@ class FeiheIme : InputMethodService() {
         // 换页时把上档一起清掉：数字/符号页没有"大写"的概念，留着锁定态
         // 回到字母页会让用户莫名其妙打出一串大写。
         shiftState = ShiftState.OFF
+        // 双击窗口也一起清：切页本来就把 ⇧ 归零了，不该让「切页前那一下」
+        // 和「切回来后第一下」凑成一次双击。
+        lastShiftTapAt = 0L
         host.removeAllViews()
         host.addView(
             KeyboardView.build(
@@ -891,6 +933,7 @@ class FeiheIme : InputMethodService() {
                 resetAssist()
                 chinese = !chinese
                 shiftState = ShiftState.OFF
+                lastShiftTapAt = 0L
                 KeyboardView.applyShiftState(keyboardHost, shiftState)
                 // 键上的字要跟着变：中文态「中」，英文态「英」
                 KeyboardView.applyModeState(keyboardHost, chinese)
@@ -926,6 +969,7 @@ class FeiheIme : InputMethodService() {
                     "letters" -> Page.LETTERS
                     "symbols" -> Page.SYMBOLS
                     "emoji" -> Page.EMOJI
+                    "nav" -> Page.NAV
                     else -> Page.DIGITS
                 },
             )
@@ -951,9 +995,22 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.SHIFT -> {
-                shiftState = ShiftMachine.onTap(shiftState)
+                // 双击 = 锁定/解锁，单击 = 一次性。判定窗口和迁移都在 ShiftMachine 里。
+                val now = System.currentTimeMillis()
+                val (next, double) = ShiftMachine.onTapWithTime(shiftState, lastShiftTapAt, now)
+                // 双击之后把时间戳清零：再点第三下必须是「新的一次单击」，
+                // 否则连点三下会一直判成双击来回翻。
+                lastShiftTapAt = if (double) 0L else now
+                shiftState = next
                 // 只改这一颗键的配色/标签，不重建键盘（重建会闪、候选条会抖）
                 KeyboardView.applyShiftState(keyboardHost, shiftState)
+            }
+
+            KeyKind.NAV -> {
+                // 光标/编辑控制。先把手上的组合串收尾，否则移动光标时那串拼音
+                // 还挂在输入框里，宿主会把它当成一次新的编辑。
+                if (!commitSegmentIfActive()) commitPending()
+                NavAction.of(key.code)?.let { performNav(it) }
             }
         }
     }
@@ -963,6 +1020,80 @@ class FeiheIme : InputMethodService() {
         if (key.kind != KeyKind.SHIFT) return
         shiftState = ShiftMachine.onLongPress(shiftState)
         KeyboardView.applyShiftState(keyboardHost, shiftState)
+    }
+
+    /**
+     * 执行一个光标/编辑动作。
+     *
+     * ## 方向键为什么要两条路都走
+     *
+     * 标准做法是 `sendKeyEvent(KeyEvent(KEYCODE_DPAD_LEFT))`，绝大多数原生输入框都认。
+     * 但 WebView / Electron 里的 `<input>`、部分 Compose 文本框对 DPAD 事件不响应——
+     * 用户看到的就是「按左键没反应」。
+     *
+     * 所以：先试 `setSelection`（直接改光标位置，最可靠），失败再退回 `sendKeyEvent`。
+     * `setSelection` 需要先读到当前选区，读不到（宿主不给 getExtractedText）就只能发键。
+     *
+     * ## 为什么复制粘贴走 performContextMenuAction
+     *
+     * `commitText(剪贴板内容)` 是最常见的错误写法：它会把内容**插在光标处**而不是
+     * 替换选区，而且完全不经过宿主的编辑历史。`performContextMenuAction(android.R.id.copy)`
+     * 才是输入法该用的正规入口——宿主自己决定复制什么、是否允许复制（密码框会拒绝）。
+     */
+    private fun performNav(action: NavAction) {
+        val ic = currentInputConnection ?: return
+        when (action) {
+            NavAction.LEFT, NavAction.RIGHT, NavAction.UP, NavAction.DOWN ->
+                moveCursor(ic, action)
+            NavAction.SELECT_ALL -> ic.performContextMenuAction(android.R.id.selectAll)
+            NavAction.COPY -> ic.performContextMenuAction(android.R.id.copy)
+            NavAction.PASTE -> ic.performContextMenuAction(android.R.id.paste)
+            NavAction.CUT -> ic.performContextMenuAction(android.R.id.cut)
+            NavAction.LINE_START -> jumpToLineEdge(ic, toStart = true)
+            NavAction.LINE_END -> jumpToLineEdge(ic, toStart = false)
+        }
+        // 光标动了，之前缓存的「上一个词」已经不对应新位置，联想必须重算，
+        // 否则会在新光标处推荐上一个位置的词。
+        forgetContext()
+        refreshCandidates()
+    }
+
+    /**
+     * 移动光标。先用 setSelection 直改，读不到选区才发 DPAD 键。
+     *
+     * 上下两行在单行输入框里没有意义，此时 `getTextBeforeCursor` 里没有 `\n`，
+     * 所以按「没有换行就直接忽略」处理——比乱跳到文本开头好。
+     */
+    private fun moveCursor(ic: InputConnection, action: NavAction) {
+        val extracted = ic.getExtractedText(ExtractedTextRequest(), 0)
+        val selStart = extracted?.selectionStart ?: -1
+        val selEnd = extracted?.selectionEnd ?: -1
+        if (selStart < 0 || selEnd < 0) {
+            // 宿主不支持 getExtractedText：退回发键，让宿主自己处理
+            val keyCode = when (action) {
+                NavAction.LEFT -> KeyEvent.KEYCODE_DPAD_LEFT
+                NavAction.RIGHT -> KeyEvent.KEYCODE_DPAD_RIGHT
+                NavAction.UP -> KeyEvent.KEYCODE_DPAD_UP
+                else -> KeyEvent.KEYCODE_DPAD_DOWN
+            }
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            return
+        }
+        // 纯计算全在 NavCursor 里（有 JVM 单测）：这里只负责把结果塞回宿主。
+        val text = extracted!!.text ?: return
+        val target = NavCursor.move(text, selEnd, action) ?: return
+        ic.setSelection(target, target)
+    }
+
+    /** 移到行首 / 行尾。单行输入框里就等于文本开头 / 结尾。 */
+    private fun jumpToLineEdge(ic: InputConnection, toStart: Boolean) {
+        val extracted = ic.getExtractedText(ExtractedTextRequest(), 0)
+        val text = extracted?.text ?: return
+        val pos = extracted.selectionEnd
+        if (pos < 0) return
+        val target = if (toStart) NavCursor.lineStart(text, pos) else NavCursor.lineEnd(text, pos)
+        ic.setSelection(target, target)
     }
 
     /** 把组合串同步进输入框（带下划线），然后刷新候选。 */
@@ -1108,11 +1239,12 @@ class FeiheIme : InputMethodService() {
     }
 
     private fun renderCandidates() {
-        val bar = candidateBar ?: return
+        val col = candidateColumn ?: return
         renderNumberRow()
         if (quickMode) {
             // 快捷结果同样是「点一下就上屏」，复用候选项的画法；但**不显示联想**
             // ——`/rq` 出来的日期后面接什么都对，联想只会把结果挤到看不见。
+            val bar = ensureSingleRow(col)
             val total = quickWords.size
             while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
             while (bar.childCount < total) bar.addView(TextView(this))
@@ -1126,6 +1258,7 @@ class FeiheIme : InputMethodService() {
         if (seg != null) {
             // 分段态的 chip 带选中底色、还有「‹ 返回」这种特殊项，画法不同且低频，
             // 直接整条重画（它不占键盘高度，重建的抖动没人看得见）。
+            val bar = ensureSingleRow(col)
             bar.removeAllViews()
             renderSegmentBar(bar, seg)
             updateTopSlot()
@@ -1138,9 +1271,18 @@ class FeiheIme : InputMethodService() {
         val assistChip = assistAvailable()
         val window = visibleCandidates()
         val hasPrev = candPage > 0
-        val hasNext = (candPage + 1) * pageSize() < candidates.size
+        val hasNext = CandidateGrid.hasNext(candidates.size, candPage, candidateExpanded, pageSize())
         // 形码筛空了：给一句提示。否则候选条上只剩一个「形」按钮，看着像坏了。
         val emptyAssist = assistActive && assistKeys.isNotEmpty() && window.isEmpty()
+
+        // 展开态：多行 × 每行 6 个。收起态：单行横滑。两条路共用同一套候选项绑定，
+        // 只是外层容器不同（见 ensureMultiRow / ensureSingleRow）。
+        if (candidateExpanded && !assistChip && otp == null && emptyAssist.not()) {
+            renderExpandedRows(col, window)
+            updateTopSlot()
+            return
+        }
+        val bar = ensureSingleRow(col)
 
         // 复用已有的 TextView：候选 + 分隔符 + 联想按顺序对位，多了删、少了补。
         val total = (if (assistChip) 1 else 0) + (if (otp == null) 0 else 1) +
@@ -1158,6 +1300,8 @@ class FeiheIme : InputMethodService() {
             bindCandidateView(bar.getChildAt(i++) as TextView, word, idx == 0, code)
         }
         if (hasNext) bindPageView(bar.getChildAt(i++) as TextView, "›", 1)
+        // 展开/收起开关：只在真有候选时出现，否则候选条上会多一个没用的箭头
+        if (candidates.size > 1) bindExpandToggle(bar.getChildAt(i++) as TextView)
         if (suggestions.isNotEmpty()) {
             bindSeparatorView(bar.getChildAt(i++) as TextView)
             suggestions.forEach { word ->
@@ -1166,16 +1310,119 @@ class FeiheIme : InputMethodService() {
         }
         updateTopSlot()
     }
-    /** 一页几个候选。用的是设置里的「候选个数」（5 / 7 / 9）——它现在就是页大小。 */
-    private fun pageSize(): Int = candidateLimit.coerceAtLeast(1)
 
-    /** 当前页的候选。候选一共 [CAND_FETCH] 个，靠 ‹ › 翻页，不靠横滑。 */
-    private fun visibleCandidates(): List<String> {
-        val size = pageSize()
-        val start = candPage * size
-        if (start >= candidates.size) return emptyList()
-        return candidates.subList(start, minOf(start + size, candidates.size))
+    /**
+     * 保证 [candidateColumn] 里只有一行，并返回那一行。
+     *
+     * 收起态 / 快捷输入 / 分段态都走这里：它们都是「一行横排」。展开态切换回来时
+     * 要把多余的行删掉，否则候选条会留在 3 行高的状态而内容只有 1 行。
+     */
+    private fun ensureSingleRow(col: LinearLayout): LinearLayout {
+        while (col.childCount > 1) col.removeViewAt(col.childCount - 1)
+        val bar = (col.getChildAt(0) as? LinearLayout) ?: LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8f), 0, dp(8f), 0)
+            col.addView(
+                this,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    dp(CANDIDATE_ROW_DP),
+                ),
+            )
+        }
+        candidateBar = bar
+        resizeCandidateHost(1)
+        return bar
     }
+
+    /**
+     * 展开态：按 [CandidateGrid.PER_ROW] 切成多行，逐行铺候选。
+     *
+     * 不加数字编号——触屏上直接用手指点，编号是给键盘选词的电脑用的。见
+     * [candidateExpanded] 的注释。
+     */
+    private fun renderExpandedRows(col: LinearLayout, window: List<String>) {
+        val rows = CandidateGrid.rows(window.size)
+        // 行数变了就补/删行容器。每行固定高度，容器高度 = 行数 × 行高。
+        while (col.childCount > rows) col.removeViewAt(col.childCount - 1)
+        while (col.childCount < rows) {
+            col.addView(
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(8f), 0, dp(8f), 0)
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(CANDIDATE_ROW_DP),
+                ),
+            )
+        }
+        resizeCandidateHost(rows)
+        window.forEachIndexed { idx, word ->
+            val row = col.getChildAt(idx / CandidateGrid.PER_ROW) as LinearLayout
+            val slot = idx % CandidateGrid.PER_ROW
+            val v = row.getChildAt(slot) as? TextView ?: TextView(this).also {
+                row.addView(it, LinearLayout.LayoutParams(0, dp(CANDIDATE_ROW_DP), 1f))
+            }
+            bindCandidateView(v, word, idx == 0, code)
+        }
+        // 每行末尾多余的格子要删掉：上一页这行可能有 6 个，这一页只有 2 个
+        for (r in 0 until rows) {
+            val row = col.getChildAt(r) as LinearLayout
+            val keep = minOf(CandidateGrid.PER_ROW, window.size - r * CandidateGrid.PER_ROW)
+            while (row.childCount > keep) row.removeViewAt(row.childCount - 1)
+        }
+    }
+
+    /**
+     * 改候选条容器的高度。
+     *
+     * 输入视图内部改高度**不会**触发宿主 resize（我们一直在同一个 InputView 里动子
+     * View），所以这里可以放心按行数撑高。这条是「展开候选不把微信会话列表顶得乱跳」
+     * 的关键——真正的窗口 resize 才会重排宿主界面。
+     */
+    private fun resizeCandidateHost(rows: Int) {
+        val scroll = candidateScroll ?: return
+        val lp = scroll.layoutParams ?: return
+        val want = dp(CANDIDATE_ROW_DP * rows.coerceAtLeast(1))
+        if (lp.height != want) {
+            lp.height = want
+            scroll.layoutParams = lp
+        }
+    }
+
+    /** 展开 / 收起按钮。图标用 ▾ / ▴，点一下切换。 */
+    private fun bindExpandToggle(v: TextView) {
+        v.background = null
+        v.text = if (candidateExpanded) "▴" else "▾"
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        v.setPadding(dp(8f), 0, dp(8f), 0)
+        v.setTextColor(Palette.of(this).sub)
+        v.contentDescription = if (candidateExpanded) "收起候选" else "展开候选，显示更多"
+        v.setOnClickListener {
+            candidateExpanded = !candidateExpanded
+            renderCandidates()
+        }
+    }
+
+    /**
+     * 一页几个候选。
+     *
+     * 收起态 = 设置里的「候选个数」（5/7/9）；展开态 = 行 × 列（见 [CandidateGrid]）。
+     * 两个模式都从这里取，保证展开/收起切换时窗口计算一致。
+     */
+    private fun pageSize(): Int =
+        CandidateGrid.pageSize(candidates.size, candidateExpanded, candidateLimit.coerceAtLeast(1))
+
+    /**
+     * 当前页的候选。候选一共 [CAND_FETCH] 个，靠 ‹ › 翻页，不靠横滑。
+     *
+     * 页码越界时夹回最后一页（不是返回空表），见 [CandidateGrid.window]。
+     */
+    private fun visibleCandidates(): List<String> =
+        CandidateGrid.window(candidates, candPage, candidates.size, candidateExpanded, candidateLimit.coerceAtLeast(1))
 
     /** 翻页箭头。`delta` = -1 上一页 / +1 下一页。 */
     private fun bindPageView(v: TextView, label: String, delta: Int) {
@@ -1673,6 +1920,9 @@ class FeiheIme : InputMethodService() {
 
         /** 顶部那一行的高度（dp）。状态栏和候选条轮流用，所以取两者较高的那个。 */
         private const val TOP_SLOT_DP = 44f
+
+/** 候选条每一行的高度。展开态是「行数 × 这个值」。 */
+private const val CANDIDATE_ROW_DP = 40f
 
         /** 数字选词行的高度（dp）。恒定占位，不随候选有无伸缩。 */
         private const val NUM_ROW_DP = 36f
