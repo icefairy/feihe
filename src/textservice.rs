@@ -2660,6 +2660,7 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 放在 Activate 里而不是每次 show——闭包要捕获对象地址，只在对象身份
         // 变化时才需要重建，`set_click_handler` 内部按 id 判断。
         self.install_click_handler();
+        self.setup_hidden_handler();
 
         // 中英文开关。关着的时候 MSCTF 不会把按键交给 TIP，症状就是
         // 「切到飞鹤拼音后字母直接进应用、没有任何候选窗」。
@@ -2793,6 +2794,23 @@ impl ITfTextInputProcessorEx_Impl for FeiheTextService_Impl {
 }
 
 impl FeiheTextService_Impl {
+    /// 候选窗自己收起时（切窗口）把联想标记清掉。
+    ///
+    /// 候选窗被 `WM_ACTIVATEAPP` 收起来时没有任何调用方，`suggesting` 还亮着的话，
+    /// 回到文档后第一个按键会被当成「还在联想态」——先收一个已经不在的窗，键也没了。
+    fn setup_hidden_handler(&self) {
+        let addr = self as *const FeiheTextService_Impl as usize;
+        let alive = Arc::downgrade(&self.alive);
+        candidate::set_hidden_handler(Arc::new(move || {
+            let Some(_token) = alive.upgrade() else {
+                return;
+            };
+            // SAFETY: 令牌还活着 ⇒ 对象没析构；地址在生命周期内不变（同点击回调）。
+            let this = unsafe { &*(addr as *const FeiheTextService_Impl) };
+            this.dismiss_suggestion();
+        }));
+    }
+
     /// 建 UILess 会话。
     ///
     /// 拿不到 `ITfUIElementMgr`（很老的系统，或宿主不是 MSCTF 线程管理器）就退回
@@ -2819,10 +2837,17 @@ impl FeiheTextService_Impl {
 // ─────────────────────────────────────────────────────────────
 
 impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
-    fn OnSetFocus(&self, _fforeground: BOOL) -> Result<()> {
+    fn OnSetFocus(&self, fforeground: BOOL) -> Result<()> {
         // 失焦即提交，避免组合串残留在别人的文档里
         if self.is_composing() {
             self.commit_current();
+        }
+        // 掉到后台（Alt+Tab 到别的程序）：联想窗和候选窗都收掉，别挂在新窗口前面。
+        // 主路径在候选窗自己的 `WM_ACTIVATEAPP`（候选窗不抢焦点，宿主未必发这里），
+        // 这条是给那些`WM_ACTIVATEAPP` 到不了的宿主兜底；窗口已经收着时是空操作。
+        if !fforeground.as_bool() {
+            self.dismiss_suggestion();
+            self.hide_candidates();
         }
         Ok(())
     }

@@ -476,11 +476,19 @@ unsafe fn ensure_window() -> HWND {
         return HWND(raw as *mut core::ffi::c_void);
     }
     let hinst = GetModuleHandleW(None).unwrap_or_default();
+    // 显式带 WS_VISIBLE：窗口一建出来就是可见的。创建点的调用方已经
+    // 判断过该弹（见 `config::no_popup`），后面只用 `SetWindowPos` 改位置。
+    //
+    // 不这么写的话，「可见性」要靠宿主消息队列里那条 `WM_SHOWWINDOW`
+    // （`CreateWindowEx` 末尾用 `PostMessage` 投递的）来落地——宿主线程没
+    // 在跑消息循环（无桌面会话、单测进程）时它会一直挂在队列里，
+    // 窗口就「建出来了但不可见」，而候选窗是用 `SWP_NOACTIVATE` 弹的，
+    // 没有任何重试路径。
     let hwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
         CLASS_NAME,
         w!(""),
-        WS_POPUP,
+        WS_POPUP | WS_VISIBLE,
         0,
         0,
         10,
@@ -495,7 +503,28 @@ unsafe fn ensure_window() -> HWND {
     hwnd
 }
 
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {    match msg {
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+    match msg {
+        // 前台窗口变了（用户 Alt+Tab / 点别的窗口）：候选窗和联想窗立刻收掉。
+        //
+        // 候选窗是 `WS_EX_NOACTIVATE` 的，切窗口时**不会**收到 `WM_KILLFOCUS`，
+        // 宿主的 `OnSetFocus` 也未必来；不在这儿收，「上屏后联想」的窗口就会一直
+        // 挂在新窗口前面，直到用户再敲一个键。`wParam == 0` 才是「变到后台」。
+        //
+        // 通知无条件发：窗口本来就隐着时 `hide` 直接返回，收尾那边也只是
+        // 重复清一次已经清过的状态。
+        WM_ACTIVATEAPP if (w.0 as u32) == 0 => {
+            // 直接藏**收到消息的这个窗口**，不走 `hide()`：`hide` 认的是 `WND` 里那个
+            // 句柄，而单测进程里可能存在多个候选窗实例（`WND` 被别的实例改写过），
+            // 按它去藏会藏错窗口。状态（`spans`）和窗口一起清，绘制也就跟着空了。
+            let _ = ShowWindow(hwnd, SW_HIDE);
+            if let Ok(mut st) = STATE.lock() {
+                st.pressed = None;
+                st.spans.clear();
+            }
+            notify_hidden();
+            LRESULT(0)
+        }
         WM_PAINT => {
             paint(hwnd);
             LRESULT(0)
@@ -923,6 +952,7 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
             st.spans = lay.spans;
             st.texts = lay.texts;
             st.hints = lay.hints;
+
             (lay.w, height_of(st.rows))
         };
 
@@ -943,6 +973,11 @@ pub fn show(items: &[&str], selected: usize, page: usize, rows: usize, x: i32, y
         }
         let (px, py) = crate::screen::clamp_into(&area, x, py, w, h);
 
+        // `SWP_SHOWWINDOW` 必须带着：`hide` 会把窗口藏起来，`show` 是「该显示」
+        // 的唯一出口，不在这儿显示就再也没有第二次机会。
+        //
+        // 它给自己投的 `WM_SHOWWINDOW` 排在队列里，宿主消息循环闲下来时才处理，
+        // 那时窗口早就摆好了，什么也不改。
         let _ = SetWindowPos(
             hwnd,
             Some(HWND_TOPMOST),
@@ -991,6 +1026,13 @@ pub fn destroy() {
 mod tests {
     use super::*;
 
+    /// 碰真窗口的用例共用一把锁：候选窗是**进程级单例**（窗口句柄 / 绘制状态 / 回调槽），
+    /// 并行跑会互相收窗、互相清 spans。
+    fn candidate_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// `lParam` 的低 16 位是客户区 x，按 i16 解释（窗口贴屏幕左边缘时 x 可能为负）。
     #[test]
     fn client_x_sign_extends() {
@@ -1012,14 +1054,18 @@ mod tests {
     #[test]
     fn click_and_right_click_reach_handlers() {
         // STATE / 回调槽都是进程级静态，两个用例并行会互相踩
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = candidate_lock();
 
         crate::config::set_no_popup_for_test(false);
         show(&["甲", "乙", "丙"], 0, 0, 1, 200, 200);
 
-        let hwnd = unsafe { FindWindowW(CLASS_NAME, w!("")) }.unwrap_or_default();
-        assert!(!hwnd.is_invalid(), "候选窗没建出来");
+        // 句柄从 `WND` 取，不用 `FindWindowW`：候选窗类是**进程级共享**的，别的用例
+        // 可能已经销毁旧窗、另建了一个，`FindWindowW` 取到的不一定是当前那个。
+        let hwnd = HWND(WND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+        assert!(
+            WND.load(Ordering::Acquire) != 0,
+            "候选窗没建出来"
+        );
 
         // 取第一项的中心：命中区的几何就是布局算出来那份
         let (x1, x2) = {
@@ -1066,6 +1112,51 @@ mod tests {
         clear_click_handler();
         clear_right_click_handler();
         clear_demote_click_handler();
+    }
+
+    /// 切到别的窗口（`WM_ACTIVATEAPP` 带 `wParam = 0`）时候选窗必须自己收掉。
+    ///
+    /// 这个窗口是 `WS_EX_NOACTIVATE` 的，切窗口不会收到 `WM_KILLFOCUS`，宿主的
+    /// `OnSetFocus` 也未必来——不收，「上屏后联想」的窗口就会一直挂在新窗口前面。
+    /// 反向也要钉住：变成前台（`wParam != 0`）时不能误收。
+    ///
+    /// 用例依赖「候选窗是进程级单例」这个事实，和其它碰真窗口的用例共用 `candidate_lock`。
+    #[test]
+    fn deactivate_hides_candidate_window() {
+        // 和其它窗口用例共用一把锁：候选窗是进程级单例，状态互相踩
+        let _g = candidate_lock();
+
+        crate::config::set_no_popup_for_test(false);
+        // 切窗口会拉起「收窗回调」——别的用例装进去的真回调在这里会拿锁、发消息
+        clear_hidden_handler_for_test();
+        // 前面的用例可能把 `WND` 指向了自己销毁掉的窗口；清零让 `show` 重建一个，
+        // 拿到的句柄才和真正会收消息的那个窗口一致。
+        WND.store(0, Ordering::Release);
+        show(&["甲", "乙"], 0, 0, 1, 200, 200);
+        let hwnd = HWND(WND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+        assert!(!hwnd.is_invalid(), "候选窗没建出来");
+
+        // 不验证「窗口样式上是不是可见」：系统弹通知横幅之类的前台切换会叫
+        // `ShowWindow` 改那个位，没有可预期的时序。看**我们自己的**状态：收窗把
+        // `spans` 清空，`show` 再填回来（绘制也依赖它，清空 = 确实收起来了）。
+        let visible = || !STATE.lock().unwrap().spans.is_empty();
+        assert!(visible(), "show 之后应当是可见的");
+
+        unsafe {
+            // 变成前台（wParam != 0）：不该收
+            let _ = SendMessageW(hwnd, WM_ACTIVATEAPP, Some(WPARAM(1)), Some(LPARAM(0)));
+            assert!(visible(), "变成前台时不该收窗");
+
+            // 变成后台（wParam == 0）：必须收
+            let _ = SendMessageW(hwnd, WM_ACTIVATEAPP, Some(WPARAM(0)), Some(LPARAM(0)));
+            assert!(!visible(), "切到别的窗口后候选窗/联想窗必须收掉");
+
+            // 收过之后又弹一次（用户回来接着打字）：必须重新可见，否则「切一次就
+            // 再也不显示候选」——比挂着不收更糟
+            show(&["甲", "乙"], 0, 0, 1, 200, 200);
+            assert!(visible(), "再次 show 之后应当重新可见");
+        }
+        hide();
     }
 
     /// 命中区是左闭右开；边界落在右端点时属于下一项，这是「不留 1px 重叠」的约定。
@@ -1153,8 +1244,7 @@ mod tests {
     #[test]
     #[ignore = "人工看布局用，不做断言"]
     fn snapshot_hint_layout() {
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = candidate_lock();
 
         const ROWS: usize = 3;
         let words = [
@@ -1311,5 +1401,44 @@ mod tests {
     fn fit_item_numbers_by_position() {
         let d = fit_item(8, "重庆", 240, None, &ruler);
         assert_eq!(d.text, "9.重庆");
+    }
+}
+
+/// 已注册的「窗口被收起」回调（联想态用）。见 [`set_hidden_handler`]。
+type HiddenFn = Arc<dyn Fn() + Send + Sync>;
+
+static HIDDEN_HANDLER: Mutex<Option<HiddenFn>> = Mutex::new(None);
+
+/// 注册「候选窗被我们自己收起来了」的回调。
+///
+/// 收窗有两类：`textservice` 主动调的（它自己知道，会顺手清状态），和**窗口自己
+/// 收的**（切到别的窗口，`WM_ACTIVATEAPP`）。后者没有任何调用方，文本服务那边
+/// 的 `suggesting` 标记还亮着——不清掉的话，下一个按键会先被当成「还在联想态」，
+/// 平白吃掉一次。
+///
+/// 回调**不允许**在 `STATE` 锁内调用，也不要在里面再碰候选窗。
+pub fn set_hidden_handler(f: HiddenFn) {
+    if let Ok(mut slot) = HIDDEN_HANDLER.lock() {
+        *slot = Some(f);
+    }
+}
+
+/// 注册一个不抓任何东西的回调。单测里候选窗是进程级共享的，不注册就会拿到别的用例
+/// 装进来的真回调。
+#[cfg(test)]
+fn clear_hidden_handler_for_test() {
+    if let Ok(mut slot) = HIDDEN_HANDLER.lock() {
+        *slot = Some(Arc::new(|| {}));
+    }
+}
+
+/// 拉起收窗回调。调用点必须在 `STATE` 锁之外。
+fn notify_hidden() {
+    let cb = HIDDEN_HANDLER
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned());
+    if let Some(f) = cb {
+        f();
     }
 }
