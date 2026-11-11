@@ -1,6 +1,7 @@
 // 飞鹤输入法 · DLL 入口与 COM 导出
 // M1：注册用外部 installer（reg 脚本），DLL 只需 DllGetClassObject/DllCanUnloadNow
 mod candidate;
+mod caretwatch;
 mod classfactory;
 mod clipboard;
 mod clsid;

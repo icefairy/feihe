@@ -193,6 +193,13 @@ pub struct FeiheTextService {
     /// 有它才能把同一个 `candidates` 列表当成两种东西用：联想态下 `code` 是空的、
     /// `is_composing()` 为假，数字键和鼠标点击要走另一条路（`pick_suggestion`）。
     suggesting: Cell<bool>,
+    /// 「前台窗口换人了，候选窗/联想窗该收」的待处理标记。
+    ///
+    /// 置位的人是 `caretwatch` 的看门狗线程（**不是**宿主 UI 线程）；真正收窗
+    /// 在下一个按键 / 焦点事件里由 UI 线程做——看门狗线程上碰不了 `ITfContext`，
+    /// 也不好去和宿主线程抢窗口状态。只是藏一个窗口的话看门狗自己就干了，
+    /// 这里补的是「文本服务自己记着的那点状态」（联想标记、候选列表）。
+    fg_dirty: Cell<bool>,
     /// 分词模式的段列表。空 Vec 表示不在分词模式。
     segments: RefCell<Vec<Segment>>,
     /// 分词模式下光标落在第几段
@@ -239,6 +246,7 @@ impl FeiheTextService {
             quote_open: Cell::new(true),
             last_word: RefCell::new(None),
             suggesting: Cell::new(false),
+            fg_dirty: Cell::new(false),
             segments: RefCell::new(Vec::new()),
             seg_idx: Cell::new(0),
             ui_less: Cell::new(false),
@@ -292,6 +300,9 @@ impl FeiheTextService {
         self.context.borrow_mut().take();
         self.composition.borrow_mut().take();
         self.clear_state();
+        // 看门狗线程不再需要了：反激活之后没有窗口可收，留着只是个每 120ms
+        // 醒一次的线程。下次 Activate 会重新装。
+        crate::caretwatch::clear_handler();
         // UILess 会话握着 ITfThreadMgr 的派生接口，反激活时必须先放掉，
         // 否则 MSCTF 会在线程管理器已经失效之后还来问候选数据。
         self.uielement.borrow_mut().take();
@@ -2661,6 +2672,7 @@ impl ITfTextInputProcessor_Impl for FeiheTextService_Impl {
         // 变化时才需要重建，`set_click_handler` 内部按 id 判断。
         self.install_click_handler();
         self.setup_hidden_handler();
+        self.setup_foreground_watch();
 
         // 中英文开关。关着的时候 MSCTF 不会把按键交给 TIP，症状就是
         // 「切到飞鹤拼音后字母直接进应用、没有任何候选窗」。
@@ -2794,6 +2806,47 @@ impl ITfTextInputProcessorEx_Impl for FeiheTextService_Impl {
 }
 
 impl FeiheTextService_Impl {
+    /// 装前台窗口看门狗：切到**别的程序**时候选窗/联想窗立刻收掉。
+    ///
+    /// 为什么不靠 `WM_ACTIVATEAPP` / `OnSetFocus`：前者只投给被激活/被取消激活的
+    /// **那个进程**的窗口，我们活在宿主进程里，切走时收到消息的是宿主；后者在
+    /// 「切到别的程序」时宿主根本不发（文档没失焦，只是不在前台了）。0.3.19
+    /// 就是栽在这里：联想窗一直挂在新窗口前面，直到用户再敲一个键。
+    ///
+    /// 看门狗（`crate::caretwatch`）是进程内的小线程，每 120ms 比一次
+    /// `GetForegroundWindow()`；变了自己把候选窗藏掉，再把 `fg_dirty` 置上——
+    /// 文本服务这边的状态（`suggesting` / 候选列表）留给 UI 线程在下一个
+    /// 按键里清，看门狗线程上不碰这些。
+    fn setup_foreground_watch(&self) {
+        let addr = self as *const FeiheTextService_Impl as usize;
+        let alive = Arc::downgrade(&self.alive);
+        crate::caretwatch::set_handler(Arc::new(move || {
+            let Some(_token) = alive.upgrade() else {
+                return;
+            };
+            // SAFETY: 令牌还活着 ⇒ 对象没析构；地址在生命周期内不变（同点击回调）。
+            let this = unsafe { &*(addr as *const FeiheTextService_Impl) };
+            crate::candidate::hide_for_foreground_change();
+            this.fg_dirty.set(true);
+        }));
+    }
+
+    /// 前台换过人了：把还在挂着的联想窗/候选状态收干净。
+    ///
+    /// 必须赶在按键处理之前调：联想态亮着的话，回文档后的第一个按键会被当成
+    /// 「还在联想」而白吃一次（收一个已经不在的窗，键也没了）。
+    fn flush_foreground_change(&self) {
+        if !self.fg_dirty.replace(false) {
+            return;
+        }
+        // 窗口已经被看门狗藏了，这里清的是「我们以为还在显示」的那部分状态
+        self.suggesting.set(false);
+        self.candidates.borrow_mut().clear();
+        self.selected.set(0);
+        self.page.set(0);
+        self.expanded.set(false);
+    }
+
     /// 候选窗自己收起时（切窗口）把联想标记清掉。
     ///
     /// 候选窗被 `WM_ACTIVATEAPP` 收起来时没有任何调用方，`suggesting` 还亮着的话，
@@ -2838,6 +2891,8 @@ impl FeiheTextService_Impl {
 
 impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
     fn OnSetFocus(&self, fforeground: BOOL) -> Result<()> {
+        // 看门狗发现前台换过人：先收掉挂着的联想窗（见 `flush_foreground_change`）
+        self.flush_foreground_change();
         // 失焦即提交，避免组合串残留在别人的文档里
         if self.is_composing() {
             self.commit_current();
@@ -2985,6 +3040,10 @@ impl ITfKeyEventSink_Impl for FeiheTextService_Impl {
         //
         // 放在 `!insert::chinese()` 之前是必须的：英文态下那段会直接 return，
         // 联想窗就再也收不掉了（切到英文后按任何键它都挂着）。
+        // 前台换过人（切去别的程序又切回来）：标记必须在这轮按键之前清掉，
+        // 否则下面这条 `suggesting` 分支会把「回到文档的第一个键」当成联想态
+        // 的按键白吃一次。收窗本身看门狗已经做过，这里只是对齐 UI 线程的认知。
+        self.flush_foreground_change();
         if self.suggesting.get() {
             if insert::chinese()
                 && !FeiheTextService::modifiers_down()

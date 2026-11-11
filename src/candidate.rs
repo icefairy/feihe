@@ -511,6 +511,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         // 宿主的 `OnSetFocus` 也未必来；不在这儿收，「上屏后联想」的窗口就会一直
         // 挂在新窗口前面，直到用户再敲一个键。`wParam == 0` 才是「变到后台」。
         //
+        // **但这条不是主路径，只是补丁**：`WM_ACTIVATEAPP` 只投给「被激活/被取消
+        // 激活的那个进程」的顶层窗口——我们活在宿主进程里，切到别的程序时被取消
+        // 激活的是**宿主**，消息投给宿主，本窗口一条都收不到（0.3.19 实测不生效）。
+        // 真正管用的是 `crate::caretwatch` 的前台窗口轮询；这里留着是对付
+        // 「同一进程里另一个顶层窗口被激活」这类我们确实收得到的情况。
+        //
         // 通知无条件发：窗口本来就隐着时 `hide` 直接返回，收尾那边也只是
         // 重复清一次已经清过的状态。
         WM_ACTIVATEAPP if (w.0 as u32) == 0 => {
@@ -1001,6 +1007,28 @@ pub fn hide() {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
     // 窗口藏起来时可能还有一次没走完的按下，清掉，免得下次显示时误判
+    if let Ok(mut st) = STATE.lock() {
+        st.pressed = None;
+        st.spans.clear();
+    }
+}
+
+/// 「前台换人了」时由 `caretwatch` 调用：把窗口藏起来并清空绘制状态。
+///
+/// 和 [`hide`] 有两点不同：
+/// - 不看 `WND` 是不是 0（没建过窗就什么也不用收），也不走句柄判断之外的逻辑；
+/// - **不碰 `pressed`/`spans` 之外的东西**，也不调任何回调——调用方是看门狗
+///   线程，`hide` 里那些「通知文本服务」的事由调用方自己安排。
+///
+/// 这里只做窗口层的事，UI 状态（联想标记等）由调用方清。
+pub fn hide_for_foreground_change() {
+    let raw = WND.load(Ordering::Acquire);
+    if raw == 0 {
+        return;
+    }
+    unsafe {
+        let _ = ShowWindow(HWND(raw as *mut core::ffi::c_void), SW_HIDE);
+    }
     if let Ok(mut st) = STATE.lock() {
         st.pressed = None;
         st.spans.clear();
