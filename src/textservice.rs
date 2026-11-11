@@ -195,11 +195,11 @@ pub struct FeiheTextService {
     suggesting: Cell<bool>,
     /// 「前台窗口换人了，候选窗/联想窗该收」的待处理标记。
     ///
-    /// 置位的人是 `caretwatch` 的看门狗线程（**不是**宿主 UI 线程）；真正收窗
-    /// 在下一个按键 / 焦点事件里由 UI 线程做——看门狗线程上碰不了 `ITfContext`，
-    /// 也不好去和宿主线程抢窗口状态。只是藏一个窗口的话看门狗自己就干了，
-    /// 这里补的是「文本服务自己记着的那点状态」（联想标记、候选列表）。
-    fg_dirty: Cell<bool>,
+    /// **不在本结构里**：真值是 `caretwatch::take_dirty()`（一个 `AtomicBool`）。
+    /// 这里曾经是一个 `Cell<bool>`，由看门狗线程直接 `set(true)`——但
+    /// `FeiheTextService_Impl` 整个是 `!Sync` 的，从别的线程写它属于 UB，
+    /// 0.3.20 的表现就是「点设置就崩」。现在看门狗线程只置那个原子量，
+    /// 本结构这边在 `OnSetFocus` / 按键里用 `take_dirty()` 抢清。
     /// 分词模式的段列表。空 Vec 表示不在分词模式。
     segments: RefCell<Vec<Segment>>,
     /// 分词模式下光标落在第几段
@@ -246,7 +246,6 @@ impl FeiheTextService {
             quote_open: Cell::new(true),
             last_word: RefCell::new(None),
             suggesting: Cell::new(false),
-            fg_dirty: Cell::new(false),
             segments: RefCell::new(Vec::new()),
             seg_idx: Cell::new(0),
             ui_less: Cell::new(false),
@@ -301,8 +300,9 @@ impl FeiheTextService {
         self.composition.borrow_mut().take();
         self.clear_state();
         // 看门狗线程不再需要了：反激活之后没有窗口可收，留着只是个每 120ms
-        // 醒一次的线程。下次 Activate 会重新装。
-        crate::caretwatch::clear_handler();
+        // 醒一次的线程。`disable` 会唤醒并 join 它——必须等它真的退出：本 DLL
+        // 可能随后被卸载，线程若还在跑就是 use-after-unload。下次 Activate 会重装。
+        crate::caretwatch::disable();
         // UILess 会话握着 ITfThreadMgr 的派生接口，反激活时必须先放掉，
         // 否则 MSCTF 会在线程管理器已经失效之后还来问候选数据。
         self.uielement.borrow_mut().take();
@@ -2814,32 +2814,30 @@ impl FeiheTextService_Impl {
     /// 就是栽在这里：联想窗一直挂在新窗口前面，直到用户再敲一个键。
     ///
     /// 看门狗（`crate::caretwatch`）是进程内的小线程，每 120ms 比一次
-    /// `GetForegroundWindow()`；变了自己把候选窗藏掉，再把 `fg_dirty` 置上——
-    /// 文本服务这边的状态（`suggesting` / 候选列表）留给 UI 线程在下一个
-    /// 按键里清，看门狗线程上不碰这些。
+    /// `GetForegroundWindow()`；变了它只做两件**跨线程安全**的事：置原子脏标记 +
+    /// 给候选窗投一条 `WM_FG_CHANGED`。收窗在候选窗的 UI 线程里做，联想状态由
+    /// 本对象在 `OnSetFocus` / 按键里用 `caretwatch::take_dirty()` 抢清。
+    ///
+    /// **这里刻意不给看门狗线程任何回调**：0.3.20 让它在别的线程上直接
+    /// `ShowWindow` + 写本对象的 `Cell`，点「设置」就崩。本 DLL 是进程内 COM
+    /// 组件，跨线程碰 `!Sync` 状态或窗口都是雷，线程只碰原子量和消息队列。
     fn setup_foreground_watch(&self) {
-        let addr = self as *const FeiheTextService_Impl as usize;
-        let alive = Arc::downgrade(&self.alive);
-        crate::caretwatch::set_handler(Arc::new(move || {
-            let Some(_token) = alive.upgrade() else {
-                return;
-            };
-            // SAFETY: 令牌还活着 ⇒ 对象没析构；地址在生命周期内不变（同点击回调）。
-            let this = unsafe { &*(addr as *const FeiheTextService_Impl) };
-            crate::candidate::hide_for_foreground_change();
-            this.fg_dirty.set(true);
-        }));
+        crate::caretwatch::enable();
     }
 
     /// 前台换过人了：把还在挂着的联想窗/候选状态收干净。
     ///
     /// 必须赶在按键处理之前调：联想态亮着的话，回文档后的第一个按键会被当成
     /// 「还在联想」而白吃一次（收一个已经不在的窗，键也没了）。
+    ///
+    /// 脏标记由看门狗线程置在 `caretwatch::DIRTY`（原子量），这里抢清；候选窗
+    /// 的「藏起来」另由它自己收到 `WM_FG_CHANGED` 在 UI 线程完成，所以这里只管
+    /// 文本服务自己记着的那部分状态。
     fn flush_foreground_change(&self) {
-        if !self.fg_dirty.replace(false) {
+        if !crate::caretwatch::take_dirty() {
             return;
         }
-        // 窗口已经被看门狗藏了，这里清的是「我们以为还在显示」的那部分状态
+        // 窗口那边已经收过（或即将由 WM_FG_CHANGED 收），这里清「我们以为还在显示」
         self.suggesting.set(false);
         self.candidates.borrow_mut().clear();
         self.selected.set(0);

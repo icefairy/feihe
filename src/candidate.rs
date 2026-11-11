@@ -48,6 +48,11 @@ const CLASS_NAME: PCWSTR = w!("FeiheCandidateWindow");
 /// 写字面值。这个值从 Win32 定义至今没变过。
 const MK_CONTROL: usize = 0x0008;
 
+/// 「前台换人了，把窗口收掉」的私有消息（由看门狗线程 `PostMessage`，窗口过程
+/// 在 **UI 线程**上处理）。用 `WM_APP + 7` 避开系统消息号；数值和别处无关，
+/// 只在本模块内自洽。
+const WM_FG_CHANGED: u32 = WM_APP + 7;
+
 /// 下面这些是 **100% 缩放（96 DPI）下的逻辑像素**。真机上要过一遍
 /// [`crate::dpi::px`] 换成当前显示器的物理像素——否则 150% 缩放的笔记本上，
 /// 候选窗只有别人的一半大（详见 `src/dpi.rs` 的模块注释）。
@@ -529,6 +534,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 st.spans.clear();
             }
             notify_hidden();
+            LRESULT(0)
+        }
+        // 看门狗线程发现前台换人了，投来这条消息让**本窗口所在 UI 线程**收窗。
+        //
+        // 为什么不在看门狗线程直接收：`ShowWindow` 必须在窗口所属线程调用，
+        // 跨线程写 `STATE` 还会和 UI 线程在建窗/绘制时争锁。0.3.20 就是让
+        // 看门狗线程直接 `ShowWindow` + 直接写文本服务的 `Cell`，结果一点
+        // 「设置」就崩（`caretwatch` 模块注释里写了完整成因）。消息投递是
+        // Win32 明确允许跨线程的操作，回到这里做就全在 UI 线程上了。
+        WM_FG_CHANGED => {
+            // 全部在 UI 线程上做：藏**收到消息的这个窗口**（不用 `WND`，和
+            // `WM_ACTIVATEAPP` 分支同理，单测进程里可能有多个实例），清绘制状态。
+            let _ = ShowWindow(hwnd, SW_HIDE);
+            if let Ok(mut st) = STATE.lock() {
+                st.pressed = None;
+                st.spans.clear();
+            }
+            // 联想标记的清理交给文本服务：它在 `OnSetFocus` / 按键里读脏标记
+            // （见 `caretwatch::take_dirty`），这里只做窗口层。
             LRESULT(0)
         }
         WM_PAINT => {
@@ -1013,25 +1037,26 @@ pub fn hide() {
     }
 }
 
-/// 「前台换人了」时由 `caretwatch` 调用：把窗口藏起来并清空绘制状态。
+/// 从**任意线程**（实际只有看门狗线程）请求收窗。
 ///
-/// 和 [`hide`] 有两点不同：
-/// - 不看 `WND` 是不是 0（没建过窗就什么也不用收），也不走句柄判断之外的逻辑；
-/// - **不碰 `pressed`/`spans` 之外的东西**，也不调任何回调——调用方是看门狗
-///   线程，`hide` 里那些「通知文本服务」的事由调用方自己安排。
+/// 只做一件事：给候选窗投一条 [`WM_FG_CHANGED`]，让它在 UI 线程上自己收。
+/// 没建过窗（句柄为 0）就什么也不做——那时本来也没东西可收。
 ///
-/// 这里只做窗口层的事，UI 状态（联想标记等）由调用方清。
-pub fn hide_for_foreground_change() {
+/// 刻意**不**在调用线程上 `ShowWindow` / 锁 `STATE`：那些操作都必须在窗口
+/// 所属线程做。0.3.20 就是在看门狗线程直接做了这两件事，导致「点设置就崩」
+/// （见 `caretwatch` 模块注释）。`PostMessageW` 是 Win32 允许跨线程的。
+pub fn post_hide_for_foreground_change() {
     let raw = WND.load(Ordering::Acquire);
     if raw == 0 {
         return;
     }
     unsafe {
-        let _ = ShowWindow(HWND(raw as *mut core::ffi::c_void), SW_HIDE);
-    }
-    if let Ok(mut st) = STATE.lock() {
-        st.pressed = None;
-        st.spans.clear();
+        let _ = PostMessageW(
+            Some(HWND(raw as *mut core::ffi::c_void)),
+            WM_FG_CHANGED,
+            WPARAM(0),
+            LPARAM(0),
+        );
     }
 }
 
@@ -1184,6 +1209,36 @@ mod tests {
             show(&["甲", "乙"], 0, 0, 1, 200, 200);
             assert!(visible(), "再次 show 之后应当重新可见");
         }
+        hide();
+    }
+
+    /// 看门狗线程投来的 `WM_FG_CHANGED` 必须在窗口线程把窗收掉。
+    ///
+    /// 0.3.20 的崩因就是让看门狗线程直接 `ShowWindow` + 写文本服务的 `Cell`。
+    /// 现在线程只 `PostMessage`，收窗全在本窗口过程里——这个用例钉住「消息到了
+    /// 就收」，`post_hide_for_foreground_change` 只负责投递、不做别的。
+    #[test]
+    fn foreground_message_hides_window() {
+        let _g = candidate_lock();
+        crate::config::set_no_popup_for_test(false);
+        WND.store(0, Ordering::Release);
+        show(&["甲", "乙"], 0, 0, 1, 200, 200);
+        let hwnd = HWND(WND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+        assert!(!hwnd.is_invalid(), "候选窗没建出来");
+        let visible = || !STATE.lock().unwrap().spans.is_empty();
+        assert!(visible(), "show 之后应当是可见的");
+
+        // 模拟看门狗线程：只投消息
+        post_hide_for_foreground_change();
+        // 消息是投递的，要在同一个线程里泵出来（这里直接同步发一条等价消息，
+        // 避免依赖消息循环时序；两条路径都进同一个 wndproc 分支）
+        unsafe {
+            let _ = SendMessageW(hwnd, WM_FG_CHANGED, Some(WPARAM(0)), Some(LPARAM(0)));
+        }
+        assert!(!visible(), "WM_FG_CHANGED 之后候选窗必须收掉");
+
+        show(&["甲", "乙"], 0, 0, 1, 200, 200);
+        assert!(visible(), "再次 show 之后应当重新可见");
         hide();
     }
 

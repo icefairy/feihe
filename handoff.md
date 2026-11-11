@@ -2071,6 +2071,48 @@ Windows Terminal）一旦在这儿认下这个键，`OnKeyDown` 再返回 FALSE 
 「是不是我的窗口」。删掉窗口时不看返回值，等于把错误变成**屏幕上看得见、代码里
 看不见**的东西。
 
+## 点「设置」就崩：看门狗线程跨线程碰了 UI（0.3.20 → 0.3.21）
+
+**症状**：0.3.20 装的输入法，点状态浮窗上的「设置」，宿主进程**稳定崩溃**
+（每次都崩）。0.3.19 完全正常。
+
+**根因**：0.3.20 为了修「切窗口联想窗不消失」，加了个前台窗口看门狗线程
+（`caretwatch`），前台句柄一变就**在那个线程上直接调回调**。回调里干了两件在
+非窗口线程上不能干的事：
+
+1. `candidate::hide_for_foreground_change()` —— **跨线程 `ShowWindow`** 候选窗；
+2. `&*(addr as *const FeiheTextService_Impl)` 然后 `this.fg_dirty.set(true)`
+   —— 从别的线程写一个 `Cell<bool>`。`FeiheTextService_Impl` 整个是 `!Sync`
+   的，这按 Rust 内存模型就是 UB。
+
+点「设置」正好是引爆点：`settings::open()` 里 `SetForegroundWindow` 让前台窗口
+一变，看门狗线程立刻醒来跑回调，撞上 UI 线程正在 `CreateWindowExW` 建设置窗的
+过程（同一进程、同一堆、`STATE` 锁、字符串池全在抢），于是崩。
+
+**修法**（核心原则：**看门狗线程只碰原子量和消息队列，绝不碰 UI/`!Sync` 状态**）：
+
+- 回调机制整个删掉。`caretwatch` 线程只在「前台变了」时做两件跨线程安全的事：
+  `DIRTY.store(true)`（原子量）+ `candidate::post_hide_for_foreground_change()`
+  （只 `PostMessageW` 一条 `WM_APP+7`）。
+- 候选窗在**自己的窗口过程**里处理 `WM_FG_CHANGED`——收窗、清 `STATE` 全回到
+  窗口所在线程（`ShowWindow` 必须在窗口线程调）。硬用例
+  `foreground_message_hides_window` 钉住「消息到了就收」。
+- 文本服务的联想状态不再用 `Cell<bool>`，改读 `caretwatch::take_dirty()` 那个
+  原子量（`flush_foreground_change` 里抢清）。UI 线程不去读别的线程写的 `Cell`。
+- `disable()` 改成「条件变量唤醒 + `join`」：返回即线程已死。0.3.20 只是把
+  `RUNNING` 置 false，线程要等下一次 120ms 轮询才退出——反激活到 DLL 卸载之间
+  那个窗口里线程还在跑本 DLL 的代码，是 use-after-unload 的隐患。单测
+  `disable_joins_thread_and_can_reenable` 钉住这一点。
+
+**教训（比 bug 本身更重要）**：
+
+1. 进程内 COM 组件是 `!Sync` 世界。**任何**「为省事在后台线程回调进对象」的写法
+   都是 UB，别因为「只是 set 一个 bool」就放行。跨线程只用原子量、通道、消息。
+2. `ShowWindow` / `DestroyWindow` / 任何窗口 API 都必须在窗口所属线程调。
+   后台线程只能 `PostMessage`（这条本仓库在 0.3.18 状态条孤儿窗口那次已经吃过
+   一次了，这是第二次栽在同一类跨线程窗口操作上）。
+3. 加后台线程时，`join` 不是可选项：DLL 会被卸载，线程活着就是在跑已卸载的代码。
+
 ## 调试手段
 
 **诊断日志已经删掉了。** 早期有一份 `src/log.rs`，往 `%TEMP%\feihe-trace.log` 打
