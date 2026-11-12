@@ -1886,19 +1886,38 @@ class FeiheIme : InputMethodService() {
      * 要不要进「逐段选择」态。
      *
      * 判据**完全来自引擎**：`pendingSegments` 为空就是普通候选——它是这次查询里
-     * core 顺手算好带回来的（`lookup_input.segments`），不是壳猜的。以前这里会再调
-     * 一次 JNI 重算分段，长串输入时同一段 DP 每次按键跑两遍。
+     * core 顺手算好带回来的（`lookup_input.segments`），不是壳猜的。
+     */
+    /**
+     * 要不要进「逐段选择」态。
+     *
+     * ## 不再自动进（这是「退格不进选字模式」的根因）
+     *
+     * 以前这里是：
+     *
+     * ```kotlin
+     * segmentState = SegmentState(...).takeIf { it.active }
+     * ```
+     *
+     * 只要引擎顺手带回了分段数据就**立刻进分段态**。`hexi` 这种短码一旦整码查不到、
+     * 走了整句兜底，引擎就会返回 segments——于是用户打完字，候选条已经是 chip，
+     * 而不是他想要的候选词条。
+     *
+     * 后果连锁：`backspaceIntoSegments()` 第一句是 `if (segmentState != null) return false`
+     * （那是给「已经分段、退格删字母」用的），所以退格直接落到删字母——
+     * 用户按退格想进选字模式，结果吃掉一个字母。他报的正是这个。
+     *
+     * 现在改成**只由退格触发**：分段数据继续搭车回来、存在 `pendingSegments` 里
+     * 备用，但界面停在普通候选条。候选条第一项就是整句（引擎拼好的），
+     * 用户想整句上屏直接点第一项或按空格，想换字再按退格。
+     *
+     * 想恢复「自动进分段」，把这里改回 takeIf 即可——但先想清楚退格那条分支
+     * 怎么同时支持「进分段」和「删字母」两种意图。
      */
     private fun refreshSegmentMode() {
-        segmentState = if (chinese) {
-            // 带上每段的码：上屏时要靠它把「码 → 词」记进自造词表。
-            SegmentState(
-                segments = pendingSegments.map { it.words },
-                codes = pendingSegments.map { it.code },
-            ).takeIf { it.active }
-        } else {
-            null
-        }
+        // 候选变了就把旧的分段态收掉：留着会指向上一串码的段，选出来的字对不上。
+        // 退格触发的新分段态由 backspaceIntoSegments() 自己设，不走这里。
+        if (segmentState != null) segmentState = null
     }
 
     /**
@@ -1997,6 +2016,20 @@ class FeiheIme : InputMethodService() {
         }
         val seg = segmentState
         if (seg != null) {
+            // 分段态优先用**多行展开**：用户在这个态里逐字挑词，单行横向滚着找字
+            // 是最难受的（一屏只能看六七个，还得滑）。展开态把键盘让出来，
+            // 整屏都是候选，找字快得多。
+            //
+            // chip 视图（focus = -1）仍然走单行：一行 chip 是「整句长什么样」的
+            // 预览，铺成多行反而看不出分词边界。
+            if (candidateExpanded && seg.focus >= 0) {
+                val exp = expandedColumn ?: return
+                candidateScroll?.visibility = View.GONE
+                expandedScroll?.visibility = View.VISIBLE
+                renderExpandedSegmentRows(exp, seg)
+                updateTopSlot()
+                return
+            }
             // 分段态的 chip 带选中底色、还有「‹ 返回」这种特殊项，画法不同且低频，
             // 直接整条重画（它不占键盘高度，重建的抖动没人看得见）。
             val bar = ensureSingleRow(col)
@@ -2144,9 +2177,109 @@ class FeiheIme : InputMethodService() {
     /**
      * 展开态：按 [CandidateGrid.PER_ROW] 切成多行，逐行铺候选。
      *
-     * 不加数字编号——触屏上直接用手指点，编号是给键盘选词的电脑用的。见
-     * [candidateExpanded] 的注释。
+     * 不加数字编号——触屏上直接用手指点，编号是给键盘选词的电脑用的。
      */
+    /**
+     * 展开态渲染「当前段的候选」，多行铺开。
+     *
+     * 和 [renderExpandedRows] 的区别只有绑定逻辑：这里的词属于**同一段**，
+     * 点一下就换这一段的字，然后自动跳到下一段（[SegmentState.choose] 的 advance）。
+     *
+     * 顶部保留一条「‹ 返回」+ 段号提示，否则用户进了展开的选字页会找不到路回去。
+     */
+    private fun renderExpandedSegmentRows(col: LinearLayout, state: SegmentState) {
+        col.visibility = View.VISIBLE
+        // 形码筛过的子集优先
+        val words = if (assistActive) assistWords else state.focusedWords()
+        val rows = CandidateGrid.rows(words.size, expandedRows())
+        while (col.childCount > rows) col.removeViewAt(col.childCount - 1)
+        while (col.childCount < rows) {
+            col.addView(
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(8f), 0, dp(8f), 0)
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(CANDIDATE_ROW_DP),
+                ),
+            )
+        }
+        expandedScroll?.let { sv ->
+            val rowH = dp(CANDIDATE_ROW_DP)
+            val want = rowH * rows
+            (sv.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                if (lp.height != want || lp.weight != 0f) {
+                    lp.height = want
+                    lp.weight = 0f
+                    sv.layoutParams = lp
+                }
+            }
+            (col.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                if (lp.height != FrameLayout.LayoutParams.WRAP_CONTENT) {
+                    lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
+                    col.layoutParams = lp
+                }
+            } ?: run {
+                col.layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                )
+            }
+            sv.requestLayout()
+            sv.scrollTo(0, 0)
+        }
+        words.forEachIndexed { idx, word ->
+            val row = col.getChildAt(idx / CandidateGrid.PER_ROW) as LinearLayout
+            val slot = idx % CandidateGrid.PER_ROW
+            val v = row.getChildAt(slot) as? TextView ?: TextView(this).also {
+                row.addView(it, LinearLayout.LayoutParams(0, dp(CANDIDATE_ROW_DP), 1f))
+            }
+            v.text = word
+            v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            v.gravity = Gravity.CENTER
+            v.background = null
+            v.setPadding(dp(4f), 0, dp(4f), 0)
+            val p = Palette.of(this)
+            // 高亮按**词**比，不按下标：形码筛过之后下标和 segments 对不上
+            v.setTextColor(if (word == state.wordAt(state.focus)) p.accent else p.text)
+            v.setOnLongClickListener {
+                val segCode = pendingSegments.getOrNull(state.focus)?.code
+                if (segCode.isNullOrEmpty()) {
+                    false
+                } else {
+                    showCandidateMenu(word, segCode, reopen = state.focus)
+                    true
+                }
+            }
+            v.setOnClickListener {
+                val next = if (assistActive) {
+                    state.chooseWord(word, keepOpen = true)
+                } else {
+                    state.choose(state.focusedWords().indexOf(word))
+                }
+                segmentState = next
+                // 换段清形码；已经是最后一段就退出形码态
+                assistKeys.setLength(0)
+                if (next.focus < 0) assistActive = false
+                updateAssistWords()
+                // 最后一段选完 = 整句齐了，直接上屏并学词
+                if (next.focus < 0) {
+                    commitSegmentIfActive()
+                } else {
+                    renderCandidates()
+                }
+            }
+        }
+        // 每行末尾多余的格子删掉（上一页这行有 6 个，现在可能只有 2 个）
+        for (r in 0 until rows) {
+            val row = col.getChildAt(r) as LinearLayout
+            val keep = minOf(CandidateGrid.PER_ROW, words.size - r * CandidateGrid.PER_ROW)
+            while (row.childCount > keep) row.removeViewAt(row.childCount - 1)
+        }
+    }
+
     private fun renderExpandedRows(col: LinearLayout, window: List<String>) {
         // **内容容器自己必须是 VISIBLE。**
         //
@@ -2304,8 +2437,13 @@ class FeiheIme : InputMethodService() {
     private fun bindExpandToggle(v: TextView) {
         v.background = null
         v.text = if (candidateExpanded) "▴" else "▾"
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-        v.setPadding(dp(8f), 0, dp(8f), 0)
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        // **点击区要够大**：14sp 的字加 8dp padding 只有约 30dp 宽，
+        // 手指点上去经常落到相邻的候选词上（表现为「点展开没反应」）。
+        // 横向撑到 44dp，是安卓无障碍建议的最小可点尺寸。
+        v.minWidth = dp(44f)
+        v.gravity = Gravity.CENTER
+        v.setPadding(dp(6f), 0, dp(6f), 0)
         v.setTextColor(Palette.of(this).sub)
         v.contentDescription = if (candidateExpanded) "收起候选" else "展开候选，显示更多"
         v.setOnClickListener {
@@ -2321,32 +2459,53 @@ class FeiheIme : InputMethodService() {
      * 两个模式都从这里取，保证展开/收起切换时窗口计算一致。
      */
     /**
-     * 展开态实际能放几行。
+     * 展开态能放几行。
      *
-     * 展开时候选区会吃掉整个键盘的高度（键盘被 GONE 掉），所以行数不能写死——
-     * 写死 3 行的话，剩下那片空白就白白浪费了。这里按输入法视图的**真实高度**
-     * 换算：屏幕高度 - 状态条 - （上下一点留白），再除以一行的高度。
+     * ## 为什么不能拿「当前 root 高度」算（这是「展开只有三行」的根因）
      *
-     * 拿不到高度（还没 measure，比如刚 onCreateInputView 就 refresh）时退回
-     * [CandidateGrid.MAX_ROWS]，保证算出来的永远是个正数。
+     * root 是 `LinearLayout(VERTICAL)` 且没钉高度——系统按内容 WRAP_CONTENT 测量。
+     * 展开后键盘是 GONE 的，root 高度 ≈ `expandedScroll.want + 状态条 + 收起条`，
+     * 而 `want = rowH × rows`。于是：
+     *
+     * ```
+     * rows = f(root)      root = rowH*rows + chrome
+     * => usable = rowH*(rows-1) - chrome  =>  rows' = rows - 1
+     * ```
+     *
+     * **每渲染一次就少一行**，一路跌到 1 才停。模拟器上因为某次 measure 时机不同
+     * 停在 5 行，真机上停在 3 行——同一份代码两种表现，全靠运气。
+     *
+     * 解法：不读 root，读**屏幕坐标**。键盘顶部的位置（`windowVisibleDisplayFrame`
+     * 的 bottom）是系统给的，和我们内部怎么排版完全无关，因此没有反馈回路。
      */
     private fun expandedRows(): Int {
         val rowH = dp(CANDIDATE_ROW_DP)
         if (rowH <= 0) return CandidateGrid.MAX_ROWS
-        // 可用高度 = 输入法视图能拿到的总高度 − 状态条 − 收起条。
-        // 展开时键盘和数字行都是 GONE，不再占位，所以剩下的全给候选。
-        //
-        // 拿 root 的实际高度最准，但它要 measure 完才有值；没值时退回屏幕高度
-        // 按键盘占比估算（键盘一般占屏幕 45%~55%）。
-        val rootH = rootViewHeight()
+        val usable = expandedUsableHeight()
+        if (usable <= 0) return CandidateGrid.MAX_ROWS
+        return (usable / rowH).coerceIn(1, 8)
+    }
+
+    /**
+     * 展开态真正能铺候选的像素高度。
+     *
+     * = 键盘顶部以上的可用区 − 状态条 − 收起条 − 一行余量（免得最后一行裁半截）。
+     */
+    private fun expandedUsableHeight(): Int {
+        val rowH = dp(CANDIDATE_ROW_DP)
         val screenH = resources.displayMetrics.heightPixels
-        val total = if (rootH > 0) rootH else (screenH * 0.55f).toInt()
+        // 键盘顶部的 y 坐标 = 系统「可见显示区」的下边界。
+        // 拿不到（未 attach / 全屏沉浸）就退回屏幕高度的 55% 估算——
+        // 键盘一般占屏幕 45%~55%，这是老代码就在用的兜底值。
+        val keyboardTop = runCatching {
+            val r = android.graphics.Rect()
+            candidateScroll?.rootView?.getWindowVisibleDisplayFrame(r)
+            if (r.bottom > 0 && r.bottom < screenH) r.bottom else 0
+        }.getOrDefault(0).takeIf { it > 0 } ?: (screenH * 0.55f).toInt()
         var chrome = 0
         statusBar?.let { if (it.height > 0) chrome += it.height else chrome += dp(34f) }
         chrome += dp(30f) // 收起条自己
-        val usable = total - chrome - rowH // 再扣一行余量，免得最后一行被裁半截
-        if (usable <= 0) return CandidateGrid.MAX_ROWS
-        return (usable / rowH).coerceIn(1, 8)
+        return keyboardTop - chrome - rowH
     }
 
     /**
@@ -2648,10 +2807,23 @@ class FeiheIme : InputMethodService() {
                                 updateAssistWords()
                                 renderCandidates()
                             } else {
-                                // 未筛选时下标就在当前段里，直接换算回去
+                                // 未筛选时下标就在当前段里，直接换算回去。
+                                // advance=true：选完自动展开下一段，用户可以连着挑下一个字。
                                 val idx = state.focusedWords().indexOf(word)
-                                segmentState = state.choose(idx)
-                                renderCandidates()
+                                val next = state.choose(idx)
+                                segmentState = next
+                                // 换段（或收尾）都要清形码：留着会把下一段的候选筛空
+                                assistKeys.setLength(0)
+                                if (next.focus < 0) assistActive = false
+                                updateAssistWords()
+                                // **最后一段选完 = 整句齐了，直接上屏。**
+                                // 不这样的话用户选完最后一个字还得再按空格，
+                                // 而候选条上已经没有任何东西提示他「该按空格了」。
+                                if (next.focus < 0) {
+                                    commitSegmentIfActive()
+                                } else {
+                                    renderCandidates()
+                                }
                             }
                         }
                     },
@@ -2755,10 +2927,26 @@ class FeiheIme : InputMethodService() {
         // 判据和 Windows 端同一份（`BackspaceSplit.shouldSplit`）：
         // 第一候选是单字就不拆（`de` → 的 这种码本来就该换候选）
         if (!BackspaceSplit.shouldSplit(visibleCandidates())) return false
-        // 引擎没给分段数据就退不进去（长串没打完、或词库里切不开）
-        val next = SegmentState(pendingSegments.map { it.words }).takeIf { it.active }
-            ?: return false
-        segmentState = next
+        // **按需向引擎要分段，不要用 `pendingSegments`。**
+        //
+        // `pendingSegments` 是 `lookupInput` 搭车带回来的，只在「整码查不到」时非空。
+        // 用户按退格要拆的那个词恰恰是整码查得到的（「河西」就摆在那），
+        // 所以 `pendingSegments` 恒为空——以前直接拿它构造 SegmentState，
+        // `active` 为 false，退格落到删字母，把 `hexi` 吃成 `hex`。
+        val raw = if (pendingSegments.isNotEmpty()) {
+            pendingSegments.map { it.code to it.words }
+        } else {
+            NativeEngine.segments(pending.toString(), candidateLimit.coerceAtLeast(1))
+        }
+        if (raw.size < 2 || raw.any { it.second.isEmpty() }) return false
+        val next = SegmentState(
+            segments = raw.map { it.second },
+            // **必须带码**：逐字选词是用户造词的主要路径，上屏时要靠它算全拼。
+            codes = raw.map { it.first },
+        ).takeIf { it.active } ?: return false
+        // **退格进来的第一段直接展开**：用户的意图就是「换个字」，还要他再点一下
+        // chip 才能看候选是白折腾。这一条是他明确要求的「退格进入选字模式」。
+        segmentState = next.open(0)
         renderCandidates()
         return true
     }

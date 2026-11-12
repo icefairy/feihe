@@ -41,10 +41,24 @@ class SegmentStateTest {
     }
 
     @Test
-    fun `选完自动回到 chip 视图`() {
+    fun `选完自动展开下一段`() {
+        // 用户要的是「选完这个字马上选下一个字」，所以不是回 chip 视图。
+        val s = two.open(0).choose(2)
+        assertEquals(1, s.focus)
+        assertEquals("章三李", s.sentence())
+    }
+
+    @Test
+    fun `最后一段选完回到 chip 视图`() {
         val s = two.open(1).choose(2)
         assertEquals(-1, s.focus)
         assertEquals("张三理", s.sentence())
+    }
+
+    @Test
+    fun `advance=false 时选完就回 chip 视图`() {
+        val s = two.open(0).choose(2, advance = false)
+        assertEquals(-1, s.focus)
     }
 
     @Test

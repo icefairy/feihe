@@ -69,15 +69,24 @@ data class SegmentState(
         if (focus in segments.indices) segments[focus] else emptyList()
 
     /**
-     * 在展开段里选第 [index] 个候选，更新该段并回到 chip 视图。
+     * 在展开段里选第 [index] 个候选。
+     *
+     * [advance] = 选完自动展开**下一段**（用户要的是「选完这个字马上选下一个字」）；
+     * 已经是最后一段时回到 chip 视图（focus = -1）。
+     *
      * 没展开 / 下标越界时原样返回——点空白处不该改动任何已选的词。
      */
-    fun choose(index: Int): SegmentState {
+    fun choose(index: Int, advance: Boolean = true): SegmentState {
         if (focus !in segments.indices) return this
         if (index !in segments[focus].indices) return this
+        val next = if (advance && focus + 1 < segments.size && segments[focus + 1].isNotEmpty()) {
+            focus + 1
+        } else {
+            -1
+        }
         return copy(
             selected = selected.toMutableList().also { it[focus] = index },
-            focus = -1,
+            focus = next,
         )
     }
 

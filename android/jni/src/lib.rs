@@ -431,6 +431,50 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_decodePinyinNative
     env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
 
+/// `NativeEngine.segmentNative(code, limit)` —— 按需给一串码分段（退格进选字模式用）。
+///
+/// ## 为什么不能复用 `lookup_input` 带回来的 segments
+///
+/// 引擎只在「整码查不到候选」时才顺手算分段（`hexi` 查得到「河西」就直接返回，
+/// `segments` 是空的）。但用户按退格的意图恰恰是「这个词我不想要，拆成字重新选」——
+/// 这个场景下整码**一定查得到**，所以 `segments` 一定是空的。
+///
+/// 以前退格走进 `backspaceIntoSegments()`，拿到空的 `pendingSegments` 就返回
+/// false，落到「删字母」分支。用户按退格想进选字模式，结果吃掉一个字母。
+///
+/// 返回格式：每行 `段码\t候选1\t候选2…`；空串 = 这段码分不开（单音节/查不到）。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_segmentNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    code: JString<'local>,
+    limit: jint,
+) -> jstring {
+    let c = read_string(&mut env, &code);
+    let out = std::panic::catch_unwind(|| {
+        if c.is_empty() || limit <= 0 {
+            return String::new();
+        }
+        let segs = feihe_core::dict::segment_candidates(&c, limit as usize);
+        if segs.len() < 2 {
+            return String::new();
+        }
+        segs.iter()
+            .map(|s| {
+                let mut line = s.code.clone();
+                for w in &s.words {
+                    line.push('\t');
+                    line.push_str(w);
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+    .unwrap_or_default();
+    env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
 /// `NativeEngine.pinyinOfNative(code, word)` —— 反查「码 + 词」对应的全拼。
 ///
 /// 自造词必须存全拼：`phrase::words_for` 按全拼索引，存双拼码进去下次就查不到。

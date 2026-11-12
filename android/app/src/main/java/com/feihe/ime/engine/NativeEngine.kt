@@ -258,6 +258,29 @@ object NativeEngine {
     }
 
     /**
+     * 把一串码按需分段，返回每段 `(段码, 候选词)`。
+     *
+     * **退格进「逐字选词」必须走这里，不能用 `lookupInput` 带回来的 [Lookup.segments]**：
+     * 引擎只在「整码查不到候选」时才顺手算分段。用户按退格要求拆词时，
+     * 整码一定查得到（不然他压根没有词可拆），所以那条路上的 segments 恒为空，
+     * 退格就会落到「删字母」，把用户的码吃掉一截。
+     *
+     * 返回空表 = 这串码分不开（单音节，或某段查不到字）。
+     */
+    fun segments(code: String, limit: Int = 9): List<Pair<String, List<String>>> {
+        if (code.isEmpty() || limit <= 0 || !ensureLoaded()) return emptyList()
+        val raw = runCatching { segmentNative(code, limit) }.getOrDefault("")
+        if (raw.isEmpty()) return emptyList()
+        return raw.split('\n').mapNotNull { line ->
+            val parts = line.split('\t')
+            if (parts.isEmpty() || parts[0].isEmpty()) return@mapNotNull null
+            val segCode = parts[0]
+            val words = parts.drop(1).filter { it.isNotEmpty() }
+            if (words.isEmpty()) null else segCode to words
+        }
+    }
+
+    /**
      * 设置页的开关快照。`null` = 引擎没加载，设置页据此显示「引擎未就绪」而不是
      * 一排点了没反应的开关。
      */
@@ -463,6 +486,8 @@ object NativeEngine {
     private external fun pinyinOfNative(code: String, word: String): String
 
     private external fun decodePinyinNative(code: String): String
+
+    private external fun segmentNative(code: String, limit: Int): String
 
     private external fun configNative(): String
 
