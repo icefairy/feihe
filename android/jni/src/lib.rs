@@ -409,6 +409,28 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnPhraseNative<
     });
 }
 
+/// `NativeEngine.decodePinyinNative(code)` —— 双拼码 → 全拼（`fwhe` → `fei he`）。
+///
+/// 自造词必须存全拼，而逐段选词时手上只有段码（双拼）。**不能用
+/// `pinyin_of` 反查**——那个函数只在词库已有该词时才给结果，用户刚造的新词
+/// 恰恰不在词库里，永远返回空。这里纯查表解码，不碰词库。
+///
+/// 返回空串 = 码畸形（奇数长度/非法键），调用方据此放弃学习。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_decodePinyinNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    code: JString<'local>,
+) -> jstring {
+    let c = read_string(&mut env, &code);
+    let out = std::panic::catch_unwind(|| {
+        use feihe_core::shuangpin::decode_pinyin;
+        decode_pinyin(feihe_core::config::get().scheme, &c).unwrap_or_default()
+    })
+    .unwrap_or_default();
+    env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
 /// `NativeEngine.pinyinOfNative(code, word)` —— 反查「码 + 词」对应的全拼。
 ///
 /// 自造词必须存全拼：`phrase::words_for` 按全拼索引，存双拼码进去下次就查不到。

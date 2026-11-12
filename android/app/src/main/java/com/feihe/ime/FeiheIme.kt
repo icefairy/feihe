@@ -306,6 +306,9 @@ class FeiheIme : InputMethodService() {
     private var clipButton: TextView? = null
     private var clipOpen = false
 
+    /** 状态条上的「收起键盘」按钮。 */
+    private var hideButton: TextView? = null
+
     /** 上次读剪贴板的时间（毫秒）。onStartInputView 和 onWindowShown 常常连着来，别读两遍。 */
     private var lastClipReadAt = 0L
 
@@ -799,6 +802,18 @@ class FeiheIme : InputMethodService() {
             //
             // 铺在 root 上而不是逐个设：子 View 增删、显隐切换都不会再漏一处。
             setBackgroundColor(Palette.of(this@FeiheIme).keyboardBg)
+            // **高度兜底，防「展开候选后整个输入法消失」。**
+            //
+            // 展开态会把键盘整块 GONE 掉，只剩候选区。如果候选区高度算小了
+            // （root 还没 measure 完、expandedRows() 返回 1、或 window 恰好在
+            // 刷新中途为空），root 高度会塌到 0。系统看到输入法视图没有高度，
+            // 就认定这个 IME 没什么可显示，直接收掉窗口 —— 表现为
+            // `onStartInput: inputType=0x0`、焦点丢失、整块屏幕只剩背景。
+            //
+            // 给一个最小高度，让任何状态下的 root 都还是「有东西的」。
+            // 取 120dp：大于一行候选(40) + 收起条(30)，小于正常键盘高度，
+            // 不会影响正常布局（正常状态 root 本来就比它高）。
+            minimumHeight = dp(120f)
         }
 
         statusText = TextView(this).apply {
@@ -850,6 +865,21 @@ class FeiheIme : InputMethodService() {
             setOnClickListener { toggleVoice() }
         }
 
+        // 收起键盘。放在最右边（拇指最远但按一次就消失，不需要高频）。
+        //
+        // 系统键盘底部有自己的收起按钮，但它是**系统手势条**上的小箭头，
+        // 各家 ROM 位置和样式不一致，有的还藏起来。自带一个更可靠：
+        // 尤其在候选条展开、键盘被 GONE 掉的时候，这是唯一的退路。
+        hideButton = TextView(this).apply {
+            text = "⌄"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            gravity = Gravity.CENTER
+            setTextColor(statusPalette.sub)
+            setPadding(dp(12f), dp(6f), dp(14f), dp(6f))
+            contentDescription = "收起键盘"
+            setOnClickListener { requestHideSelf(0) }
+        }
+
         statusBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -861,6 +891,7 @@ class FeiheIme : InputMethodService() {
             addView(clipButton)
             addView(micButton)
             addView(gear)
+            addView(hideButton)
         }
         root.addView(
             statusBar,
@@ -924,9 +955,12 @@ class FeiheIme : InputMethodService() {
             visibility = View.GONE
             addView(
                 expandedColumn,
-                ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                // FrameLayout.LayoutParams：ScrollView 是 FrameLayout 的子类，
+                // 用 ViewGroup.LayoutParams 它量不出内容高度（见下面 setLayoutParams
+                // 处的注释）。
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
                 ),
             )
         }
@@ -1451,6 +1485,22 @@ class FeiheIme : InputMethodService() {
                 if (!chinese && pending.isNotEmpty()) {
                     commitEnglishComposing()
                 }
+                // **中文态回车 = 原样上屏那串字母，不选候选。**
+                //
+                // 这是 Windows 输入法的语义（用户明确要求对齐）：回车是「我不要
+                // 转换，就按我打的字母上屏」。它在这些场景不可替代：
+                //   - 打验证码/车牌/型号这类拼音正好不存在的串
+                //   - 引擎把码拆错了，用户想原样拿到那串字母
+                //   - 只想换行但手上还有半截码
+                //
+                // 空格才是「选第一个」——这两个键必须分工，否则用户想原样上屏
+                // 时无路可走（以前回车也选候选，等于两个键干同一件事）。
+                if (chinese && pending.isNotEmpty()) {
+                    commitPending()
+                    commitText("\n")
+                    forgetContext()
+                    return
+                }
                 if (!commitSegmentIfActive()) commitPending()
                 commitText("\n")
                 forgetContext()
@@ -1472,6 +1522,28 @@ class FeiheIme : InputMethodService() {
                 showPage(page)
                 // 切英文时把中文候选丢掉：那批候选是按中文码查的，留着只会误导
                 forgetContext()
+                // **必须显式清空组合串和候选。**
+                //
+                // 用户实测的场景：中文打了一串拼音 → 点中英切到英文 → 敲空格，
+                // 结果上屏的还是中文。原因是 forgetContext() 只清联想
+                // （prevWord + suggestions），`pending`（那串拼音）和 `candidates`
+                // 原封不动；空格分支里 `chinese` 已经是 false，于是走到
+                // 「commitEnglishComposing() 用 pending 确认原文」那条路，
+                // 把中文拼音当英文字母串直接上屏了。
+                //
+                // 语义上这是对的：切到英文态的那一刻，用户放弃了那串拼音的转换。
+                // 留着一个既不是中文候选、也不能继续按拼音编辑的死字符串，
+                // 只会让下一个按键产生意外结果（空格、回车、退格三条路都受影响）。
+                pending.setLength(0)
+                code = ""
+                candidates = emptyList()
+                pendingSegments = emptyList()
+                segmentState = null
+                englishWords = emptyList()
+                englishSuggest?.query("")
+                // 组合区也要撤掉：宿主里那串带下划线的拼音必须消失，
+                // 否则切英文后输入框里还挂着上一条中文的未确认字符。
+                currentInputConnection?.setComposingText("", 1)
                 // 快捷输入只在中文态存在；切到英文时手上那截 `/rq` 不能留在组合态里
                 if (quickMode) {
                     quickMode = false
@@ -1840,9 +1912,6 @@ class FeiheIme : InputMethodService() {
         val state = segmentState ?: return false
         val sentence = state.sentence()
         commitWord(sentence, thenSuggest = false)
-        // 记「码 → 词」。段码是双拼码（feih），但 phrase 表按**全拼**索引，
-        // 直接存双拼码下次查不到——必须先转成 fei he（见 pinyinOf 的注释）。
-        NativeEngine.learn(state.sentenceCode(), sentence)
         rememberPhrase(sentence, state)
         return true
     }
@@ -1850,25 +1919,30 @@ class FeiheIme : InputMethodService() {
     /**
      * 把逐段拼出来的整句记成自造词。
      *
-     * 优先用段码反查全拼（准确，尊重当前方案）；段码缺失时退回按字反查。
-     * 两条都得拿到全拼才能落库，拿不到就放弃——宁可这次不记，也别存一条
-     * 永远捞不出来的死数据。
+     * ## 这里踩过两次坑，都值得记下来
+     *
+     * **第一次**：以为「逐字选词不经过 `commitWord`」是根因，补了 `learn(码, 整句)`
+     * ——但因为码传的是双拼码 `fwhe`，而 `phrase::learn` 里第一句就是
+     * `encode_pinyin(Xiaohe, pinyin).is_none()` 校验**全拼**，双拼码过不了，
+     * 静默 return，等于什么都没做。用户反馈「组过一次词下次还是没有」。
+     *
+     * **第二次**：想用 `dict::pinyin_of(code, word)` 把双拼码反查成全拼，但那函数
+     * **只在词库已有该词时**才返回拼音。用户刚造的新词当然不在词库里 → 恒为空串
+     * → 又走「拿不到全拼就放弃」那条路 → 还是不学。
+     *
+     * 真正的解法是不依赖词库：用 `shuangpin::decode_pinyin` 把码直接解成全拼
+     * （`fwhe` → `fei he`，纯查表，不碰词库）。
      */
     private fun rememberPhrase(sentence: String, state: SegmentState) {
         if (sentence.length < 2) return
-        // 词库里已经有 → 不是自造词
-        if (NativeEngine.pinyinOf(state.sentenceCode(), sentence).isNotEmpty()) return
-
-        // 段码可用：直接用查出来的全拼
-        val fromSeg = state.sentenceCode().takeIf { it.isNotEmpty() }
-            ?.let { NativeEngine.pinyinOf(it, sentence) }
-            ?.takeIf { it.isNotEmpty() }
-        if (fromSeg != null) {
-            NativeEngine.learnPhrase(sentence, fromSeg)
-            return
-        }
-        // 退化：逐字反查全拼
-        rememberPhraseIfNew("", sentence)
+        // 码数必须和段数一致，否则解出来的全拼和词不对应
+        val code = state.sentenceCode()
+        if (code.isEmpty()) return
+        val full = NativeEngine.decodePinyin(code)
+        // 解不出来（畸形码）就放弃：宁可这次不学，也别往 phrases.txt 写一条
+        // 谁也查不出来的死数据。
+        if (full.isEmpty()) return
+        NativeEngine.learnPhrase(sentence, full)
     }
 
     private fun renderCandidates() {
@@ -2074,6 +2148,13 @@ class FeiheIme : InputMethodService() {
      * [candidateExpanded] 的注释。
      */
     private fun renderExpandedRows(col: LinearLayout, window: List<String>) {
+        // **内容容器自己必须是 VISIBLE。**
+        //
+        // expandedColumn 在 onCreateInputView 里初始化为 GONE（那时还没展开），
+        // 之后所有显隐操作都改的是外层 expandedScroll —— 于是展开时
+        // ScrollView 可见、高度 550、里面 5 行也建好了，但内容容器是 GONE，
+        // 用户看到的就是一片空白。日志特征：svH=550 而 colH=0 row0H=0。
+        col.visibility = View.VISIBLE
         val rows = CandidateGrid.rows(window.size, expandedRows())
         // 行数变了就补/删行容器。每行固定高度，容器高度 = 行数 × 行高。
         while (col.childCount > rows) col.removeViewAt(col.childCount - 1)
@@ -2110,13 +2191,38 @@ class FeiheIme : InputMethodService() {
                     sv.layoutParams = lp
                 }
             }
-            // 内容高度也钉死：让 ScrollView 知道内容有多高，才滚得动
-            (col.layoutParams as? ViewGroup.LayoutParams)?.let { lp ->
-                if (lp.height != want) {
-                    lp.height = want
+            // **内容高度必须让 ScrollView 自己算（WRAP_CONTENT），不能钉死。**
+            //
+            // 之前这里把 expandedColumn 的高度也设成 `want`，结果 svH/colH 双双是 0，
+            // 展开后整片空白。原因是：ScrollView 的子 View 用 WRAP_CONTENT 时，
+            // ScrollView 才去测量内容真实高度并按需滚动；给它一个和可视区一样大的
+            // 固定高度，它会认为"内容就这么高"，而内部行的 weight/measure 又依赖
+            // 父级给的高度约束，形成 0 高度塌陷。
+            //
+            // 正确做法：容器高度 = 可视区（want），内容高度 = 自适应（WRAP_CONTENT）。
+            // 内容比可视区高就滚动，比它矮就自然留白——这正是 ScrollView 该有的行为。
+            // **内容必须用 FrameLayout.LayoutParams（ScrollView 的父类）。**
+            //
+            // 之前给 expandedColumn 挂的是 `ViewGroup.LayoutParams`——那是 addView
+            // 时手写的类型。ScrollView 内部按 FrameLayout 测量子 View，
+            // 拿到 ViewGroup.LayoutParams 时量不出内容高度，行高就塌成 0
+            // （日志：svH=550 但 colH=0 row0H=0，容器对了、内容全空）。
+            //
+            // 用 MATCH_PARENT 宽 + WRAP_CONTENT 高：宽跟着 ScrollView，
+            // 高由内部行自己撑开，超出可视区就滚动。
+            (col.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                if (lp.height != FrameLayout.LayoutParams.WRAP_CONTENT) {
+                    lp.height = FrameLayout.LayoutParams.WRAP_CONTENT
                     col.layoutParams = lp
                 }
+            } ?: run {
+                col.layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                )
             }
+            // 高度改完必须重排，否则本帧读到的还是旧值（=0）
+            sv.requestLayout()
             sv.scrollTo(0, 0)
         }
         window.forEachIndexed { idx, word ->

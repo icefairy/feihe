@@ -268,6 +268,143 @@ pub fn encode_syllable(scheme: Scheme, syl: &str) -> Option<String> {
     Some(String::from_iter([a, b]))
 }
 
+/// 两键码 → 音节全拼。这是 [`encode_syllable`] 的逆运算。
+///
+/// ## 为什么要它
+///
+/// 自造词的落库格式要求**全拼**（`phrase::learn(word, "fei he")` 里那句
+/// `encode_pinyin(Xiaohe, pinyin).is_none()` 就是在校验这一点）。而用户在界面上
+/// 逐段选词时，手上只有**双拼码** `fwhe`——不知道它展开是 `fei he`，这个词
+/// 就永远存不进 `phrases.txt`，症状正是「组过一次词，下次还是没有」。
+///
+/// 以前想用 `dict::pinyin_of(code, word, false)` 反查，但那个函数**只在词库
+/// 已有该词时**才返回拼音——用户刚造的新词当然不在词库里，于是恒为空串，
+/// 学习路径静默失败。必须从码直接解出来，不能依赖词库。
+///
+/// ## 实现
+///
+/// 反向查：遍历「所有声母键 × 所有韵母」调用 `encode_chars`，建一张
+/// `(声母位, 韵母位) → 音节` 的表。**不手写逆表**——正表已经在
+/// `finals()` 里，手写逆表就是第二份真值，改一处忘一处必然出错。
+///
+/// 冲突取先出现的：`is_valid_pair` 的注释说明过这套编码本身就有结构性重码
+/// （不同音节落在同一个键对上），那种情况取哪个都不完美，但**有总比没有好**
+/// ——用户选的是界面上的候选词，语音/自造词只需要一个能落库的全拼。
+fn decode_chars(scheme: Scheme, a: char, b: char) -> Option<String> {
+    static XH: OnceLock<std::collections::HashMap<(char, char), String>> = OnceLock::new();
+    static MS: OnceLock<std::collections::HashMap<(char, char), String>> = OnceLock::new();
+    let cell = match scheme {
+        Scheme::Xiaohe => &XH,
+        Scheme::Ms => &MS,
+    };
+    let map = cell.get_or_init(|| {
+        // 收集全部**真实存在的**音节候选，同键位时优先「长韵母」。
+        //
+        // ## 两个必须处理的陷阱
+        //
+        // 1. **不能遍历 `INITIAL_KEYS`**：里面的 `v/i/u` 是 zh/ch/sh 的键位，
+        //    拼出 `v`+`ong`=`vong` 这种非法音节，`zhong→vs` 就进不了表。
+        // 2. **必须排除不存在的声韵搭配**：`s` 键同时是 `ong` 和 `iong`，
+        //    如果只用「韵母越长越优先」，`zh`+`iong`（非法）会压过 `zh`+`ong`
+        //    （合法），解码得到 `zhiong`。同理 `g`+`o` 不存在，只有 `guo`。
+        //
+        // 所以每个组合都要过 `VALID_SYLLABLES` 这道真实音节校验。这张表是
+        // 普通话全部 400 余个无调音节——不写它就没有任何办法区分「合法的长韵母」
+        // 和「不合法的长韵母」，`finals()` 表本身不含这层信息。
+        let mut cands: Vec<((char, char), String)> = Vec::with_capacity(2048);
+        let mut push = |syl: String| {
+            if !VALID_SYLLABLES.contains(&syl.as_str()) {
+                return;
+            }
+            if let Some(pair) = encode_chars(scheme, &syl) {
+                cands.push((pair, syl));
+            }
+        };
+        for ini in [
+            "b", "p", "m", "f", "d", "t", "n", "l", "g", "k", "h", "j", "q", "x", "r",
+            "z", "c", "s", "y", "w", "zh", "ch", "sh",
+        ] {
+            for (fin, _) in scheme.finals() {
+                push(format!("{ini}{fin}"));
+            }
+        }
+        for (fin, _) in scheme.finals() {
+            push(fin.to_string());
+        }
+        // 同键位时长韵母优先（`guo` 压过 `go`——后者已被音节表排除，
+        // 这条兜住音节表漏收的边缘情况）
+        cands.sort_by_key(|(_, s)| std::cmp::Reverse(s.len()));
+        let mut m = std::collections::HashMap::with_capacity(cands.len());
+        for (pair, syl) in cands {
+            m.entry(pair).or_insert(syl);
+        }
+        m
+    });
+    map.get(&(a, b)).cloned()
+}
+
+/// 普通话全部无调音节（不含声调）。
+///
+/// 用途只有一个：判断「某个声母+韵母的组合是不是真实存在的音节」。
+/// `finals()` 只给出键位映射，不含「`zh` 不能配 `iong`」这类搭配约束，
+/// 缺了这张表，双拼解码会在结构性重码处解出 `zhiong` / `go` 这种非法音节。
+///
+/// 收录标准：《现代汉语拼音音节表》的常用音节（约 400 个）。
+/// 罕见的叹词音节（`hm` `ng` `ei`...）不在其中——它们本来也编不出双拼码。
+const VALID_SYLLABLES: &[&str] = &[
+    "a", "ai", "an", "ang", "ao", "ba", "bai", "ban", "bang", "bao", "bei", "ben", "beng",
+    "bi", "bian", "biao", "bie", "bin", "bing", "bo", "bu", "ca", "cai", "can", "cang",
+    "cao", "ce", "cen", "ceng", "cha", "chai", "chan", "chang", "chao", "che", "chen",
+    "cheng", "chi", "chong", "chou", "chu", "chua", "chuai", "chuan", "chuang", "chui",
+    "chun", "chuo", "ci", "cong", "cou", "cu", "cuan", "cui", "cun", "cuo", "da", "dai",
+    "dan", "dang", "dao", "de", "deng", "di", "dian", "diao", "die", "ding", "diu", "dong",
+    "dou", "du", "duan", "dui", "dun", "duo", "e", "en", "eng", "er", "fa", "fan", "fang",
+    "fei", "fen", "feng", "fo", "fou", "fu", "ga", "gai", "gan", "gang", "gao", "ge",
+    "gei", "gen", "geng", "gong", "gou", "gu", "gua", "guai", "guan", "guang", "gui", "gun",
+    "guo", "ha", "hai", "han", "hang", "hao", "he", "hei", "hen", "heng", "hong", "hou",
+    "hu", "hua", "huai", "huan", "huang", "hui", "hun", "huo", "ji", "jia", "jian", "jiang",
+    "jiao", "jie", "jin", "jing", "jiong", "jiu", "ju", "juan", "jue", "jun", "ka", "kai",
+    "kan", "kang", "kao", "ke", "ken", "keng", "kong", "kou", "ku", "kua", "kuai", "kuan",
+    "kuang", "kui", "kun", "kuo", "la", "lai", "lan", "lang", "lao", "le", "lei", "leng",
+    "li", "lia", "lian", "liang", "liao", "lie", "lin", "ling", "liu", "long", "lou", "lu",
+    "luan", "lue", "lun", "luo", "lv", "lve", "ma", "mai", "man", "mang", "mao", "me",
+    "mei", "men", "meng", "mi", "mian", "miao", "mie", "min", "ming", "miu", "mo", "mou",
+    "mu", "na", "nai", "nan", "nang", "nao", "ne", "nei", "nen", "neng", "ni", "nian",
+    "niang", "niao", "nie", "nin", "ning", "niu", "nong", "nou", "nu", "nuan", "nue",
+    "nuo", "nv", "nve", "o", "ou", "pa", "pai", "pan", "pang", "pao", "pei", "pen",
+    "peng", "pi", "pian", "piao", "pie", "pin", "ping", "po", "pou", "pu", "qi", "qia",
+    "qian", "qiang", "qiao", "qie", "qin", "qing", "qiong", "qiu", "qu", "quan", "que",
+    "qun", "ran", "rang", "rao", "re", "ren", "reng", "ri", "rong", "rou", "ru", "rua",
+    "ruan", "rui", "run", "ruo", "sa", "sai", "san", "sang", "sao", "se", "sen", "seng",
+    "sha", "shai", "shan", "shang", "shao", "she", "shen", "sheng", "shi", "shou", "shu",
+    "shua", "shuai", "shuan", "shuang", "shui", "shun", "shuo", "si", "song", "sou", "su",
+    "suan", "sui", "sun", "suo", "ta", "tai", "tan", "tang", "tao", "te", "teng", "ti",
+    "tian", "tiao", "tie", "ting", "tong", "tou", "tu", "tuan", "tui", "tun", "tuo", "wa",
+    "wai", "wan", "wang", "wei", "wen", "weng", "wo", "wu", "xi", "xia", "xian", "xiang",
+    "xiao", "xie", "xin", "xing", "xiong", "xiu", "xu", "xuan", "xue", "xun", "ya", "yan",
+    "yang", "yao", "ye", "yi", "yin", "ying", "yo", "yong", "you", "yu", "yuan", "yue",
+    "yun", "za", "zai", "zan", "zang", "zao", "ze", "zei", "zen", "zeng", "zha", "zhai",
+    "zhan", "zhang", "zhao", "zhe", "zhen", "zheng", "zhi", "zhong", "zhou", "zhu", "zhua",
+    "zhuai", "zhuan", "zhuang", "zhui", "zhun", "zhuo", "zi", "zong", "zou", "zu", "zuan",
+    "zui", "zun", "zuo",
+];
+
+/// 双拼码串（如 `fwhe`）→ 全拼串（`fei he`，音节用空格分隔）。
+///
+/// 码长必须是偶数（每个音节两键），任一对解不出来就整体返回 None——
+/// **宁可放弃也不拼一个残缺的全拼**，那会污染 phrases.txt。
+pub fn decode_pinyin(scheme: Scheme, code: &str) -> Option<String> {
+    let chars: Vec<char> = code.chars().collect();
+    if chars.is_empty() || chars.len() % 2 != 0 {
+        return None;
+    }
+    let mut out: Vec<String> = Vec::with_capacity(chars.len() / 2);
+    for pair in chars.chunks(2) {
+        out.push(decode_chars(scheme, pair[0], pair[1])?);
+    }
+    Some(out.join(" "))
+}
+
 /// 这个字符串是不是一个结构合法的汉语拼音音节（**不查词库**，只看拼写）。
 ///
 /// 用途：全拼的智能分隔要把 `nihaoshijie` 切成 `ni`/`hao`/`shi`/`jie`，
@@ -539,6 +676,11 @@ pub fn encode_phrase(scheme: Scheme, pinyin: &str) -> Option<String> {
 mod split_tests {
     use super::*;
 
+    /// 全拼 → 小鹤码，测试里反复用。
+    fn xh(p: &str) -> String {
+        encode_pinyin(Scheme::Xiaohe, p).unwrap_or_else(|| panic!("cannot encode {p}"))
+    }
+
     /// 切分的核心承诺：**相邻两个音节拼起来不能有歧义**。
     ///
     /// `xian` 既可以是「先」，也可以是「西 + 安」；这里按最长优先取 `xian`。
@@ -573,5 +715,71 @@ mod split_tests {
         );
         // 带空格反而应该走不通——那条路是 `encode_pinyin` 的
         assert!(encode_phrase(Scheme::Xiaohe, "ni hao").is_none());
+    }
+
+    // ── 码 → 全拼（自造词落库用）──────────────────────────────
+
+    /// 解码必须是编码的逆运算：所有常用音节往返一遍都要对得上。
+    #[test]
+    fn 解码是编码的逆运算() {
+        for p in [
+            "fei", "he", "ni", "hao", "zhong", "guo", "xue", "quan", "jun", "ying",
+            "kuai", "liang", "zou", "xia", "zhang", "san", "feng", "shuang", "pin",
+        ] {
+            let code = xh(p);
+            assert_eq!(
+                decode_pinyin(Scheme::Xiaohe, &code).as_deref(),
+                Some(p),
+                "音节 {p} 编码成 {code} 后解不回自己"
+            );
+        }
+    }
+
+    /// 用户实际报的场景：`fwhe` 必须解出 `fei he`。
+    #[test]
+    fn 解码飞鹤的双拼码() {
+        assert_eq!(xh("fei he"), "fwhe");
+        assert_eq!(
+            decode_pinyin(Scheme::Xiaohe, "fwhe").as_deref(),
+            Some("fei he")
+        );
+    }
+
+    /// 零声母音节也要能解（啊 爱 安 昂 儿…）。
+    #[test]
+    fn 解码零声母音节() {
+        for p in ["ai", "an", "ang", "er", "ou", "e", "a", "o"] {
+            let code = xh(p);
+            assert_eq!(
+                decode_pinyin(Scheme::Xiaohe, &code).as_deref(),
+                Some(p),
+                "零声母 {p} 解不回来"
+            );
+        }
+    }
+
+    /// 奇数长度、空串、含非法键一律返回 None —— 宁可不学，也别存一条死数据。
+    #[test]
+    fn 解码拒绝畸形码() {
+        assert!(decode_pinyin(Scheme::Xiaohe, "").is_none());
+        // 单个合法音节（`fw` = fei）是**能**解出来的，不算畸形
+        assert_eq!(decode_pinyin(Scheme::Xiaohe, "fw").as_deref(), Some("fei"));
+        assert!(decode_pinyin(Scheme::Xiaohe, "fwhef").is_none(), "奇数长度");
+        assert!(decode_pinyin(Scheme::Xiaohe, "9z9z").is_none(), "非法键");
+        // 用真正解不出来的键位：`x`+`v` 对应 `xui`，不是合法音节
+        assert!(decode_pinyin(Scheme::Xiaohe, "xvxv").is_none(), "xui 不是合法音节");
+    }
+
+    /// 多音节串逐对解开，音节间用空格连。
+    #[test]
+    fn 解码多音节用空格分隔() {
+        assert_eq!(
+            decode_pinyin(Scheme::Xiaohe, "nihc").as_deref(),
+            Some("ni hao")
+        );
+        assert_eq!(
+            decode_pinyin(Scheme::Xiaohe, "vsgo").as_deref(),
+            Some("zhong guo")
+        );
     }
 }

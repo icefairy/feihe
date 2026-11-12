@@ -246,6 +246,18 @@ object NativeEngine {
     }
 
     /**
+     * 双拼码 → 全拼（`fwhe` → `fei he`）。空串 = 码畸形。
+     *
+     * 自造词落库要全拼，而逐段选词时手上只有段码。**不能用 [pinyinOf]**：
+     * 那个函数只在词库已有该词时才给结果，用户刚造的新词恰恰不在词库里，
+     * 永远返回空 —— 这就是「组过一次词，下次还是没有」的根因。
+     */
+    fun decodePinyin(code: String): String {
+        if (code.isEmpty() || !ensureLoaded()) return ""
+        return runCatching { decodePinyinNative(code) }.getOrDefault("")
+    }
+
+    /**
      * 设置页的开关快照。`null` = 引擎没加载，设置页据此显示「引擎未就绪」而不是
      * 一排点了没反应的开关。
      */
@@ -449,6 +461,8 @@ object NativeEngine {
     private external fun learnPhraseNative(word: String, pinyin: String)
 
     private external fun pinyinOfNative(code: String, word: String): String
+
+    private external fun decodePinyinNative(code: String): String
 
     private external fun configNative(): String
 
