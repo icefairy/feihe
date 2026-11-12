@@ -130,6 +130,7 @@ object CandidateGrid {
         emptyAssist: Boolean,
         expandToggle: Boolean,
         suggestionCount: Int,
+        emailSuffixCount: Int = 0,
     ): Int =
         (if (assistChip) 1 else 0) +
             (if (otp) 1 else 0) +
@@ -138,5 +139,6 @@ object CandidateGrid {
             (if (hasNext) 1 else 0) +
             (if (emptyAssist) 1 else 0) +
             (if (expandToggle) 1 else 0) +
-            (if (suggestionCount > 0) 1 + suggestionCount else 0)
+            (if (suggestionCount > 0) 1 + suggestionCount else 0) +
+            (if (emailSuffixCount > 0) 1 + emailSuffixCount else 0)
 }

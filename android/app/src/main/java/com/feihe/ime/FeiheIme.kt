@@ -31,6 +31,7 @@ import com.feihe.ime.clip.SmsOtp
 import com.feihe.ime.engine.NativeEngine
 import com.feihe.ime.segment.SegmentState
 import com.feihe.ime.suggest.CandidateBarPolicy
+import com.feihe.ime.suggest.EmailSuggest
 import com.feihe.ime.suggest.HostContext
 import com.feihe.ime.voice.VoiceRecorder
 import com.feihe.ime.keyboard.CandidateGrid
@@ -100,6 +101,15 @@ class FeiheIme : InputMethodService() {
      * 混在一个列表里会让「按空格」这个肌肉记忆变得不可预测。
      */
     private var suggestions: List<String> = emptyList()
+
+    /**
+     * 邮箱后缀联想（`@qq.com` 这类）。
+     *
+     * 和 [suggestions] 分开存：那个是词库按上一个词给的**中文词**，这个是按光标前的
+     * **纯数字**给的邮箱后缀，来源和触发条件完全不同。混在一起的话，清词库联想时
+     * 会连邮箱候选一起清掉，反之亦然。
+     */
+    private var emailSuffixes: List<String> = emptyList()
 
     /**
      * 上一个**上屏的词**，联想基于它。
@@ -564,6 +574,51 @@ class FeiheIme : InputMethodService() {
         startSmsObserver()
         refreshCandidates()
         refreshStatus()
+    }
+
+    /**
+     * 光标或文本变了就重算邮箱联想。
+     *
+     * 用 `onUpdateSelection` 而不是只在按键时算，是因为三种情况都要覆盖：
+     * 用户点进已有文字中间、从别处粘贴一串数字、光标挪到别的输入框。
+     * 只在按键里算会漏掉这些，表现就是「有时候联想不出来」。
+     *
+     * **密码框一律不算**（[HostContext.canRead]），和读前文是同一条底线。
+     */
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(
+            oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd,
+        )
+        refreshEmailSuggest()
+    }
+
+    /**
+     * 读光标前的文字，算出邮箱后缀候选。
+     *
+     * 只在**中文候选和词库联想都没有**时才占用候选条——用户正在打中文的时候，
+     * 候选条该给字词，凭空冒出 `@qq.com` 会挤掉真正要打的字。
+     */
+    private fun refreshEmailSuggest() {
+        val canRead = HostContext.canRead(fieldType)
+        val before = if (!canRead) {
+            null
+        } else {
+            runCatching {
+                currentInputConnection?.getTextBeforeCursor(EmailSuggest.LOOKBEHIND, 0)
+            }.getOrNull()
+        }
+        val next = EmailSuggest.domainsFor(EmailSuggest.digitsFor(before))
+        if (next != emailSuffixes) {
+            emailSuffixes = next
+            renderCandidates()
+        }
     }
 
     /**
@@ -1345,6 +1400,7 @@ class FeiheIme : InputMethodService() {
             emptyAssist = emptyAssist,
             expandToggle = expandToggle,
             suggestionCount = suggestions.size,
+            emailSuffixCount = emailSuffixes.size,
         )
         while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
         while (bar.childCount < total) bar.addView(TextView(this))
@@ -1372,6 +1428,14 @@ class FeiheIme : InputMethodService() {
             nextSlot()?.let { bindSeparatorView(it) }
             suggestions.forEach { word ->
                 nextSlot()?.let { bindSuggestionView(it, word) }
+            }
+        }
+        // 邮箱后缀候选排在最后：它和词库联想都是「点一下补全」，但来源不同，
+        // 中间用同一条分隔线隔开（bindSeparatorView 已经在上面用掉了，
+        // 这里再借一格会多出一道竖线，所以直接接在后面靠视觉间距区分）。
+        if (emailSuffixes.isNotEmpty()) {
+            emailSuffixes.forEach { suffix ->
+                nextSlot()?.let { bindEmailSuffixView(it, suffix) }
             }
         }
         updateTopSlot()
@@ -1722,6 +1786,25 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
+     * 邮箱后缀候选：点了就把 `@qq.com` 接在那串数字后面。
+     *
+     * 用 18sp 而不是联想项的 20sp，是为了让 `@163.com` 这种长一点的后缀在候选条上
+     * 不至于挤成两行；颜色比联想项亮一档（主色），因为它是「补全当前输入」而不是
+     * 「接着往下写」，语义更接近候选。
+     *
+     * 字号不跟随系统字体缩放的坑这里不涉及——输入法自己控制视图，不接系统字号。
+     */
+    private fun bindEmailSuffixView(v: TextView, suffix: String) {
+        v.background = null
+        v.text = suffix
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        v.setPadding(dp(12f), 0, dp(12f), 0)
+        v.setTextColor(Palette.of(this).accent)
+        v.contentDescription = "补全邮箱后缀 $suffix"
+        v.setOnClickListener { commitEmailSuffix(suffix) }
+    }
+
+    /**
      * 画分段 chip（A1）。
      *
      * 两种视图：
@@ -1909,6 +1992,24 @@ class FeiheIme : InputMethodService() {
         refreshStatus()
     }
 
+    /**
+     * 补全邮箱后缀：把 `@qq.com` 直接接上去。
+     *
+     * 补完就把 [emailSuffixes] 清掉——后缀已经打进输入框了，再显示一遍等于
+     * 让用户有机会重复补一次，补出 `123@qq.com@163.com` 这种垃圾。
+     *
+     * 不用 commitText 替换整段邮箱：光标前那串数字是**用户自己打的**，我们只负责
+     * 补后半截。替换整段会让宿主的撤销栈、光标记录全乱（尤其是网页输入框）。
+     */
+    private fun commitEmailSuffix(suffix: String) {
+        val ic = currentInputConnection ?: return
+        ic.commitText(suffix, 1)
+        emailSuffixes = emptyList()
+        // 补完之后光标停在邮箱末尾，重新算一次：此时前文末尾是 "m" 不是数字，
+        // 自然会算出空表（这里显式调一次是为了让状态和界面同步，别只靠清空）。
+        refreshEmailSuggest()
+    }
+
     /** 点了联想词：上屏，并把联想链接着往下续（「北京 → 时间 → 安排」）。 */
     private fun commitSuggestion(word: String) {
         val ic = currentInputConnection ?: return
@@ -1988,6 +2089,10 @@ class FeiheIme : InputMethodService() {
 
     private fun commitText(text: CharSequence) {
         currentInputConnection?.commitText(text, 1)
+        // commitText 之后宿主通常会回调 onUpdateSelection，但不是所有宿主都老实
+        // （网页输入框、某些自绘控件就不回调）。邮箱联想靠前文末端的数字触发，
+        // 漏一次回调就等于「打完数字没反应」，所以这里主动补算一次，代价很小。
+        refreshEmailSuggest()
     }
 
     /** 覆盖状态条文案（语音过程用）。传 null / 不传就恢复常规状态。 */

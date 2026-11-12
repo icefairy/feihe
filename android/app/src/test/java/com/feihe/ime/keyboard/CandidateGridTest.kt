@@ -163,25 +163,29 @@ class CandidateGridTest {
         // 穷举常见组合，确认 barSlots 不小于实际绑定次数。
         for (cand in 0..9) {
             for (sug in 0..3) {
-                for (assist in listOf(false, true)) {
-                    for (otp in listOf(false, true)) {
-                        for (prev in listOf(false, true)) {
-                            for (next in listOf(false, true)) {
-                                for (toggle in listOf(false, true)) {
-                                    val slots = CandidateGrid.barSlots(
-                                        assist, otp, prev, cand, next, false, toggle, sug,
-                                    )
-                                    var need = cand
-                                    if (assist) need++
-                                    if (otp) need++
-                                    if (prev) need++
-                                    if (next) need++
-                                    if (toggle) need++
-                                    if (sug > 0) need += 1 + sug
-                                    assertEquals(
-                                        "cand=$cand sug=$sug assist=$assist otp=$otp prev=$prev next=$next toggle=$toggle",
-                                        need, slots,
-                                    )
+                for (email in 0..4) {
+                    for (assist in listOf(false, true)) {
+                        for (otp in listOf(false, true)) {
+                            for (prev in listOf(false, true)) {
+                                for (next in listOf(false, true)) {
+                                    for (toggle in listOf(false, true)) {
+                                        val slots = CandidateGrid.barSlots(
+                                            assist, otp, prev, cand, next, false, toggle, sug, email,
+                                        )
+                                        var need = cand
+                                        if (assist) need++
+                                        if (otp) need++
+                                        if (prev) need++
+                                        if (next) need++
+                                        if (toggle) need++
+                                        if (sug > 0) need += 1 + sug
+                                        if (email > 0) need += 1 + email
+                                        assertEquals(
+                                            "cand=$cand sug=$sug email=$email assist=$assist " +
+                                                "otp=$otp prev=$prev next=$next toggle=$toggle",
+                                            need, slots,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -189,5 +193,25 @@ class CandidateGridTest {
                 }
             }
         }
+    }
+
+    /**
+     * 邮箱候选要占「1 + n」格，和联想项同一套规则。
+     *
+     * 漏算这一格就是 0.3.22 那次闪退的翻版：绑定循环多绑一格而容器没扩容，
+     * getChildAt 返回 null，`as TextView` 直接 NPE。
+     */
+    @Test
+    fun `邮箱候选占一格加自身数量`() {
+        val base = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 2,
+            hasNext = false, emptyAssist = false, expandToggle = false, suggestionCount = 0,
+        )
+        val withEmail = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 2,
+            hasNext = false, emptyAssist = false, expandToggle = false, suggestionCount = 0,
+            emailSuffixCount = 4,
+        )
+        assertEquals("4 条邮箱候选要占 1 分隔 + 4 自身 = 5 格", base + 5, withEmail)
     }
 }
