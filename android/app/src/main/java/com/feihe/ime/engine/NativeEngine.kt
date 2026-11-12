@@ -206,6 +206,20 @@ object NativeEngine {
     }
 
     /**
+     * 用户从候选里选了这个词：按码记一次，下次同码它往前排。
+     *
+     * 这是「自组词」真正生效的地方。之前只有 [record]（记词对给联想用），
+     * 选词本身从来没被记住，所以自造词永远排不上来。
+     *
+     * [code] 必须是**查词用的码**（`lookupInput` 返回的那个），不是用户敲的原始
+     * 字母——全拼模式下两者不同，传错就等于记到了别的码上。
+     */
+    fun learn(code: String, word: String) {
+        if (code.isEmpty() || word.isEmpty() || !ensureLoaded()) return
+        runCatching { learnNative(code, word) }
+    }
+
+    /**
      * 设置页的开关快照。`null` = 引擎没加载，设置页据此显示「引擎未就绪」而不是
      * 一排点了没反应的开关。
      */
@@ -403,6 +417,8 @@ object NativeEngine {
     private external fun suggestNative(prev: String, limit: Int): String
 
     private external fun recordNative(prev: String, next: String)
+
+    private external fun learnNative(code: String, word: String)
 
     private external fun configNative(): String
 

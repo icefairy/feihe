@@ -34,6 +34,7 @@ import com.feihe.ime.suggest.CandidateBarPolicy
 import com.feihe.ime.suggest.EmailSuggest
 import com.feihe.ime.suggest.HostContext
 import com.feihe.ime.voice.VoiceRecorder
+import com.feihe.ime.keyboard.Backspace
 import com.feihe.ime.keyboard.CandidateGrid
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
@@ -400,6 +401,11 @@ class FeiheIme : InputMethodService() {
             return
         }
         val cm = getSystemService(ClipboardManager::class.java) ?: return
+        // hasPrimaryClip 先问一遍：部分机型（尤其中低端定制 ROM）在没有主剪贴时
+        // primaryClip 直接抛 SecurityException/NPE，被 runCatching 一吞就变成
+        // 「点了没反应」，排查时看不出任何线索。
+        val has = runCatching { cm.hasPrimaryClip() }.getOrDefault(false)
+        if (!has) return
         val clip = runCatching { cm.primaryClip }.getOrNull() ?: return
         val text = runCatching {
             if (clip.itemCount == 0) null else clip.getItemAt(0).coerceToText(this)?.toString()
@@ -557,6 +563,21 @@ class FeiheIme : InputMethodService() {
         clipEntries = next
         persistClips()
         renderClipboard()
+    }
+
+    /**
+     * 删光标前一个「字符」，代理对（emoji 这类）一次删干净。
+     *
+     * 读前文只为拿末尾两个 code unit，所以只请求 2——不能请求 1，那样拿到的
+     * 高位代理会被当成完整字符算错。
+     *
+     * 宿主拒绝读前文时退回删 1：宁可让用户对 emoji 多按一次，也不能拿不准
+     * 就删两个把真字吃掉。
+     */
+    private fun deleteOneCharBackward() {
+        val ic = currentInputConnection ?: return
+        val before = runCatching { ic.getTextBeforeCursor(2, 0) }.getOrNull()
+        ic.deleteSurroundingText(Backspace.unitsToDelete(before), 0)
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -955,7 +976,12 @@ class FeiheIme : InputMethodService() {
                 } else {
                     // 组合串空了才删文档里的字。反过来（先删文档）会把用户打了一半的
                     // 拼音吃掉，这是最容易被骂的行为之一。
-                    currentInputConnection?.deleteSurroundingText(1, 0)
+                    //
+                    // **必须按 code point 删，不能固定删 1**：emoji 是代理对，占两个
+                    // UTF-16 code unit。deleteSurroundingText(1, 0) 只会删掉代理对的
+                    // 后半截，留下半个字符（显示成乱码），用户得再按一次删除才干净——
+                    // 这就是「emoji 退格只删一半」。
+                    deleteOneCharBackward()
                     // 删掉了一个字，上一个词是什么已经说不清了
                     forgetContext()
                 }
@@ -1517,11 +1543,13 @@ class FeiheIme : InputMethodService() {
     private fun resizeCandidateHost(rows: Int) {
         val scroll = candidateScroll ?: return
         val lp = scroll.layoutParams ?: return
-        // 展开态：候选区**吃掉整个键盘的高度**（键盘区被 GONE 掉了，见
-        // applyExpandedChrome）。此时不能按行数算高度——按行数算会留一大片空白，
-        // 明明能显示 8 行却只显示 3 行。用 0 作为哨兵表示「撑满」。
+        // 展开态：候选区吃掉键盘腾出的整块高度。这里必须用**显式像素**而不是
+        // MATCH_PARENT——纵向 LinearLayout 里 MATCH_PARENT 会按可用空间收缩，
+        // 而 HorizontalScrollView 又只按自身高度裁剪子 View，结果就是「多行被裁掉，
+        // 只剩第一行」。行数 × 行高算出来的高度才是真能显示出来的高度。
         val want = if (rows <= 0) {
-            LinearLayout.LayoutParams.MATCH_PARENT
+            val n = expandedRows()
+            dp(CANDIDATE_ROW_DP * n)
         } else {
             dp(CANDIDATE_ROW_DP * rows)
         }
@@ -1542,6 +1570,15 @@ class FeiheIme : InputMethodService() {
      */
     private fun applyExpandedChrome(expanded: Boolean) {
         val kh = keyboardHost ?: return
+        // 剪贴板面板打开时，键盘是故意藏起来的。这里如果无条件 VISIBLE，
+        // 候选一刷新（打字、切页、读剪贴板）就会把键盘顶回剪贴板面板上，
+        // 表现是「点了剪贴板，面板闪一下就没了」。剪贴板态优先。
+        if (clipOpen) {
+            collapseBar?.visibility = View.GONE
+            kh.visibility = View.GONE
+            numberRowHost?.visibility = View.GONE
+            return
+        }
         val nr = numberRowHost
         collapseBar?.visibility = if (expanded) View.VISIBLE else View.GONE
         if (expanded) {
@@ -1973,6 +2010,10 @@ class FeiheIme : InputMethodService() {
             // 没有上下文可学，`record` 自己也会拒掉，这里提前跳过省一次 JNI。
             NativeEngine.record(prev, word)
         }
+        // 按「码 → 词」记一次频次：这是用户真正选了这个词，下次同码它要往前排。
+        // **必须在下面 `code = ""` 之前调**——这里 code 还是本次查询用的码。
+        // 以前只调 record（记词对），选词本身从没被记住，所以自造词永远排不上来。
+        NativeEngine.learn(code, word)
 
         pending.setLength(0)
         code = ""

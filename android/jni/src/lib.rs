@@ -355,6 +355,30 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_recordNative<'loca
     });
 }
 
+/// `NativeEngine.learnNative(code, word)` —— 用户从候选里选了这个词，按码记一次。
+///
+/// 这是**自组词**的核心：`freq::bump` 按「码 + 词」累计次数，下次同一个码查词时
+/// 这个词会往前排。在此之前 `freq::bump` 只有测试调过，生产代码里一次都没调——
+/// 所以「选过一次的词下次还是不在前面」，用户感知就是「自造词不生效」。
+///
+/// 和 `recordNative` 的区别：那个记的是「上一个词 → 这个词」的搭配（给联想用），
+/// 这个记的是「这个码 → 这个词」（给排序用）。两件事，别混。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    code: JString<'local>,
+    word: JString<'local>,
+) {
+    let c = read_string(&mut env, &code);
+    let w = read_string(&mut env, &word);
+    let _ = std::panic::catch_unwind(|| {
+        if !c.is_empty() && !w.is_empty() {
+            feihe_core::freq::bump(&c, &w);
+        }
+    });
+}
+
 /// `NativeEngine.configNative()` —— 设置页要显示的开关快照，`key=value;…`。
 ///
 /// 用「自己拼串」而不是 JSON：这里只有五个布尔/枚举，引序列化库得不偿失，

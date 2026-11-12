@@ -296,10 +296,11 @@ object KeyboardView {
         ctx: Context,
         key: Key,
         shift: ShiftState = ShiftState.OFF,
-    ): GradientDrawable {
+    ): android.graphics.drawable.Drawable {
         val p = Palette.of(ctx)
         val radius = dp(ctx, 6f).toFloat()
-        return GradientDrawable().apply {
+
+        fun base(): GradientDrawable = GradientDrawable().apply {
             cornerRadius = radius
             setColor(
                 when {
@@ -318,6 +319,36 @@ object KeyboardView {
             // 底部一条深色描边当"键帽影子"，纯色方块看着不像能按的东西
             setStroke(dp(ctx, 1f), p.stroke)
         }
+
+        // 按下态：整键压暗一档。以前只有一个静态 GradientDrawable，手指按下去
+        // 屏幕毫无变化，用起来像「没点着」，尤其在打长句时很没底。
+        // 用 StateListDrawable 而不是在 OntouchListener 里改背景，是因为键的
+        // 背景还有 ⇧ 点亮等状态，手势回调里改会把那些状态冲掉。
+        val pressed = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(blend(p.keyBg, 0xFF000000.toInt(), 0.18f))
+            setStroke(dp(ctx, 1f), p.stroke)
+        }
+        return android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), pressed)
+            addState(intArrayOf(), base())
+        }
+    }
+
+    /**
+     * 把 [color] 向 [toward] 混 [ratio]，用来生成按下态颜色。
+     *
+     * 手写而不是用 `ColorUtils`：那要引入 androidx.core，为一个小函数把整个
+     * core 拖进来不值。ARGB 四个通道分别插值即可。
+     */
+    private fun blend(color: Int, toward: Int, ratio: Float): Int {
+        val r = ratio.coerceIn(0f, 1f)
+        fun ch(shift: Int): Int {
+            val a = (color shr shift) and 0xFF
+            val b = (toward shr shift) and 0xFF
+            return (a + (b - a) * r).toInt().coerceIn(0, 255) shl shift
+        }
+        return ch(24) or ch(16) or ch(8) or ch(0)
     }
 
     private fun accessibilityLabel(key: Key, shift: ShiftState = ShiftState.OFF): String = when (key.kind) {
