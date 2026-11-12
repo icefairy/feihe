@@ -109,6 +109,42 @@ class QwertyLayoutTest {
     }
 
     /**
+     * **英文模式的上滑里不能有一丝中文标点。**
+     *
+     * 这条是被用户实测抓出来的：切到英文后第二排 K/L 还是弯引号 `“ ”`，
+     * 而且整个键盘没有直引号 `'` `"`——写代码、填 JSON、发命令行时
+     * 弯引号一律是非法字符，用户只能切回中文或进符号页。
+     *
+     * 白名单式断言（不是黑名单）：把英文表里允许出现的字符全列出来，
+     * 多一个就报错。这样以后有人往表里加中文标点会被当场拦住，
+     * 而不是等用户用到才发现。
+     */
+    @Test
+    fun `英文上滑只有半角符号`() {
+        val allowed = "1234567890-/:;()~'\"@#&?!…,."
+        val bad = QwertyLayout.swipeMap(chinese = false).entries
+            .filter { it.value.any { c -> c !in allowed } }
+            .map { "${it.key}→${it.value}" }
+        assertTrue("英文上滑里混进了非半角字符：$bad", bad.isEmpty())
+    }
+
+    /** 英文模式必须能直接打出单引号和双引号（代码/JSON/命令行刚需）。 */
+    @Test
+    fun `英文上滑有单双引号`() {
+        val en = QwertyLayout.swipeMap(chinese = false).values
+        assertTrue("英文上滑缺单引号 '", "'" in en)
+        assertTrue("英文上滑缺双引号 \"", "\"" in en)
+    }
+
+    /** 中文模式仍要保留弯引号——中文排版里直引号是错的。 */
+    @Test
+    fun `中文上滑保留中文双引号`() {
+        val zh = QwertyLayout.swipeMap(chinese = true).values
+        assertTrue("中文上滑缺左弯引号 “", "“" in zh)
+        assertTrue("中文上滑缺右弯引号 ”", "”" in zh)
+    }
+
+    /**
      * 每个字母键都要有上滑字符，且互不重复。
      *
      * 少了某一个 → 那个键上滑没反应（用户会以为手势时灵时不灵）；重复 → 两个键
