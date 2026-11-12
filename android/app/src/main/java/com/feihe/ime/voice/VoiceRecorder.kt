@@ -33,11 +33,16 @@ class VoiceRecorder(
     private val ctx: Context,
     private val onState: (State) -> Unit,
     private val onResult: (String) -> Unit,
+    /** 每帧 PCM 的音量（0f..1f），给波形用。在后台线程回调，实现里要自己切主线程。 */
+    private val onLevel: (Float) -> Unit = {},
 ) {
     enum class State { IDLE, LOADING, RECORDING, RECOGNIZING, NO_PERMISSION, NO_MODEL, FAILED, EMPTY }
 
     private val main = Handler(Looper.getMainLooper())
     private var thread: Thread? = null
+
+    /** 上一次上报音量的时刻（毫秒）。用来把回调节流到 [LEVEL_INTERVAL_MS]。 */
+    private var lastLevelAt = 0L
 
     @Volatile
     private var recording = false
@@ -113,6 +118,14 @@ class VoiceRecorder(
             while (recording && speech.size < maxSamples) {
                 val n = record.read(pcm, 0, pcm.size)
                 if (n <= 0) continue
+                // 音量给波形。**节流到约 30ms 一次**：AudioRecord 一帧 512 点只有
+                // 16ms，每帧都 post 到主线程等于每秒 60 次跨线程唤醒 + 一次重绘，
+                // 录音期间把 UI 拖卡不值得，30ms 已经看不出顿。
+                val now = System.currentTimeMillis()
+                if (now - lastLevelAt >= LEVEL_INTERVAL_MS) {
+                    lastLevelAt = now
+                    onLevel(VoiceWave.levelOf(pcm, n))
+                }
                 val frame = VoiceEngine.pcm16ToFloat(pcm.copyOf(n))
                 VoiceEngine.withEngine(ctx) { _, vad ->
                     vad.acceptWaveform(frame)
@@ -175,5 +188,14 @@ class VoiceRecorder(
 
     private companion object {
         const val TAG = "FeiheVoice"
+
+        /**
+         * 音量上报间隔（毫秒）。
+         *
+         * AudioRecord 一帧 512 点只有 16ms；每帧都跨线程 post 一次，等于每秒 60 次
+         * 主线程唤醒 + 一次重绘，录音期间白白拖慢 UI。30ms 约等于 33fps，
+         * 波形看着依然连续，但开销降到一半。
+         */
+        const val LEVEL_INTERVAL_MS = 30L
     }
 }

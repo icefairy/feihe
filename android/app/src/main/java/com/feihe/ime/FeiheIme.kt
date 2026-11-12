@@ -199,6 +199,21 @@ class FeiheIme : InputMethodService() {
     private var micButton: TextView? = null
     private var statusBar: LinearLayout? = null
     private var voice: VoiceRecorder? = null
+
+    /** 当前语音状态。麦克风按钮是两态开关，必须知道「现在录没录」才能决定点了做什么。 */
+    private var voiceState = VoiceRecorder.State.IDLE
+
+    /** 录音波形，显示在候选条位置。空闲时应为 GONE。 */
+    private var voiceWave: com.feihe.ime.voice.VoiceWaveView? = null
+
+    /**
+     * 语音回调跨线程切主线程用。
+     *
+     * 用 Handler(Looper.getMainLooper()) 而不是 View.post：`InputMethodService`
+     * 不是 View，没有 post 方法；而 InputMethodService 本身在自己线程上有 Handler，
+     * 但这里要的是「主线程」这个确定的语义。
+     */
+    private val voiceUiHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var voiceEnabled = true
     private var candidateBar: LinearLayout? = null
     private var candidateScroll: HorizontalScrollView? = null
@@ -299,6 +314,10 @@ class FeiheIme : InputMethodService() {
                 clearComposing()
                 commitText(text)
                 forgetContext()
+            },
+            // 音量回调在录音线程，必须切主线程再动 View
+            onLevel = { lv ->
+                voiceUiHandler.post { voiceWave?.push(lv) }
             },
         )
         readUiPrefs()
@@ -755,30 +774,19 @@ class FeiheIme : InputMethodService() {
             setOnClickListener { toggleClipboard() }
         }
 
-        // 麦克风：按住说话、松手识别。**用 OnTouch 而不是 OnClick**：两态按钮用户
-        // 分不清现在是录还是没录，而输入法窗口没地方放录音红灯。
+        // 麦克风：**单击开始、再单击结束**。
+        //
+        // 以前是按住说话（OnTouch DOWN 开录 / UP 停录），但状态条上的按钮离
+        // 屏幕底边很近，长按容易滑出去触发 ACTION_CANCEL；而且用户腾不出另一只手
+        // 去点「结束」。改成两态开关后，录多久都行，状态条会显示「正在录音」。
         micButton = TextView(this).apply {
             text = "🎤"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             gravity = Gravity.CENTER
             setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
-            contentDescription = "按住说话"
+            contentDescription = "语音输入"
             visibility = if (voiceEnabled) View.VISIBLE else View.GONE
-            setOnTouchListener { v, ev ->
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        v.isPressed = true
-                        voice?.start()
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        v.isPressed = false
-                        voice?.stop()
-                        true
-                    }
-                    else -> false
-                }
-            }
+            setOnClickListener { toggleVoice() }
         }
 
         statusBar = LinearLayout(this).apply {
@@ -843,6 +851,26 @@ class FeiheIme : InputMethodService() {
         // applyExpandedChrome 决定，另一个 GONE（GONE 不占高度）。
         root.addView(
             expandedColumn,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(CANDIDATE_ROW_DP),
+            ),
+        )
+
+        // 录音波形：占用和候选条**同一个槽位**（第三个并列子 View）。
+        //
+        // 不和候选条叠放、也不插在候选条上下：录音时用户不看候选，
+        // 而候选条的高度是固定的（CANDIDATE_ROW_DP），波形用同一格高度
+        // 就不会让整个键盘在录音瞬间跳一下。
+        //
+        // 三个容器永远最多一个可见：候选（收起）/ 展开候选 / 波形。
+        voiceWave = com.feihe.ime.voice.VoiceWaveView(this).apply {
+            visibility = View.GONE
+            setPadding(dp(10f).toInt(), dp(6f).toInt(), dp(10f).toInt(), dp(6f).toInt())
+            setTint(Palette.of(this@FeiheIme).accent)
+        }
+        root.addView(
+            voiceWave,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(CANDIDATE_ROW_DP),
@@ -993,6 +1021,19 @@ class FeiheIme : InputMethodService() {
                 shiftState,
                 KeyboardPages.rowHeightDp(target),
                 onLongKey = { onLongKey(it) },
+                // 空格键松手：如果这次长按已经进了语音，抬起就结束录音。
+                //
+                // 注意也要处理 LOADING：模型冷加载要几秒，用户可能已经松手了，
+                // 此时 voiceState 还停在 LOADING，录音线程刚起来就要收工。
+                // 直接调 stop() 会把 recording 标志清掉，线程进循环立刻退出，
+                // 结果是「按了、说了、什么也没发生」。
+                onVoiceUp = {
+                    if (voiceState == VoiceRecorder.State.RECORDING ||
+                        voiceState == VoiceRecorder.State.LOADING
+                    ) {
+                        voice?.stop()
+                    }
+                },
             ) { onKey(it) },
         )
         // 建完就把中/英键的字刷成当前模式：换页重建后不能又变回「中」
@@ -1007,16 +1048,58 @@ class FeiheIme : InputMethodService() {
         runCatching { startActivity(i) }
     }
 
+    /**
+     * 麦克风按钮：单击开始录音，再单击结束录音并识别。
+     *
+     * 只有 [VoiceRecorder.State.RECORDING] 需要「再点一下结束」；LOADING 阶段用户
+     * 可能想取消（模型冷加载要几秒），也允许点击中止。其余状态点击都是「开始」。
+     */
+    private fun toggleVoice() {
+        val v = voice ?: return
+        val state = voiceState
+        if (state == VoiceRecorder.State.RECORDING) {
+            // 再点一下：停止录音，剩下的交给识别
+            v.stop()
+            return
+        }
+        if (state == VoiceRecorder.State.LOADING || state == VoiceRecorder.State.RECOGNIZING) {
+            // 加载/识别中再点：不重复开录，避免两个线程抢 AudioRecord
+            return
+        }
+        voiceWave?.resume()
+        v.start()
+    }
+
     /** 语音状态 → 状态条提示。权限/模型缺失给一句能照做的话，不静默失败。 */
     private fun onVoiceState(s: VoiceRecorder.State) {
-        micButton?.text = if (s == VoiceRecorder.State.RECORDING ||
-            s == VoiceRecorder.State.RECOGNIZING ||
-            s == VoiceRecorder.State.LOADING
-        ) "🔴" else "🎤"
+        voiceState = s
+        val listening = s == VoiceRecorder.State.RECORDING
+        val busy = listening || s == VoiceRecorder.State.RECOGNIZING || s == VoiceRecorder.State.LOADING
+        micButton?.text = when {
+            listening -> "⏹"
+            busy -> "…"
+            else -> "🎤"
+        }
+        // 波形只在这三态下露头：正在收音/正在识别/加载模型。
+        // 其余状态（空闲、报错、没权限）藏起来，让候选条回到正常位置——
+        // 一直挂着一条静止的波形会让用户以为还在听。
+        voiceWave?.visibility = if (busy) View.VISIBLE else View.GONE
+        // 录音时不显示候选：候选条和波形是同一个高度槽位，同时出现会叠在一起。
+        // 这里的 visibility 会被 updateTopSlot 覆盖，所以 updateTopSlot 里也要认
+        // 「正在录音」这个条件（见那里的注释）。
+        if (busy) {
+            candidateScroll?.visibility = View.GONE
+            expandedColumn?.visibility = View.GONE
+        }
         when (s) {
             VoiceRecorder.State.LOADING -> refreshStatus("正在加载语音模型…")
-            VoiceRecorder.State.RECORDING -> refreshStatus("正在录音，松手上屏")
-            VoiceRecorder.State.RECOGNIZING -> refreshStatus("正在识别…")
+            // 改成交互开关后，提示语必须改：以前是「松手上屏」，现在松手什么也不会发生
+            VoiceRecorder.State.RECORDING -> refreshStatus("正在录音，再点一下结束")
+            VoiceRecorder.State.RECOGNIZING -> {
+                refreshStatus("正在识别…")
+                // 识别阶段不再收音，波形定格并调暗——这是「我说完了、它在算」的信号
+                voiceWave?.freeze()
+            }
             VoiceRecorder.State.NO_PERMISSION -> {
                 refreshStatus("需要麦克风权限，请在设置里开启语音输入")
                 Toast.makeText(this, "请先授权麦克风权限", Toast.LENGTH_SHORT).show()
@@ -1299,8 +1382,25 @@ class FeiheIme : InputMethodService() {
         }
     }
 
-    /** 长按回调。目前只有 ⇧ 用：切锁定态。⌫ 的连删在 KeyboardView 内部消化了。 */
+    /** 长按回调。⇧ 切锁定态；空格键长按说话（松手上屏）。⌫ 的连删在 KeyboardView 内部消化了。 */
     private fun onLongKey(key: Key) {
+        if (key.kind == KeyKind.SPACE) {
+            // 长按空格 = 按住说话。这是「手里已经在打字，突然想说一句」的最短路径：
+            // 不用抬手去够状态条上的麦克风。
+            //
+            // 只处理「开始」；结束靠松开时 KeyboardView 发的 ACTION_UP（见下面 pump）。
+            // 正在录音或者已有语音占着槽位时忽略，避免两个录音线程抢 AudioRecord。
+            if (voiceState == VoiceRecorder.State.RECORDING ||
+                voiceState == VoiceRecorder.State.LOADING ||
+                voiceState == VoiceRecorder.State.RECOGNIZING
+            ) {
+                return
+            }
+            if (!voiceEnabled) return
+            voiceWave?.resume()
+            voice?.start()
+            return
+        }
         if (key.kind != KeyKind.SHIFT) return
         shiftState = ShiftMachine.onLongPress(shiftState)
         KeyboardView.applyShiftState(keyboardHost, shiftState)
@@ -1921,6 +2021,22 @@ class FeiheIme : InputMethodService() {
     private fun updateTopSlot() {
         val typing = quickMode || pending.isNotEmpty() || candidates.isNotEmpty() ||
             suggestions.isNotEmpty() || segmentState != null || otpCode != null
+        // 语音占着这个槽位时（录音/识别/加载模型），候选和状态条都不该露面：
+        // 三者是同一个位置，同时可见会叠在一起。
+        val voiceBusy = voiceState == VoiceRecorder.State.RECORDING ||
+            voiceState == VoiceRecorder.State.RECOGNIZING ||
+            voiceState == VoiceRecorder.State.LOADING
+        if (voiceBusy) {
+            // **只让出候选条，不能让状态条消失。**
+            //
+            // 状态条上有麦克风按钮和「正在录音，再点一下结束」这句提示：
+            // 隐藏它等于把唯一的操作入口和反馈一起藏了，用户只能等录音自己结束。
+            // 波形和候选条是同一个槽位，两者才需要互斥。
+            statusBar?.visibility = View.VISIBLE
+            candidateScroll?.visibility = View.GONE
+            expandedColumn?.visibility = View.GONE
+            return
+        }
         statusBar?.visibility = if (typing) View.GONE else View.VISIBLE
         // 展开态下这一槽由 expandedColumn 接管，candidateScroll 必须保持 GONE，
         // 否则两个容器同时 VISIBLE，一个固定一行高、一个吃掉剩余高度，视觉上叠在一起。

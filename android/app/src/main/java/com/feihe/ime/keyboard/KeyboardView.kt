@@ -23,6 +23,15 @@ object KeyboardView {
     private const val KEY_HEIGHT_DP = 46f
     private const val GAP_DP = 3f
 
+/**
+ * 空格键按住多久进语音（毫秒）。
+ *
+ * 系统长按判定是 500ms，说一句话前要干等半秒，手感很糟。220ms 大约是
+ * 「明确按住」和「只是打字手滑」的分界：正常打空格通常 60~120ms，
+ * 想说话时手指会自然多停留一会儿。
+ */
+private const val VOICE_HOLD_MS = 220L
+
     /**
      * 上档键的 tag。
      *
@@ -43,6 +52,7 @@ object KeyboardView {
         shift: ShiftState = ShiftState.OFF,
         rowHeightDp: Float = KEY_HEIGHT_DP,
         onLongKey: (Key) -> Unit = {},
+        onVoiceUp: () -> Unit = {},
         onKey: (Key) -> Unit,
     ): View {
         val p = Palette.of(ctx)
@@ -68,7 +78,10 @@ object KeyboardView {
             ).apply { bottomMargin = dp(ctx, GAP_DP) }
 
             for (key in row) {
-                rowView.addView(makeKey(ctx, key, shift, onLongKey, onKey), keyParams(ctx, key))
+                rowView.addView(
+                    makeKey(ctx, key, shift, onLongKey, onVoiceUp, onKey),
+                    keyParams(ctx, key),
+                )
             }
             root.addView(rowView, lp)
         }
@@ -129,12 +142,27 @@ object KeyboardView {
         key: Key,
         shift: ShiftState,
         onLongKey: (Key) -> Unit,
+        onVoiceUp: () -> Unit,
         onKey: (Key) -> Unit,
     ): View {
         val p = Palette.of(ctx)
         val lit = key.kind == KeyKind.SHIFT && shift != ShiftState.OFF
+        // 空格键长按说话的状态。每建一个键就重置：键盘页切换后旧的判定必须作废，
+        // 否则「上一页按到一半的长按」会误触发新页面上的语音。
+        var voiceHoldTriggered = false
+        val voiceHoldRunnable = Runnable {
+            voiceHoldTriggered = true
+            onLongKey(key)
+        }
         val view = TextView(ctx).apply {
-            text = if (key.kind == KeyKind.SHIFT) shiftLabel(shift) else key.label
+            text = when {
+                key.kind == KeyKind.SHIFT -> shiftLabel(shift)
+                // 空格键带一个麦克风小字，提示「按住可以说话」。
+                // 用 ⌾ 而不是 🎤：emoji 在 16sp 下会被系统画成彩色方块，
+                // 压过空格键本身；这个符号是单色字形，跟着 fnText 颜色走。
+                key.kind == KeyKind.SPACE -> "⌾ 空格"
+                else -> key.label
+            }
             gravity = Gravity.CENTER
             // 数字/符号页的键比字母页宽得多，字符也跟着放大一点，不然看着像空的
             setTextSize(
@@ -171,6 +199,39 @@ object KeyboardView {
                     }
                 }, 350)
                 true
+            }
+        }
+
+        // 空格键长按 = 按住说话。
+        //
+        // **必须自己接管 OnTouch 而不能只用 setOnLongClickListener**：后者只在
+        // 「长按判定成功」那一刻回调一次，收不到「手指抬起」。而按住说话的语义
+        // 是「抬起 = 说完了」，收不到 UP 就永远停不下来录音。
+        //
+        // 这里不用系统长按判定（LONG_PRESS_TIMEOUT 500ms 太长，说一句话要等半秒），
+        // 自己定 [VOICE_HOLD_MS]：短于它的当普通空格，长于它的进语音。
+        if (key.kind == KeyKind.SPACE) {
+            view.setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.isPressed = true
+                        voiceHoldTriggered = false
+                        v.postDelayed(voiceHoldRunnable, VOICE_HOLD_MS)
+                        false // 放行给 OnClickListener：没到时长就是普通空格
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.isPressed = false
+                        v.removeCallbacks(voiceHoldRunnable)
+                        if (voiceHoldTriggered) {
+                            voiceHoldTriggered = false
+                            onVoiceUp()
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    else -> false
+                }
             }
         }
 
