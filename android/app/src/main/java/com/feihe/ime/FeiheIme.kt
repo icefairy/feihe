@@ -207,6 +207,12 @@ class FeiheIme : InputMethodService() {
     /** 录音波形，显示在候选条位置。空闲时应为 GONE。 */
     private var voiceWave: com.feihe.ime.voice.VoiceWaveView? = null
 
+    /** 英文单词建议（系统拼写检查器给的）。只在英文组合态非空。 */
+    private var englishWords: List<String> = emptyList()
+
+    /** 英文建议查询器。懒建：只有真用到英文输入才连系统服务。 */
+    private var englishSuggest: com.feihe.ime.engine.EnglishSuggest? = null
+
     /**
      * 语音回调跨线程切主线程用。
      *
@@ -329,6 +335,10 @@ class FeiheIme : InputMethodService() {
                 voiceUiHandler.post { voiceWave?.push(lv) }
             },
         )
+        // 英文建议器：懒连接系统拼写检查服务，第一次用英文输入时才建
+        englishSuggest = com.feihe.ime.engine.EnglishSuggest(this).apply {
+            onResult = { prefix, words -> onEnglishSuggest(prefix, words) }
+        }
         readUiPrefs()
         clipEntries = ClipHistory.decode(
             runCatching { clipFile().takeIf { it.isFile }?.readText().orEmpty() }.getOrDefault("")
@@ -1187,6 +1197,23 @@ class FeiheIme : InputMethodService() {
         }
     }
 
+    /**
+     * 点了英文单词建议：用它**替换**输入框里未确认的那串。
+     *
+     * `commitText` 会把当前组合区整体替换掉，正好是「把 hel 换成 hello」
+     * 这个语义。绝不能用 append——那会得到 helhello。
+     */
+    private fun pickEnglishWord(word: String) {
+        val ic = currentInputConnection ?: return
+        ic.commitText(word, 1)
+        pending.setLength(0)
+        englishWords = emptyList()
+        englishSuggest?.query("")
+        refreshCandidates()
+        refreshStatus()
+        forgetContext()
+    }
+
     private fun onKey(key: Key) {
         when (key.kind) {
             KeyKind.CHAR -> {
@@ -1244,30 +1271,23 @@ class FeiheIme : InputMethodService() {
                     pushComposing()
                     return
                 }
-                // **英文态：字母直接上屏，不进组合串。**
+                // **英文态：字母进组合态（带下划线），不是直接上屏。**
                 //
-                // 这是英文输入的本义：按哪个键屏幕就出哪个字母，没有「先攒着
-                // 等空格确认」这一步。以前这里不分中英，一律 `pending.append`，
-                // 于是英文模式按 A 会在候选条里出现一个 A，用户还得再按空格
-                // 才上屏；连打 hello 就是攒出一串字母再整体上屏，完全是拼音的
-                // 行为——用户说的「英文模式下应该直接点了就上屏」就是这条。
+                // 参照豆包输入法的行为（用户实测那套用着习惯）：
+                //   - 打字母 → 进输入框但**带下划线**（未确认状态，setComposingText）
+                //   - 候选栏同时给出英文单词建议
+                //   - 点候选 → 用它替换掉未确认的那串
+                //   - 不点候选、直接空格/回车 → 原文确认上屏
+                //
+                // 为什么不能像拼音那样攒在 pending 里只显示在候选条：英文单词
+                // 长度不定，用户需要「边打边看到自己在打什么」。组合态让字母
+                // 直接出现在光标处、又保留可被候选替换的可能，这才是对的模型。
+                //
+                // 注意这里**不再清空 pending**——英文也用它攒字母，只是渲染
+                // 走组合态那条路（见 pushComposingEnglish）。
                 if (!chinese) {
-                    commitText(key.code)
-                    // **必须把组合串清干净**：英文态不攒码，但 pending 里可能
-                    // 残留切换模式前打着的中文拼音。不清的话候选条会继续挂着
-                    // 那串旧码的候选，用户看到「英文模式下还有候选」。
-                    pending.setLength(0)
-                    code = ""
-                    candidates = emptyList()
-                    pendingSegments = emptyList()
-                    segmentState = null
-                    suggestions = emptyList()
-                    // 形码态也要退掉：它是中文输入的子模式，英文态留着
-                    // 会让候选条继续挂一个「形」按钮和半截筛选结果。
-                    resetAssist()
-                    refreshCandidates()
-                    refreshStatus()
-                    forgetContext()
+                    pending.append(key.code)
+                    pushComposingEnglish()
                     return
                 }
                 pending.append(key.code)
@@ -1275,6 +1295,32 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.DELETE -> {
+                // **英文组合态：退格删掉未确认的最后一个字母。**
+                //
+                // 必须放在最前面：中文那条路会「整词 → 单字」拆段，对英文字母
+                // 毫无意义，硬走会把 hello 变成一个莫名其妙的候选状态。
+                //
+                // 删空之后不再继续删宿主的字符——组合区已经空了，再删会吃掉
+                // 用户之前打的空格或上一个词。
+                if (!chinese) {
+                    if (pending.isNotEmpty()) {
+                        pending.setLength(pending.length - 1)
+                        if (pending.isEmpty()) {
+                            // 组合区空了：必须用空串再 set 一次，宿主才会撤掉下划线
+                            currentInputConnection?.setComposingText("", 1)
+                            englishWords = emptyList()
+                            englishSuggest?.query("")
+                            refreshCandidates()
+                            refreshStatus()
+                        } else {
+                            pushComposingEnglish()
+                        }
+                    } else {
+                        deleteOneCharBackward()
+                        forgetContext()
+                    }
+                    return
+                }
                 // 形码态：先删形码；删空之后再按一次退出形码态（不回退去删拼音）。
                 if (assistActive) {
                     if (assistKeys.isNotEmpty()) {
@@ -1342,6 +1388,20 @@ class FeiheIme : InputMethodService() {
                     if (quickWords.isNotEmpty()) commitQuick(quickWords.first()) else commitPending()
                     return
                 }
+                // **英文组合态：空格 = 确认原文，再补一个空格。**
+                //
+                // 这是豆包的行为：打了 hel 还没选候选就按空格，那就认下 hel
+                // 然后往后空一格。用户不需要额外操作「确认」。
+                //
+                // 先 commit 再打空格，两步分开：合成一次 commitText("hel ")
+                // 虽然结果一样，但组合态的语义要求先把未确认区结束掉，
+                // 某些宿主（WebView）对「带空格一起 commit」处理不一致。
+                if (!chinese && pending.isNotEmpty()) {
+                    commitEnglishComposing()
+                    commitText(" ")
+                    forgetContext()
+                    return
+                }
                 // 分段态：空格 = 整句上屏（chip 视图末尾写了「↵上屏」提示）。
                 // 必须放在最前面，否则会落到「选第一个候选」把整句当成第一条候选。
                 if (commitSegmentIfActive()) return
@@ -1386,6 +1446,11 @@ class FeiheIme : InputMethodService() {
 
             KeyKind.ENTER -> {
                 if (quickMode) quickMode = false
+                // 英文组合态：回车先确认原文，再换行。和空格同一条规则——
+                // 用户打了半个词直接回车，本意是「就这样，换行」，不是「丢掉」。
+                if (!chinese && pending.isNotEmpty()) {
+                    commitEnglishComposing()
+                }
                 if (!commitSegmentIfActive()) commitPending()
                 commitText("\n")
                 forgetContext()
@@ -1589,6 +1654,50 @@ class FeiheIme : InputMethodService() {
         refreshStatus()
     }
 
+    /**
+     * 英文组合态：字母进输入框并**带下划线**（未确认），同时查单词建议。
+     *
+     * 这就是豆包输入法的英文行为：输入框里能看到自己在打什么，
+     * 下面给单词候选；点候选就替换，按空格/回车就确认原文。
+     *
+     * `setComposingText` 正是「未确认」的官方语义：宿主会画下划线，
+     * 之后的 `commitText` 或再次 `setComposingText` 都不会留下残影。
+     */
+    private fun pushComposingEnglish() {
+        val ic = currentInputConnection ?: return
+        ic.setComposingText(pending.toString(), 1)
+        refreshStatus()
+        // 建议是异步的（跨进程问系统拼写检查器），回来再渲染
+        englishSuggest?.query(pending.toString())
+    }
+
+    /** 英文建议回来了：存起来并只重画候选条，不动输入框。 */
+    private fun onEnglishSuggest(prefix: String, words: List<String>) {
+        // 用户在等待期间又改了词 → 这批结果作废
+        if (!chinese && prefix != pending.toString()) return
+        englishWords = words
+        renderCandidates()
+    }
+
+    /**
+     * 结束英文组合态：把当前未确认的字母变成正式文本。
+     *
+     * `commitText` 会把组合区替换成同样的内容，效果就是「确认」——
+     * 下划线消失，字符留下。空格键和回车键都走这里。
+     */
+    private fun commitEnglishComposing(): Boolean {
+        if (chinese || pending.isEmpty()) return false
+        val ic = currentInputConnection ?: return false
+        ic.commitText(pending.toString(), 1)
+        pending.setLength(0)
+        englishWords = emptyList()
+        englishSuggest?.query("")
+        refreshCandidates()
+        refreshStatus()
+        forgetContext()
+        return true
+    }
+
     /** 形码最多几键：自然码 1、小鹤 2、关闭 0。和 core 的 `AssistMode::max_keys` 对齐。 */
     private fun assistMaxKeys(): Int = when (assistMode) {
         "ziranma" -> 1
@@ -1765,20 +1874,37 @@ class FeiheIme : InputMethodService() {
     private fun renderCandidates() {
         val col = candidateColumn ?: return
         renderNumberRow()
-        // **英文态一条候选都不画。**
+        // **英文态：只画单词建议，不画中文候选。**
         //
-        // 英文没有「候选」这个概念：按哪个键就该出哪个字母。以前英文模式下
-        // 候选条会残留切换前的中文候选（甚至「形」按钮和数字序号），
-        // 用户看到的是「英文模式还在联想」。
+        // 参照豆包：英文输入时候选栏给单词补全（hello/help…），点一下替换掉
+        // 输入框里未确认的那串。没有建议时整个候选条隐藏，键盘上不留空条。
         //
         // 放在最前面而不是在末尾清空：后面几十行绑定逻辑全部跳过，
-        // 也杜绝了「某条分支忘了检查 chinese」再次漏出候选的可能。
+        // 也杜绝了「某条分支忘了检查 chinese」再次漏出中文候选的可能。
         if (!chinese && !quickMode) {
-            candidateScroll?.visibility = View.GONE
-            expandedScroll?.visibility = View.GONE
-            expandedColumn?.removeAllViews()
             resetAssist()
             suggestions = emptyList()
+            val words = englishWords
+            if (words.isEmpty()) {
+                candidateScroll?.visibility = View.GONE
+                expandedScroll?.visibility = View.GONE
+                expandedColumn?.removeAllViews()
+                updateTopSlot()
+                return
+            }
+            expandedScroll?.visibility = View.GONE
+            expandedColumn?.removeAllViews()
+            candidateScroll?.visibility = View.VISIBLE
+            val bar = ensureSingleRow(col)
+            while (bar.childCount > words.size) bar.removeViewAt(bar.childCount - 1)
+            while (bar.childCount < words.size) bar.addView(TextView(this))
+            words.forEachIndexed { idx, word ->
+                val v = bar.getChildAt(idx) as TextView
+                bindCandidateView(v, word, idx == 0)
+                // 重绑点击：bindCandidateView 里绑的是中文 commitWord 那条路，
+                // 英文必须走「替换组合区」，否则会把建议词追加在原词后面。
+                v.setOnClickListener { pickEnglishWord(word) }
+            }
             updateTopSlot()
             return
         }

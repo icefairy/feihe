@@ -85,7 +85,10 @@ class QwertyLayoutTest {
         val right = bottom.getOrNull(spaceIdx + 1)
         assertTrue(
             "空格右边是「${right?.label}」，不该是打字键或标点",
-            right == null || right.kind in listOf(KeyKind.PAGE, KeyKind.ENTER, KeyKind.DELETE),
+            // MODE（中/英）是功能键，不产生字符。原来这里漏了它——
+            // 参照豆包把「中」挪到空格右边后，这条断言就误报了。
+            right == null || right.kind in
+                listOf(KeyKind.PAGE, KeyKind.ENTER, KeyKind.DELETE, KeyKind.MODE),
         )
     }
 
@@ -181,20 +184,40 @@ class QwertyLayoutTest {
     }
 
     /**
-     * 底排空格必须**居中**。
+     * 空格要居中，但**允许偏左一点**。
      *
-     * 用户反馈「空格太偏右」。原来左边 123/中/😊/⌘ 共 3.6，右边只有回车 1.2，
-     * 空格被挤到右边。现在左右各 2.6，用权重相等来保证视觉居中——
-     * 权重就是实际宽度，所以这条能直接测出来。
+     * 历史：这里原来断言左右权重**严格相等**。那是「底排只有 123/中/空格/😊/⌘/↵
+     * 且回车=1.0」时的配平方式。
+     *
+     * 现在参照豆包输入法改了两处，两个改动都把权重推向右边：
+     * - 回车从 1.0 提到 1.8（用户明确要求，原来太窄按不中）；
+     * - 「中」从空格左边挪到右边（豆包/iOS 的放法）。
+     *
+     * 右边自然比左边重，空格中心落在 44% 左右。豆包自己也是 46%，
+     * 实测没人觉得歪。硬要相等就得把回车压回 1.0，那是退步。
+     *
+     * 所以断言改成「偏左但不超过一个键宽」：中心在 40%~50%。
+     * 这条仍然能抓住真正的错配（比如权重写反、回车又变窄）。
      */
     @Test
-    fun `空格左右权重相等所以居中`() {
+    fun `空格居中 但允许参照豆包略偏左`() {
         val bottom = QwertyLayout.rows.last()
         val spaceIdx = bottom.indexOfFirst { it.kind == KeyKind.SPACE }
         assertTrue("底排必须有空格", spaceIdx >= 0)
         val left = bottom.take(spaceIdx).sumOf { it.weight.toDouble() }
         val right = bottom.drop(spaceIdx + 1).sumOf { it.weight.toDouble() }
-        assertEquals("空格左边权重 $left 与右边 $right 必须相等才居中", left, right, 0.001)
+        val total = left + right + bottom[spaceIdx].weight
+        val centerPct = (left + bottom[spaceIdx].weight / 2) / total * 100
+
+        assertTrue(
+            "空格中心应在 40%~50%（偏左不超过 10%），实际 ${"%.1f".format(centerPct)}%",
+            centerPct in 40.0..50.0,
+        )
+        // 差值不能太大：超过两个键宽就是布局真的失衡了
+        assertTrue(
+            "左右权重差 ${right - left} 过大",
+            kotlin.math.abs(right - left) <= 1.5,
+        )
     }
 
     /**
@@ -209,5 +232,42 @@ class QwertyLayoutTest {
         val bottom = QwertyLayout.rows.last()
         val sum = bottom.sumOf { it.weight.toDouble() }
         assertEquals("底排总权重变了会让每个键宽度都变", 10.0, sum, 0.001)
+    }
+
+    /**
+     * 回车必须比普通功能键宽（用户要求：原来太窄按不中）。
+     *
+     * 1.5 是「明显比别人宽一档」的最小值：底排单位键宽是 total/6≈1.67，
+     * 回车 1.5 已接近均分宽度，而 1.0 只有它的三分之二。
+     */
+    @Test
+    fun `回车比普通功能键宽`() {
+        val bottom = QwertyLayout.rows.last()
+        val enter = bottom.first { it.kind == KeyKind.ENTER }
+        // 1.8 是照豆包（换行键≈1.76 个字母键宽）定的。
+        // 这里只断言「明显比别人宽」，不钉死具体值——以后微调 1.7/1.9 不该挂测试。
+        assertTrue("回车权重 ${enter.weight} 应 ≥1.7（豆包 1.76）", enter.weight >= 1.7f)
+        // 比 123/中 之外的窄键都要宽
+        val narrow = bottom.filter { it.kind == KeyKind.PAGE && it.code == "emoji" }
+        assertTrue(
+            "回车必须比 😊 宽，否则还是按不中",
+            enter.weight > narrow.first().weight,
+        )
+    }
+
+    /**
+     * 退格和 ⇧ 权重相等：第三排两端对称。
+     *
+     * 曾经把退格压到 1（想让它和回车对调宽度），结果第三排合计变 9.5，
+     * Z 排字母键比 Q 排窄 1.5%，换页时键宽会跳。这条守着别再犯。
+     */
+    @Test
+    fun `退格和上档键等宽 第三排才对称`() {
+        val third = QwertyLayout.rows[2]
+        val shift = third.first { it.kind == KeyKind.SHIFT }
+        val del = third.first { it.kind == KeyKind.DELETE }
+        assertEquals("退格与 ⇧ 必须等宽", shift.weight, del.weight, 0.001f)
+        val sum = third.sumOf { it.weight.toDouble() }
+        assertEquals("第三排合计必须是 10，否则字母键宽和第一排不一致", 10.0, sum, 0.001)
     }
 }
