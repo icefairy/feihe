@@ -33,6 +33,7 @@ import com.feihe.ime.segment.SegmentState
 import com.feihe.ime.suggest.CandidateBarPolicy
 import com.feihe.ime.suggest.EmailSuggest
 import com.feihe.ime.suggest.HostContext
+import com.feihe.ime.voice.VoiceEngine
 import com.feihe.ime.voice.VoiceRecorder
 import com.feihe.ime.keyboard.Backspace
 import com.feihe.ime.keyboard.CandidateGrid
@@ -42,6 +43,7 @@ import com.feihe.ime.keyboard.KeyboardView
 import com.feihe.ime.keyboard.KeyboardPages
 import com.feihe.ime.keyboard.NavAction
 import com.feihe.ime.keyboard.NavCursor
+import com.feihe.ime.keyboard.BackspaceSplit
 import com.feihe.ime.keyboard.NumberSelect
 import com.feihe.ime.keyboard.NumberSelectLayout
 import com.feihe.ime.keyboard.Page
@@ -235,6 +237,15 @@ class FeiheIme : InputMethodService() {
      * 展开态常驻在最上面。
      */
     private var collapseBar: LinearLayout? = null
+
+    /**
+     * 展开态专用候选容器。
+     *
+     * 和 [candidateScroll] 二选一显示。为什么不共用一个：HorizontalScrollView
+     * 会给子 View 无限宽度约束，展开成多行时 `MATCH_PARENT` 和 `weight` 全部量
+     * 不出正确宽度，候选会塌成一团。
+     */
+    private var expandedColumn: LinearLayout? = null
 
     /** 当前键盘页。字母 / 数字 / 符号——布尔值装不下三态，别再退回布尔。 */
     private var page: Page = Page.LETTERS
@@ -526,16 +537,31 @@ class FeiheIme : InputMethodService() {
             )
             return
         }
-        clipEntries.forEach { e ->
+        clipEntries.forEachIndexed { idx, e ->
+            if (idx > 0) {
+                // 条与条之间的分隔线。没有它，几条连续摆在一起就糊成一片，
+                // 分不清是「一条长内容换行了」还是「三条不同的内容」。
+                // 用 View 画 1px 细线而不是给 TextView 加 divider：TextView 的
+                // background 已经被点击/长按态用掉的可能性更大，画个独立 View 最稳。
+                list.addView(
+                    View(this).apply { setBackgroundColor(p.separator) },
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        (resources.displayMetrics.density * 1f).toInt().coerceAtLeast(1),
+                    ),
+                )
+            }
             list.addView(
                 TextView(this).apply {
-                    // 预览压成一行：换行会让每一条高度不一样，列表看起来是散开的
-                    text = e.text.replace('\n', ' ').replace('\t', ' ')
+                    // 预览压成一行：换行会让每一条高度不一样，列表看起来是散开的。
+                    // 用户明确要求「复制的内容即使是多行也只显示一行」——多行原文
+                    // 照样存着（点上去还是原样上屏），只是预览里收成一行。
+                    text = e.text.replace('\n', ' ').replace('\t', ' ').trim()
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                     setTextColor(p.text)
                     maxLines = 1
                     ellipsize = TextUtils.TruncateAt.END
-                    setPadding(dp(10f), dp(11f), dp(10f), dp(11f))
+                    setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
                     setOnClickListener { insertClip(e) }
                     setOnLongClickListener {
                         removeClip(e)
@@ -576,6 +602,17 @@ class FeiheIme : InputMethodService() {
      */
     private fun deleteOneCharBackward() {
         val ic = currentInputConnection ?: return
+        // **有选区时先删选区**，这是所有主流输入法的行为。
+        //
+        // `deleteSurroundingText` 只作用于光标位置，对选区**无效**——这正是
+        // 「选中一大段之后按退格删不掉」的根因：方法被调用了，宿主收到请求，
+        // 但它按「删光标前一个字符」执行，而选区还在，于是什么都没发生。
+        // 用户只能按回车（用换行替换选区），于是多出一个空行，还得再删一次。
+        val selected = runCatching { ic.getSelectedText(0) }.getOrNull()
+        if (!selected.isNullOrEmpty()) {
+            ic.commitText("", 1)
+            return
+        }
         val before = runCatching { ic.getTextBeforeCursor(2, 0) }.getOrNull()
         ic.deleteSurroundingText(Backspace.unitsToDelete(before), 0)
     }
@@ -672,12 +709,24 @@ class FeiheIme : InputMethodService() {
     override fun onCreateInputView(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            // **根视图必须有不透明背景。**
+            //
+            // 输入法窗口本身是透明的（系统不给它画底色），哪个子 View 没铺背景，
+            // 那里就直接透出下层应用的界面。之前 root 没设 backgroundColor，
+            // 只有 keyboardHost 铺了，于是候选条一旦有空隙（候选少、临时隐藏、
+            // 展开态接管时的那一帧），就会看到宿主应用的内容从候选条里"穿"出来。
+            // 用户描述是「候选框被软件里的内容盖住了」。
+            //
+            // 铺在 root 上而不是逐个设：子 View 增删、显隐切换都不会再漏一处。
+            setBackgroundColor(Palette.of(this@FeiheIme).keyboardBg)
         }
 
         statusText = TextView(this).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            // 上下只留 3dp：文案已经不常驻了（见 refreshStatus），留 6dp 会撑着
+            // 一条偏高的空条。左右 12dp 改成 10dp，让组合码尽量靠左不被截断。
+            setPadding(dp(10f), dp(3f), dp(10f), dp(3f))
         }
 
         // 状态条右侧的齿轮。**输入法必须有这个入口**：系统设置里的那一层藏得深，
@@ -759,6 +808,16 @@ class FeiheIme : InputMethodService() {
         // 为什么要纵向容器而不是「一个 LinearLayout 按需改成 VERTICAL」：orientation
         // 改了之后所有子 View 的 LayoutParams 语义都变了（weight 从横向变纵向），
         // 复用池会错位。分成「容器 + 若干行」两层，每行永远是横向的，复用逻辑不变。
+        // 候选容器。收起态是「一行横滑」，展开态是「多行静态铺开」——两种形态
+        // 对父容器的要求是冲突的：
+        //
+        //   HorizontalScrollView 会给子 View **无限宽度**（UNSPECIFIED）。在这种
+        //   约束下，行内 MATCH_PARENT 退化成 WRAP_CONTENT，weight=1 的候选格
+        //   量不出宽度直接塌成 0 —— 展开后看起来「只有一行且挤成一团」。
+        //
+        // 所以展开态把候选区挂到 root 的另一个槽位（expandedSlot，普通
+        // LinearLayout，宽度跟着屏幕），收起态才用 candidateScroll。
+        // 两套容器各自 measure 正确，不用互相妥协。
         candidateColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -766,8 +825,24 @@ class FeiheIme : InputMethodService() {
             isHorizontalScrollBarEnabled = false
             addView(candidateColumn)
         }
+
+        // 展开态专用槽位：和 candidateScroll 二选一显示，宽度 MATCH_PARENT。
+        // 它自己不是 ScrollView，纵向多行由它直接测量。
+        expandedColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
         root.addView(
             candidateScroll,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(CANDIDATE_ROW_DP),
+            ),
+        )
+        // 展开态容器和 candidateScroll 并列、同一个高度槽位；谁可见由
+        // applyExpandedChrome 决定，另一个 GONE（GONE 不占高度）。
+        root.addView(
+            expandedColumn,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(CANDIDATE_ROW_DP),
@@ -820,6 +895,73 @@ class FeiheIme : InputMethodService() {
             orientation = LinearLayout.VERTICAL
         }
         root.addView(keyboardHost)
+
+        // 剪贴板面板：和键盘同层、同尺寸，平时 GONE，点状态条上的剪贴板按钮时
+        // 把键盘藏起来、把它露出来。
+        //
+        // **它必须真的被创建**。之前 clipPanel / clipList 两个字段只被 setVisibility
+        // 和 renderClipboard 用过，`= LinearLayout(...)` 一次都没有——对象永远是
+        // null。于是点按钮的效果是「键盘藏起来了，但没有任何东西顶上来」，
+        // 整个输入区一片空白，用户看到的就是「点了没反应」。
+        clipList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        clipPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setBackgroundColor(Palette.of(this@FeiheIme).bg)
+            // 顶部一行「剪贴板」标题 + 关闭，下面才是列表
+            addView(
+                LinearLayout(this@FeiheIme).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+                    addView(
+                        TextView(this@FeiheIme).apply {
+                            text = "剪贴板"
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                            setTextColor(Palette.of(this@FeiheIme).sub)
+                        },
+                        LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+                    )
+                    addView(
+                        TextView(this@FeiheIme).apply {
+                            text = "✕"
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                            setTextColor(Palette.of(this@FeiheIme).sub)
+                            setPadding(dp(12f), dp(4f), dp(4f), dp(4f))
+                            contentDescription = "关闭剪贴板"
+                            setOnClickListener { closeClipboard() }
+                        },
+                    )
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            // 列表本体。长了好歹能滚：条数上限是 ClipHistory.LIMIT，但每条可能是
+            // 多行文本压成一行，屏小的时候仍然会顶出去。
+            addView(
+                android.widget.ScrollView(this@FeiheIme).apply {
+                    isFillViewport = true
+                    addView(clipList)
+                },
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f,
+                ),
+            )
+        }
+        root.addView(
+            clipPanel,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f,
+            ),
+        )
         showPage(Page.LETTERS)
 
         refreshStatus()
@@ -880,7 +1022,13 @@ class FeiheIme : InputMethodService() {
                 Toast.makeText(this, "请先授权麦克风权限", Toast.LENGTH_SHORT).show()
             }
             VoiceRecorder.State.NO_MODEL -> refreshStatus("语音模型缺失")
-            VoiceRecorder.State.FAILED -> refreshStatus("语音识别失败")
+            VoiceRecorder.State.FAILED -> {
+                // 把引擎给的原因带出来。「语音识别失败」这五个字对用户没有任何
+                // 行动价值——他既不知道是没权限、模型坏了，还是引擎崩了。
+                val why = VoiceEngine.lastError()
+                refreshStatus(if (why.isNullOrBlank()) "语音识别失败" else "语音识别失败：$why")
+            }
+            VoiceRecorder.State.EMPTY -> refreshStatus("没听到声音，再说一次")
             VoiceRecorder.State.IDLE -> refreshStatus()
         }
     }
@@ -971,8 +1119,23 @@ class FeiheIme : InputMethodService() {
                     segmentState = segmentState!!.back()
                     renderCandidates()
                 } else if (pending.isNotEmpty()) {
-                    pending.setLength(pending.length - 1)
-                    pushComposing()
+                    // **退格 = 整词 → 单字（逐段选），不删编码。**
+                    //
+                    // 这是和 Windows 端一致的手感（`textservice.rs` 的
+                    // `backspace_into_segments`）：打 `xrji` 出「璇玑」，但用户想要
+                    // 「璇」+ 别的字，按一次退格就切成 `[璇][玑]`，两边各自能换字；
+                    // 编码 `xrji` 一个字都不少。
+                    //
+                    // 判据也和 Windows 一样（`backspace_splits`）：
+                    //   - 第一候选是**多字词** → 进逐字，说明这码被一个词占满
+                    //   - 第一候选是单字（`de` → 的）→ 这码本来就是一串同码字，不劫持
+                    //   - 没有候选 → 退回删字母
+                    //
+                    // 没有分段数据时（引擎没算出可切分）才退回删字母，保证不会卡死。
+                    if (!backspaceIntoSegments()) {
+                        pending.setLength(pending.length - 1)
+                        pushComposing()
+                    }
                 } else {
                     // 组合串空了才删文档里的字。反过来（先删文档）会把用户打了一半的
                     // 拼音吃掉，这是最容易被骂的行为之一。
@@ -1402,13 +1565,40 @@ class FeiheIme : InputMethodService() {
         // 收起态：键盘还原、候选条回到单行。
         applyExpandedChrome(candidateExpanded)
 
-        // 展开态：多行 × 每行 6 个。收起态：单行横滑。两条路共用同一套候选项绑定，
-        // 只是外层容器不同（见 ensureMultiRow / ensureSingleRow）。
-        if (candidateExpanded && !assistChip && otp == null && emptyAssist.not()) {
-            renderExpandedRows(col, window)
+        // 展开态：多行 × 每行 6 个。收起态：单行横滑。
+        //
+        // 两条路用**不同的父容器**：展开态挂 expandedColumn（普通 LinearLayout，
+        // 宽度跟着屏幕量），收起态挂 candidateScroll（HorizontalScrollView）。
+        // 不能共用一个——HorizontalScrollView 给子 View 无限宽度约束，多行时
+        // 行内 MATCH_PARENT 退化成 WRAP_CONTENT、weight 量成 0，候选会塌成一片。
+        //
+        // **不拿 assistChip / 分段态当展开的前提**：以前这里写了 `&& !assistChip`，
+        // 而 assistAvailable() 在「正在打拼音」时恒为 true——用户打着字点展开，
+        // 条件不成立，函数直接走到收起分支，界面毫无变化。用户看到的就是
+        // 「展开没有多行」。展开是用户明确点的动作，优先级高于任何自动态。
+        if (candidateExpanded) {
+            val exp = expandedColumn ?: return
+            candidateScroll?.visibility = View.GONE
+            exp.visibility = View.VISIBLE
+            renderExpandedRows(exp, window)
             updateTopSlot()
             return
         }
+        // 收起态：把展开容器清空藏起，避免它继续占位或残留上一次的内容
+        expandedColumn?.let {
+            it.visibility = View.GONE
+            it.removeAllViews()
+            // 恢复成固定一行高：展开时被改成 weight=1+height=0，不还回去的话
+            // 下次收起后这个槽位还会抢走剩余空间（虽然 GONE 了，但布局参数留着坑）
+            (it.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                if (lp.height != dp(CANDIDATE_ROW_DP) || lp.weight != 0f) {
+                    lp.height = dp(CANDIDATE_ROW_DP)
+                    lp.weight = 0f
+                    it.layoutParams = lp
+                }
+            }
+        }
+        candidateScroll?.visibility = View.VISIBLE
         val bar = ensureSingleRow(col)
 
         // 复用已有的 TextView：候选 + 分隔符 + 联想按顺序对位，多了删、少了补。
@@ -1515,8 +1705,26 @@ class FeiheIme : InputMethodService() {
                 ),
             )
         }
-        // 展开态把高度撑满（键盘已藏起来了，下面没有东西接着）
-        resizeCandidateHost(0)
+        // 展开态：把这一槽位撑到「能放多少行就多高」。
+        //
+        // **不能用 weight=1 + height=0**：root 是直接返回给系统的输入法视图，
+        // 没有 LayoutParams、按 WRAP_CONTENT 测量——root 高度本就等于内容高度，
+        // 纵向 LinearLayout 里没有「剩余空间」可分，weight 分到 0，结果就是
+        // 展开后只有两行高（expH 恰等于内容高度）。
+        //
+        // 直接给**显式像素**：行数 × 行高。root 自己也会随之长高，输入法面板
+        // 整体变高，键盘已经在 applyExpandedChrome 里 GONE 掉，腾出的空间正好
+        // 由候选吃掉。
+        expandedColumn?.let { exp ->
+            val want = dp(CANDIDATE_ROW_DP * rows)
+            (exp.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                if (lp.height != want || lp.weight != 0f) {
+                    lp.height = want
+                    lp.weight = 0f
+                    exp.layoutParams = lp
+                }
+            }
+        }
         window.forEachIndexed { idx, word ->
             val row = col.getChildAt(idx / CandidateGrid.PER_ROW) as LinearLayout
             val slot = idx % CandidateGrid.PER_ROW
@@ -1625,15 +1833,31 @@ class FeiheIme : InputMethodService() {
     private fun expandedRows(): Int {
         val rowH = dp(CANDIDATE_ROW_DP)
         if (rowH <= 0) return CandidateGrid.MAX_ROWS
-        // 可用高度取**屏幕高度**，不是候选条自己的高度——展开那一刻候选条还没撑开，
-        // 拿它自己的高度会永远算出 1 行。
+        // 可用高度 = 输入法视图能拿到的总高度 − 状态条 − 收起条。
+        // 展开时键盘和数字行都是 GONE，不再占位，所以剩下的全给候选。
+        //
+        // 拿 root 的实际高度最准，但它要 measure 完才有值；没值时退回屏幕高度
+        // 按键盘占比估算（键盘一般占屏幕 45%~55%）。
+        val rootH = rootViewHeight()
         val screenH = resources.displayMetrics.heightPixels
-        if (screenH <= 0) return CandidateGrid.MAX_ROWS
-        // 键盘通常占屏幕 45%~55%（见 rowHeightDp 的推导），按 55% 估可用高度，
-        // 再扣掉一行余量，免得最后一行被挤出一截还要横滑。
-        val usable = (screenH * 0.55f).toInt() - rowH
-        val rows = usable / rowH
-        return rows.coerceIn(1, 8)
+        val total = if (rootH > 0) rootH else (screenH * 0.55f).toInt()
+        var chrome = 0
+        statusBar?.let { if (it.height > 0) chrome += it.height else chrome += dp(34f) }
+        chrome += dp(30f) // 收起条自己
+        val usable = total - chrome - rowH // 再扣一行余量，免得最后一行被裁半截
+        if (usable <= 0) return CandidateGrid.MAX_ROWS
+        return (usable / rowH).coerceIn(1, 8)
+    }
+
+    /**
+     * 输入法视图的真实高度。
+     *
+     * root 在 onCreateInputView 里返回、被系统 measure 之后才有 height。
+     * 还没 measure 时返回 0，调用方退回估算。
+     */
+    private fun rootViewHeight(): Int {
+        val v = candidateScroll?.rootView ?: return 0
+        return if (v.height > 0) v.height else 0
     }
 
     /**
@@ -1698,7 +1922,10 @@ class FeiheIme : InputMethodService() {
         val typing = quickMode || pending.isNotEmpty() || candidates.isNotEmpty() ||
             suggestions.isNotEmpty() || segmentState != null || otpCode != null
         statusBar?.visibility = if (typing) View.GONE else View.VISIBLE
-        candidateScroll?.visibility = if (typing) View.VISIBLE else View.GONE
+        // 展开态下这一槽由 expandedColumn 接管，candidateScroll 必须保持 GONE，
+        // 否则两个容器同时 VISIBLE，一个固定一行高、一个吃掉剩余高度，视觉上叠在一起。
+        candidateScroll?.visibility =
+            if (typing && !candidateExpanded) View.VISIBLE else View.GONE
     }
 
     /** 普通候选项。每个视觉属性都重设：这一格可能是从分段 chip 复用来的，带背景。 */
@@ -1992,6 +2219,79 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
+     * 退格把「整词」切成「逐字」：判据和 Windows 端 `backspace_splits` 完全一致。
+     *
+     * 打 `xrji` 出「璇玑」，用户想要的却是「璇」+ 别的字 —— 按一次退格切成
+     * `[璇][玑]`，编码 `xrji` 一个字都不删。这是品牌输入法和桌面端共有的手感，
+     * 不是「删音节」。
+     *
+     * 三个判据（照抄 Windows，别自己发挥）：
+     * 1. **没有候选** → 不退格拆字，交给调用方删字母（用户还没打完）
+     * 2. **第一候选是单字**（`de` → 的）→ 这码本来就是「一堆同码字」，
+     *    退格拆字毫无意义，别劫持
+     * 3. **第一候选是多字词** → 说明这串码被一个词占满了，该给用户换字的机会
+     *
+     * @return true = 已进入分段态，调用方不要再动 `pending`
+     */
+    private fun backspaceIntoSegments(): Boolean {
+        // 已经在分段态由上面的分支处理，这里只负责「从整词切进来」
+        if (segmentState != null) return false
+        // 判据和 Windows 端同一份（`BackspaceSplit.shouldSplit`）：
+        // 第一候选是单字就不拆（`de` → 的 这种码本来就该换候选）
+        if (!BackspaceSplit.shouldSplit(visibleCandidates())) return false
+        // 引擎没给分段数据就退不进去（长串没打完、或词库里切不开）
+        val next = SegmentState(pendingSegments.map { it.words }).takeIf { it.active }
+            ?: return false
+        segmentState = next
+        renderCandidates()
+        return true
+    }
+
+    /**
+     * 词库里没有的词，记成自造词，下次同码就能直接出现在候选里。
+     *
+     * 为什么需要这一步：`NativeEngine.learn`（`freq::bump`）只能给**已有候选**加次数、
+     * 改排序。用户打「飞鹤」这种词库里没有的组合时，「和」是选了才上屏的，
+     * 「鹤」也是，但**「飞鹤」这个整体从来没有进过候选表**——`freq` 记多少次都不会
+     * 让它凭空出现。这就是「组过的词下次还得重新组」的根因。
+     *
+     * Windows 端靠 `compose_phrase` 走分段流程解决；Android 没有分段 UI，走的是
+     * 「打码 → 从候选里挑字」，所以判定条件换成：**这个词库里查不到，就按自造词记**。
+     *
+     * 全拼必须反查得到，任何一环失败就整体放弃——`phrase` 按全拼建索引，拿不到
+     * 可靠的全拼，记下来的词换方案/切全拼之后就再也打不出来，比不记更糟。
+     */
+    private fun rememberPhraseIfNew(code: String, word: String) {
+        // 单字不叫「组词」：单字的排序已经由 `freq` 管，记成自造词只会灌垃圾。
+        if (code.isEmpty() || word.length < 2) return
+        // 词库里查得到 → 不是新词，别记（会给表里灌重复数据）
+        if (NativeEngine.pinyinOf(code, word).isNotEmpty()) return
+        // 反查每个字的全拼。拿不到就放弃：存不进全拼，这个词以后就捞不出来。
+        val syllables = StringBuilder()
+        var i = 0
+        while (i < word.length) {
+            // 按 code point 走，别把 emoji / 生僻字的代理对劈开
+            val cp = word.codePointAt(i)
+            val ch = String(Character.toChars(cp))
+            i += Character.charCount(cp)
+            val py = NativeEngine.pinyinOf(syllableCodeFor(ch), ch)
+            if (py.isEmpty()) return
+            if (syllables.isNotEmpty()) syllables.append(' ')
+            syllables.append(py)
+        }
+        NativeEngine.learnPhrase(word, syllables.toString())
+    }
+
+    /**
+     * 一个字单独打出来时的码。双拼下是它的两个键，全拼下就是它的拼音。
+     *
+     * 用 `encodePhrase`（引擎里和 Windows 端同一套逻辑）而不是自己拼字符，
+     * 方案切换（小鹤/微软）时不用改这里。
+     */
+    private fun syllableCodeFor(ch: String): String =
+        NativeEngine.encodePhrase(ch).ifEmpty { ch }
+
+    /**
      * 上屏一个候选词，结束这次组合。
      *
      * `thenSuggest = false` 只有一个调用点：标点键在粘标点之前的那次上屏。
@@ -2014,6 +2314,8 @@ class FeiheIme : InputMethodService() {
         // **必须在下面 `code = ""` 之前调**——这里 code 还是本次查询用的码。
         // 以前只调 record（记词对），选词本身从没被记住，所以自造词永远排不上来。
         NativeEngine.learn(code, word)
+        // 词库里没有的词要单独记成「自造词」，否则下次它连候选都进不来（见下）。
+        rememberPhraseIfNew(code, word)
 
         pending.setLength(0)
         code = ""
@@ -2143,13 +2445,12 @@ class FeiheIme : InputMethodService() {
             return
         }
         statusText?.text = buildString {
-            append(if (chinese) "中" else "英")
-            // 切了页就写页名（数字页上写「双拼」会让人以为还能打拼音）。
-            // 字母页写「双拼/全拼」而不是「26 键」——键盘长什么样看得见，
-            // 输入方式是看不见的，而它决定了「为什么我打 xian 出了西安」。
-            append(if (page == Page.LETTERS) " · " + modeLabel() else " · " + KeyboardPages.label(page))
+            // 中/英模式和当前页**不常驻显示**：底下那个「中」键已经标了当前模式，
+            // 「123/符/😊」入口本身也说明了在哪一页。状态条上再写一遍「中 · 双拼」
+            // 只是把候选条左边那一块占掉，用户反馈纯属多余。
+            //
+            // 只在有**看不见的信息**要说明时才写：正在组合的码、分段态、引擎异常。
             if (pending.isNotEmpty()) {
-                append(" · ")
                 append(pending)
                 // 快捷输入态的码是命令码，不是拼音，别给它配一个「→实际用的码」
                 if (quickMode) {
@@ -2164,10 +2465,12 @@ class FeiheIme : InputMethodService() {
             // 分段态给一句提示，否则用户不知道候选条上一排方块是什么、怎么退出。
             val seg = segmentState
             if (seg != null) {
-                append(if (seg.focus >= 0) "  ·  选这一段的字" else "  ·  点词改某一段")
+                if (isNotEmpty()) append("  ·  ")
+                append(if (seg.focus >= 0) "选这一段的字" else "点词改某一段")
             }
             if (!NativeEngine.available) {
-                append("  ·  引擎未加载")
+                if (isNotEmpty()) append("  ·  ")
+                append("引擎未加载")
             }
         }
     }

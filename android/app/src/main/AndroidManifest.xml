@@ -13,6 +13,28 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!--
+      下载语音模型要用网络。
+
+      **这个权限以前整个应用都没有**——输入法此前完全离线，不需要。加下载功能
+      就必须补上，否则 HttpURLConnection 抛的是
+      `Permission denied (missing INTERNET permission?)`，看着像服务器拒绝，
+      其实是本地权限没声明。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      前台服务：81 MB 下载期间要在通知栏常驻进度，否则用户切走应用就被系统掐掉。
+
+      FOREGROUND_SERVICE 是 Android 9+ 的通用权限；Android 14 起还需要按类型
+      声明（FOREGROUND_SERVICE_DATA_SYNC）。两个都写，低版本忽略不认识的。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- 完成时提示一声。Android 13+ 不声明的话通知会被静默丢弃。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
       短信验证码：**默认不读**。设置页里「从短信读取验证码」默认关，打开时才申请
       这个权限，而且只在「当前输入框像验证码框」时读最近 10 分钟的短信，取到 4-8 位
       数字就把正文丢掉（见 clip/SmsOtp.kt 的三道闸）。
@@ -44,6 +66,22 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
+
+        <!--
+          语音模型下载。
+
+          必须是 foregroundService：81 MB 在国内网下要一分钟上下，普通后台线程
+          会在用户切走应用时被系统掐掉（国产 ROM 尤其如此）。前台服务顺带让
+          通知栏能显示进度——这正是用户提的第二个要求。
+
+          foregroundServiceType 用 dataSync：Android 14 起声明类型是硬性要求，
+          不给会直接抛 MissingForegroundServiceTypeException。用 dataSync 而不是
+          dataTransfer 是因为前者 minSdk 24 就能用（dataTransfer 是 34 才加的）。
+        -->
+        <service
+            android:name=".voice.ModelDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!--
           设置页。三个入口都指向它：键盘状态条上的齿轮、系统设置里的「设置」、桌面图标。

@@ -379,6 +379,57 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnNative<'local
     });
 }
 
+/// `NativeEngine.learnPhraseNative(word, pinyin)` —— 把用户逐段拼出来的词记成自造词。
+///
+/// Windows 端在 `remember_phrase` 里调 `phrase::learn`，Android 一直没有对应调用，
+/// 所以「组过一次的词下次还得重新组」。这个函数就是补上那条路。
+///
+/// `pinyin` 是空格分隔的**全拼音节**（`fei he`），由 Kotlin 侧逐段反查得到——
+/// 不是用户敲的双拼码。换方案或切全拼模式之后，靠这份全拼还能把这个词捞出来。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnPhraseNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    word: JString<'local>,
+    pinyin: JString<'local>,
+) {
+    let w = read_string(&mut env, &word);
+    let py = read_string(&mut env, &pinyin);
+    let _ = std::panic::catch_unwind(|| {
+        if !w.is_empty() && !py.is_empty() {
+            feihe_core::phrase::learn(&w, &py);
+            // 顺手记一次词频，让自造词和词库候选进同一个排序。
+            // 不记的话刚造的词是 0 次，只和「同样 0 次的词库候选」打平，
+            // 而平局是词库先来——用户造完立刻敲同一个码，第一位可能还是旧词。
+            feihe_core::freq::bump(&feihe_core::shuangpin::encode_pinyin(
+                feihe_core::dict::scheme(),
+                &py,
+            ).unwrap_or_default(), &w);
+        }
+    });
+}
+
+/// `NativeEngine.pinyinOfNative(code, word)` —— 反查「码 + 词」对应的全拼。
+///
+/// 自造词必须存全拼：`phrase::words_for` 按全拼索引，存双拼码进去下次就查不到。
+/// 返回空串表示词库里没有这条（说明用户组出来的是真正的新词）。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_pinyinOfNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    code: JString<'local>,
+    word: JString<'local>,
+) -> jstring {
+    let c = read_string(&mut env, &code);
+    let w = read_string(&mut env, &word);
+    let out = std::panic::catch_unwind(|| {
+        feihe_core::dict::pinyin_of(&c, &w, feihe_core::config::pinyin_mode())
+            .unwrap_or_default()
+    })
+    .unwrap_or_default();
+    env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
 /// `NativeEngine.configNative()` —— 设置页要显示的开关快照，`key=value;…`。
 ///
 /// 用「自己拼串」而不是 JSON：这里只有五个布尔/枚举，引序列化库得不偿失，

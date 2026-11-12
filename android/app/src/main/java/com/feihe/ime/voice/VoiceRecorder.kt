@@ -34,7 +34,7 @@ class VoiceRecorder(
     private val onState: (State) -> Unit,
     private val onResult: (String) -> Unit,
 ) {
-    enum class State { IDLE, LOADING, RECORDING, RECOGNIZING, NO_PERMISSION, NO_MODEL, FAILED }
+    enum class State { IDLE, LOADING, RECORDING, RECOGNIZING, NO_PERMISSION, NO_MODEL, FAILED, EMPTY }
 
     private val main = Handler(Looper.getMainLooper())
     private var thread: Thread? = null
@@ -161,7 +161,10 @@ class VoiceRecorder(
         main.post {
             val raw = text.orEmpty()
             if (raw.isBlank()) {
-                onState(State.FAILED)
+                // 区分「确实是引擎报错」和「识别出来是空的」：
+                // 前者要给出原因（用户能照做），后者多半是没说话/麦克风没收到声音。
+                val err = VoiceEngine.lastError()
+                onState(if (err != null) State.FAILED else State.EMPTY)
             } else {
                 // paraformer 不出标点，句末补一个（规则保守，见 VoicePunctuator）。
                 onResult(VoicePunctuator.punctuate(raw.trim()))

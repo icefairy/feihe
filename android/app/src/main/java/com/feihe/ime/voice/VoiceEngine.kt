@@ -54,14 +54,37 @@ object VoiceEngine {
     @Volatile
     private var loadError: String? = null
 
-    /** 模型文件齐不齐。设置页/状态条据此显示"模型未就绪"而不是点了没反应。 */
-    fun modelReady(ctx: Context): Boolean = try {
-        val present = ctx.assets.list("asr")?.toSet() ?: emptySet()
-        "model.int8.onnx" in present && "tokens.txt" in present &&
-            VAD_MODEL in (ctx.assets.list("")?.toSet() ?: emptySet())
-    } catch (e: Exception) {
-        false
+    /**
+     * 模型从哪来。
+     *
+     * 两条路：内置 assets（老版本）或用户下载到 filesDir 的（新版本）。
+     * **下载的优先**：用户既然下过一次，说明他想要语音功能，而下载的版本可以更新，
+     * 内置的那份永远停在编译时。
+     */
+    private enum class Source { ASSET, FILE, NONE }
+
+    private fun source(ctx: Context): Source {
+        // 下载来的：两个 ASR 文件都在 filesDir/asr 下且大小对
+        if (ModelDownloader.isComplete(ctx)) return Source.FILE
+        // 内置的：assets/asr 下有这两个文件
+        val present = runCatching { ctx.assets.list("asr")?.toSet() }.getOrNull() ?: emptySet()
+        return if ("model.int8.onnx" in present && "tokens.txt" in present) {
+            Source.ASSET
+        } else {
+            Source.NONE
+        }
     }
+
+    /**
+     * 模型文件齐不齐。设置页/状态条据此显示"模型未就绪"而不是点了没反应。
+     *
+     * **不再只看 assets**：新版本模型是下载的，assets 里是空的，
+     * 老判据会让「明明下好了」也显示未就绪。
+     */
+    fun modelReady(ctx: Context): Boolean = source(ctx) != Source.NONE
+
+    /** 模型是否来自下载（用户自己装的），设置页显示来源用。 */
+    fun fromDownload(ctx: Context): Boolean = source(ctx) == Source.FILE
 
     /** 上一次加载失败的原因，`null` = 没试过或成功。只给诊断用。 */
     fun lastError(): String? = loadError
@@ -72,11 +95,17 @@ object VoiceEngine {
     @Synchronized
     private fun ensure(ctx: Context) {
         if (recognizer != null && vad != null) return
-        val assets: AssetManager = ctx.applicationContext.assets
+        val src = source(ctx)
+        if (src == Source.NONE) {
+            loadError = "模型未下载"
+            return
+        }
         try {
+            // VAD 只有内置一份（629 KB，跟着 APK 走，不从网上下——单独为它拉一次
+            // 请求不值得，而这个文件从来不变）
             if (vad == null) {
                 vad = Vad(
-                    assetManager = assets,
+                    assetManager = ctx.applicationContext.assets,
                     config = VadModelConfig(
                         sileroVadModelConfig = SileroVadModelConfig(
                             model = VAD_MODEL,
@@ -93,9 +122,23 @@ object VoiceEngine {
                 )
             }
             if (recognizer == null) {
+                // 下载来的走**绝对路径**（assetManager = null → newFromFile），
+                // 内置的走 assets。两条路给的文件名相同，只有前缀不同。
+                val fileBase = ModelDownloader.dir(ctx).absolutePath
+                fun p(name: String) = if (src == Source.FILE) "$fileBase/$name" else "asr/$name"
+                // 加载前把路径和实际文件大小打到日志：识别失败时最需要区分的是
+                // 「文件没下全」和「模型本身不兼容」，而这两种在 UI 上都是同一句
+                // 「语音识别失败」。用 `ls` 看不出来，只有这里能看到路径对不对。
+                if (src == Source.FILE) {
+                    for (n in listOf("model.int8.onnx", "tokens.txt")) {
+                        val f = java.io.File("$fileBase/$n")
+                        Log.i(TAG, "加载 $n：存在=${f.exists()} 大小=${f.length()} 可读=${f.canRead()}")
+                    }
+                }
+                Log.i(TAG, "识别器配置：model=${p("model.int8.onnx")} tokens=${p("tokens.txt")}")
                 val model = OfflineModelConfig(
-                    paraformer = OfflineParaformerModelConfig(model = ASR_MODEL),
-                    tokens = ASR_TOKENS,
+                    paraformer = OfflineParaformerModelConfig(model = p("model.int8.onnx")),
+                    tokens = p("tokens.txt"),
                     modelType = "paraformer",
                     numThreads = 2,
                     debug = false,
@@ -105,16 +148,32 @@ object VoiceEngine {
                     modelConfig = model,
                     decodingMethod = "greedy_search",
                 )
-                recognizer = OfflineRecognizer(assetManager = assets, config = config)
+                recognizer = if (src == Source.FILE) {
+                    OfflineRecognizer(assetManager = null, config = config)
+                } else {
+                    OfflineRecognizer(assetManager = ctx.applicationContext.assets, config = config)
+                }
             }
             loadError = null
-            Log.i(TAG, "模型加载完成")
+            Log.i(TAG, "模型加载完成（来源：${if (src == Source.FILE) "下载" else "内置"}）")
         } catch (e: Throwable) {
             // 原生层加载失败可能是 UnsatisfiedLinkError / RuntimeException，
             // 不能让它冒到按键回调里把输入法带崩。
             loadError = e.message ?: e.javaClass.simpleName
             Log.e(TAG, "模型加载失败：${loadError}")
+            // 加载失败要把半成品句柄丢掉，否则下次进来 `recognizer != null` 直接返回，
+            // 永远好不了——用户只能杀进程
+            runCatching { recognizer?.release() }
+            recognizer = null
         }
+    }
+
+    /** 模型刚从「没有」变成「有」时调，让下次 `withEngine` 重新加载。 */
+    @Synchronized
+    fun invalidate() {
+        runCatching { recognizer?.release() }
+        recognizer = null
+        loadError = null
     }
 
     /**

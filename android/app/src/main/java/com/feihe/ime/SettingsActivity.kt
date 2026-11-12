@@ -3,6 +3,7 @@ package com.feihe.ime
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
@@ -18,6 +19,9 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import com.feihe.ime.engine.NativeEngine
+import com.feihe.ime.voice.ModelDownloadService
+import com.feihe.ime.voice.ModelDownloader
+import com.feihe.ime.voice.VoiceEngine
 import java.io.File
 
 /**
@@ -48,6 +52,15 @@ import java.io.File
 class SettingsActivity : Activity() {
 
     private var cfg: NativeEngine.Settings? = null
+
+    /**
+     * 「语音模型」那一行的描述文字控件。
+     *
+     * 下载进度要频繁刷新它（每 256 KB 一次），只能定点改这一个 TextView——
+     * 以前收到广播就 `setContentView(buildUi())` 整页重建，一次下载近百次重建，
+     * 表现就是「设置窗口卡住」。
+     */
+    private var voiceModelDesc: TextView? = null
     private var schemeBox: LinearLayout? = null
     private var inputBox: LinearLayout? = null
     private var candidateBox: LinearLayout? = null
@@ -60,6 +73,65 @@ class SettingsActivity : Activity() {
         NativeEngine.init(filesDir.absolutePath)
         cfg = NativeEngine.settings()
         setContentView(buildUi())
+    }
+
+    /**
+     * 下载进度广播。
+     *
+     * 注册在 [onStart]/[onStop] 而不是 onCreate：Activity 不可见时还在收广播
+     * 是白耗电，而且重建 UI（`setContentView`）会让回调打到一个已经不在屏幕上的
+     * 视图树里。
+     *
+     * 收到「完成」时要做三件事：`VoiceEngine.invalidate()` 让引擎重新加载（它可能
+     * 因为刚启动时模型还不存在、把 `loadError` 缓存住了），重画 UI，弹一句提示。
+     */
+    private val downloadReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            val state = intent?.getStringExtra(ModelDownloadService.EXTRA_STATE)
+            when (state) {
+                // **进度只改一行文字，绝不整页重建。**
+                //
+                // 之前这里写的是 `setContentView(buildUi())`：81 MB 每 256 KB 报一次
+                // 进度，就是三百多次整页重建（几十个 View + 每次重新查引擎状态），
+                // 主线程全堵在这儿——用户看到的就是「设置窗口卡住」，其它按钮点不动。
+                ModelDownloadService.STATE_RUNNING -> {
+                    val done = intent.getLongExtra(ModelDownloadService.EXTRA_DONE, 0)
+                    val total = intent.getLongExtra(ModelDownloadService.EXTRA_TOTAL, 1)
+                    val pct = if (total > 0) (done * 100 / total).toInt() else 0
+                    val mb = done / 1024 / 1024
+                    voiceModelDesc?.text = "下载中 $pct%（$mb MB）"
+                }
+                // 结束态才重建一次：布局要变回「已就绪」或显示失败原因
+                ModelDownloadService.STATE_OK -> {
+                    VoiceEngine.invalidate()
+                    toast("语音模型已就绪")
+                    setContentView(buildUi())
+                }
+                ModelDownloadService.STATE_FAIL -> {
+                    val msg = intent.getStringExtra(ModelDownloadService.EXTRA_NAME) ?: "未知原因"
+                    android.util.Log.w("FeiheSettings", "模型下载失败：$msg")
+                    toast("下载失败：$msg")
+                    setContentView(buildUi())
+                }
+                ModelDownloadService.STATE_CANCELLED -> setContentView(buildUi())
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val f = android.content.IntentFilter(ModelDownloadService.ACTION_PROGRESS)
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(downloadReceiver, f, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(downloadReceiver, f)
+        }
+    }
+
+    override fun onStop() {
+        runCatching { unregisterReceiver(downloadReceiver) }
+        super.onStop()
     }
 
     // ── 页面骨架 ────────────────────────────────────────────────────
@@ -188,7 +260,7 @@ class SettingsActivity : Activity() {
                     // 从输入法进程弹系统授权框会被拒。打开设置页时顺手要一次。
                     if (on) requestMicPermissionIfNeeded()
                 },
-                actionRow("语音模型", "模型状态、隐私说明见下方") { showVoiceInfo() },
+                actionRow("语音模型", voiceModelSummary()) { showVoiceInfo() },
             ),
         )
 
@@ -544,13 +616,15 @@ class SettingsActivity : Activity() {
                 setTextColor(TEXT)
             },
         )
-        texts.addView(
-            TextView(this).apply {
-                text = desc
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setTextColor(SUB)
-            },
-        )
+        val descView = TextView(this).apply {
+            text = desc
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextColor(SUB)
+        }
+        texts.addView(descView)
+        // 「语音模型」那一行要把描述留个引用：下载进度每 256 KB 就发一次广播，
+        // 只有它的文字会变，整页重建是灾难（见 downloadReceiver 的注释）。
+        if (label == "语音模型") voiceModelDesc = descView
         row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(
             TextView(this).apply {
@@ -850,17 +924,87 @@ class SettingsActivity : Activity() {
         requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
     }
 
+    /**
+     * 「语音模型」那一行右侧的状态文字。
+     *
+     * 三种状态要能一眼分辨，否则用户点了没反应会怀疑坏了：
+     * 未下载 / 下载中（带百分比）/ 已就绪。
+     */
+    private fun voiceModelSummary(): String {
+        if (ModelDownloadService.running) {
+            val p = ModelDownloader.presentFiles(this).sumOf { it.bytes }
+            val pct = (p * 100 / ModelDownloader.totalBytes).toInt()
+            return "下载中 $pct%"
+        }
+        if (!VoiceEngine.modelReady(this)) return "未下载，点此下载（约 81 MB）"
+        return if (VoiceEngine.fromDownload(this)) "已就绪（已下载）" else "已就绪（内置）"
+    }
+
     private fun showVoiceInfo() {
-        val model = assets.list("asr")?.joinToString(", ") ?: "（缺失）"
+        if (!VoiceEngine.modelReady(this)) {
+            showModelDownload()
+            return
+        }
+        val src = if (VoiceEngine.fromDownload(this)) "已下载（魔搭 ModelScope）" else "内置"
+        val files = ModelDownloader.presentFiles(this).joinToString(", ") { it.remote }
+            .ifEmpty { assets.list("asr")?.joinToString(", ") ?: "（缺失）" }
         AlertDialog.Builder(this)
             .setTitle("语音模型")
             .setMessage(
-                "内置模型文件：$model\n\n" +
+                "模型来源：$src\n文件：$files\n\n" +
                     "识别全程在本机离线完成，录音不会上传、不会保存，也不经过任何网络请求。" +
                     "关闭「语音输入」后本输入法不再申请录音权限。\n\n" +
                     "当前版本只在句末补一个句号，中间标点不猜（猜错比不猜更烦人）。"
             )
             .setPositiveButton("知道了", null)
+            .setNeutralButton("删除模型") { _, _ -> confirmDeleteModel() }
+            .show()
+    }
+
+    /**
+     * 下载语音模型。
+     *
+     * 模型 81 MB，没打进 APK——所有人替「不用语音」的用户背 81 MB 不合理。这里给
+     * 一个国内能直连的源（魔搭），点了就进前台服务下载，通知栏看进度。
+     *
+     * **必须让用户看到「多大、从哪下、下到哪」**：80 MB 流量在移动网络下不是小事，
+     * 静默下载是真会被骂的。
+     */
+    private fun showModelDownload() {
+        // 统一用同一个算法算 MB：之前一处写死 81、一处按字节除，同一屏出现
+        // 78 MB / 81 MB 两个数字——用户会以为其中一个错了，进而怀疑整个功能。
+        val mb = ModelDownloader.totalBytes / 1024 / 1024
+        val partial = ModelDownloader.presentFiles(this).sumOf { it.bytes }
+        val resumed = if (partial > 0) "\n\n已下载 ${partial / 1024 / 1024} MB，将继续续传。" else ""
+        AlertDialog.Builder(this)
+            .setTitle("下载语音模型")
+            .setMessage(
+                "大小：约 $mb MB\n来源：魔搭社区（ModelScope）\n" +
+                    "仓库：pengzhendong/sherpa-onnx-paraformer-zh-small\n\n" +
+                    "下载后可以离线语音输入，录音不出本机、不联网。" +
+                    "建议在 Wi-Fi 下进行。$resumed"
+            )
+            .setPositiveButton("开始下载") { _, _ ->
+                VoiceEngine.invalidate()
+                ModelDownloadService.start(this)
+                // 重新画一遍，让「下载中」的状态显示出来
+                setContentView(buildUi())
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun confirmDeleteModel() {
+        AlertDialog.Builder(this)
+            .setTitle("删除语音模型")
+            .setMessage("删掉之后语音输入会不可用，需要重新下载（约 81 MB）。")
+            .setPositiveButton("删除") { _, _ ->
+                ModelDownloader.dir(this).deleteRecursively()
+                VoiceEngine.invalidate()
+                toast("已删除")
+                setContentView(buildUi())
+            }
+            .setNegativeButton("取消", null)
             .show()
     }
 

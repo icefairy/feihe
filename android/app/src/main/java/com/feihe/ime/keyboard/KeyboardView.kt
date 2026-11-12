@@ -21,7 +21,7 @@ import com.feihe.ime.Palette
 object KeyboardView {
 
     private const val KEY_HEIGHT_DP = 46f
-    private const val GAP_DP = 5f
+    private const val GAP_DP = 3f
 
     /**
      * 上档键的 tag。
@@ -49,7 +49,9 @@ object KeyboardView {
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(p.keyboardBg)
-            setPadding(dp(ctx, 3f), dp(ctx, 6f), dp(ctx, 3f), dp(ctx, 6f))
+            // 左右只留 2dp：原先 3dp 在 1080p 上是 9px，看着明显的白边，
+            // 而字母键本身已经被 margin 收缩过了，两侧不需要再额外让位。
+            setPadding(dp(ctx, 2f), dp(ctx, 4f), dp(ctx, 2f), dp(ctx, 4f))
         }
 
         for (row in rows) {

@@ -220,6 +220,32 @@ object NativeEngine {
     }
 
     /**
+     * 把一个「用户逐段拼出来的词」记成自造词。
+     *
+     * 和 [learn] 的区别：那个只记「码 → 词」的次数，作用范围仅限**词库里已有的词**
+     * ——排序能把它们往前挪，但造不出新词。用户打「飞鹤」这种词库里没有的组合时，
+     * 无论选多少次，下次还是只能横滑着一个个找。
+     *
+     * [pinyin] 必须是**全拼**（`fei he`），空格分隔。`phrase` 模块按全拼建索引，
+     * 传双拼码进去下次查不到，等于白记。
+     */
+    fun learnPhrase(word: String, pinyin: String) {
+        if (word.isEmpty() || pinyin.isEmpty() || !ensureLoaded()) return
+        runCatching { learnPhraseNative(word, pinyin) }
+    }
+
+    /**
+     * 反查「码 + 词」对应的全拼。返回空串 = 词库里没有这条。
+     *
+     * 用来判断「这是不是个新词」：查得到说明词库本来就有，不该记成自造词
+     * （会往表里灌重复数据，而且自动切分沿用的默认候选也会被误记）。
+     */
+    fun pinyinOf(code: String, word: String): String {
+        if (code.isEmpty() || word.isEmpty() || !ensureLoaded()) return ""
+        return runCatching { pinyinOfNative(code, word) }.getOrDefault("")
+    }
+
+    /**
      * 设置页的开关快照。`null` = 引擎没加载，设置页据此显示「引擎未就绪」而不是
      * 一排点了没反应的开关。
      */
@@ -419,6 +445,10 @@ object NativeEngine {
     private external fun recordNative(prev: String, next: String)
 
     private external fun learnNative(code: String, word: String)
+
+    private external fun learnPhraseNative(word: String, pinyin: String)
+
+    private external fun pinyinOfNative(code: String, word: String): String
 
     private external fun configNative(): String
 

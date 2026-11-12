@@ -118,6 +118,20 @@ val syncRustLib by tasks.registering(Copy::class) {
     dependsOn(buildRust)
     from(rootProject.file("jni/target/$rustTarget/release")) { include("libfeihe_android.so") }
     into(rustJniLibs.map { it.dir("arm64-v8a") })
+    // `jniLibs.srcDirs` 指向的是 rustJniLibs **根目录**，AAPT 会把下面每个子目录
+    // 都当成一个 ABI 打进去——`abiFilters` 只筛选「声明了的 ABI 是否存在」，拦不住
+    // 一个没声明但确实躺在那儿的目录。x86_64 目录是给模拟器验证用的，留着它就会
+    // 让正式包凭空多 6MB。所以每次同步 arm64 时顺手把 x86_64 删掉。
+    doLast { rustJniLibs.get().dir("x86_64").asFile.deleteRecursively() }
+}
+
+// 仅用于本地模拟器验证（x86_64 模拟器跑不了 arm64 的 .so）。
+// **必须显式 `gradle syncRustLibX86` 才会跑**，不挂在 preBuild 上。
+// 不参与发布：syncRustLib 会删掉这个目录，且 abiFilters 只有 arm64-v8a。
+val syncRustLibX86 by tasks.registering(Copy::class) {
+    dependsOn(syncRustLib)
+    from(rootProject.file("jni/target/x86_64-linux-android/release")) { include("libfeihe_android.so") }
+    into(rustJniLibs.map { it.dir("x86_64") })
 }
 
 // ── 编译用签名 ────────────────────────────────────────────────────
@@ -204,7 +218,17 @@ android {
         noCompress += listOf("onnx", "bin", "fst")
     }
 
-    sourceSets.getByName("main").jniLibs.srcDir(rustJniLibs)
+    // **必须保留默认目录。**
+    //
+    // 以前写 `jniLibs.srcDir(rustJniLibs)`，是覆盖语义——等于把「默认的
+    // `src/main/jniLibs`」从源集合里摘掉了，于是放在那儿的 sherpa-onnx 四个原生库
+    // （libsherpa-onnx-jni.so / libonnxruntime.so …）一个都打不进 APK。
+    //
+    // 表现是运行期 `dlopen failed: library "libsherpa-onnx-jni.so" not found`——
+    // 报错说的是「找不到库」，很容易让人以为是抓取脚本没跑、文件缺失，
+    // 而实际上文件一直在 `src/main/jniLibs/arm64-v8a/` 里躺着，只是构建时被忽略了。
+    val jniSrc = sourceSets.getByName("main").jniLibs
+    jniSrc.setSrcDirs(listOf(rustJniLibs.get().asFile, file("src/main/jniLibs")))
 
     kotlinOptions {
         jvmTarget = "17"
@@ -213,6 +237,33 @@ android {
 
 // 每个变体在打包前都要先把 .so 准备好。
 tasks.named("preBuild").configure { dependsOn(syncRustLib) }
+
+/**
+ * `android/jni/Cargo.toml` 的 version 必须跟 APK 版本一致。
+ *
+ * 那个 crate 自成 workspace（空的 `[workspace]`），没法用 `version.workspace = true`
+ * 继承根的版本，只能手抄。手抄必然漂：它曾在 0.3.21 停了好几个版本，编译日志打出
+ * `feihe-android v0.3.21` 而 APK 是 0.3.26，排查时被误当成「在跑旧代码」。
+ *
+ * 放在 `preBuild` 之前跑，漂了直接构建失败，不让人对着错版本号查半天。
+ */
+val checkJniVersion by tasks.registering {
+    val rootToml = rootProject.file("../Cargo.toml")
+    val jniToml = rootProject.file("jni/Cargo.toml")
+    doLast {
+        fun ver(f: File): String =
+            Regex("""(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"""")
+                .find(f.readText())?.groupValues?.get(1)
+                ?: throw GradleException("读不到 ${f.path} 里的 version")
+        val a = ver(rootToml)
+        val b = ver(jniToml)
+        if (a != b) throw GradleException(
+            "版本号不一致：根 Cargo.toml=$a，android/jni/Cargo.toml=$b。" +
+                "改 jni/Cargo.toml 的 version 对齐（它自成 workspace，不能继承）。",
+        )
+    }
+}
+tasks.named("preBuild").configure { dependsOn(checkJniVersion) }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
