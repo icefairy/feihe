@@ -15,6 +15,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
 import android.view.inputmethod.EditorInfo
@@ -261,6 +262,14 @@ class FeiheIme : InputMethodService() {
      * 不出正确宽度，候选会塌成一团。
      */
     private var expandedColumn: LinearLayout? = null
+
+    /**
+     * 包住 [expandedColumn] 的纵向滚动容器。
+     *
+     * 所有对「展开区可见性」的操作都该走这里，不能直接改 expandedColumn——
+     * 它现在只是 ScrollView 里的内容，自己 GONE 只会让 ScrollView 留一个空框。
+     */
+    private var expandedScroll: ScrollView? = null
 
     /** 当前键盘页。字母 / 数字 / 符号——布尔值装不下三态，别再退回布尔。 */
     private var page: Page = Page.LETTERS
@@ -645,12 +654,54 @@ class FeiheIme : InputMethodService() {
             fieldType = info.inputType
             fieldHint = info.hintText
         }
+        // 窗口重新弹出 = 一次新的输入会话，界面状态必须回到初始。
+        //
+        // 不重置的后果：上次在 A 应用里把候选展开成一屏多行、横滑翻到了第五页，
+        // 切到 B 应用时键盘「弹出来就是这样」——用户看到一屏候选、键盘不见了，
+        // 完全不知道发生了什么，只能自己找收起箭头。
+        resetTransientUiState()
         readClipboard()
         // 短信优先于剪贴板：同一屏里短信里的码一定比剪贴板里的新
         refreshSmsCode(render = false)
         startSmsObserver()
         refreshCandidates()
         refreshStatus()
+    }
+
+    /**
+     * 把「只属于上一次输入会话」的界面状态清掉。
+     *
+     * **只重置纯呈现状态**，不动用户偏好（双拼方案、候选个数、样式）——那些是
+     * 设置，弹一次键盘就被重置是灾难。
+     *
+     * 具体三项：
+     * - 候选展开 → 收起。展开态会吃满整屏并藏掉键盘，留着等于「键盘不见了」。
+     * - 横向滚动 → 归零。横滑位置是上次找某个候选留下的，新会话从第一个看起。
+     * - 翻页 → 第一页。
+     *
+     * `chinese`（中英）**不在这里重置**：它是用户的输入意图，不是呈现状态。
+     * 用户在微信里切成英文，切到浏览器仍想打英文——每次弹键盘强制回中文比
+     * 「记住上次」更烦人。这一点和搜狗/微信输入法一致。
+     */
+    private fun resetTransientUiState() {
+        candidateExpanded = false
+        candPage = 0
+        // scrollTo 要在布局完成后才生效：刚弹窗时 candidateColumn 还没量过宽度，
+        // 立刻滚动距离是 0。post 到下一帧更稳。
+        candidateScroll?.let { sv ->
+            sv.scrollTo(0, 0)
+            sv.post { sv.scrollTo(0, 0) }
+        }
+        // 展开容器可能还留着上次的行视图，清掉免得下次展开闪一下旧内容
+        expandedColumn?.let {
+            it.visibility = View.GONE
+            it.removeAllViews()
+            (it.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                lp.height = dp(CANDIDATE_ROW_DP)
+                lp.weight = 0f
+                it.layoutParams = lp
+            }
+        }
     }
 
     /**
@@ -849,8 +900,28 @@ class FeiheIme : InputMethodService() {
         )
         // 展开态容器和 candidateScroll 并列、同一个高度槽位；谁可见由
         // applyExpandedChrome 决定，另一个 GONE（GONE 不占高度）。
+        //
+        // **外面必须再套一层纵向 ScrollView**：
+        // 以前 expandedColumn 直接挂 root，高度是「算出来能放几行就多高」，
+        // 而行数由 expandedRows() 靠 root 高度估算——算多了最后一行就被 root
+        // 边界裁掉半截（用户看到的「最后一行显示不完整」），算少了下方留空。
+        // 套上 ScrollView 之后，行数不再是生死问题：放不下就滚。这让
+        // 「候选到底有几条」「这机器屏幕多高」都不再影响正确性。
+        expandedScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = true
+            // 滚到边界时不要多出蓝色光晕，输入法窗口里那个效果很跳
+            overScrollMode = View.OVER_SCROLL_NEVER
+            visibility = View.GONE
+            addView(
+                expandedColumn,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
         root.addView(
-            expandedColumn,
+            expandedScroll,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(CANDIDATE_ROW_DP),
@@ -1152,9 +1223,13 @@ class FeiheIme : InputMethodService() {
                         forgetContext()
                         return
                     }
-                    // 英文态：正常续进组合串，H e l l o 这样一个个打
-                    pending.append(key.code.uppercase())
-                    pushComposing()
+                    // 英文态 + 上档：**直接上屏大写字母**。
+                    //
+                    // 以前这里走 `pending.append` 把大写字母塞进组合串，于是
+                    // 候选条上出现一个「A」候选，用户还得再按一次空格才上屏。
+                    // 英文输入没有「组合串」这个概念——按了就该立刻出现。
+                    commitText(key.code.uppercase())
+                    forgetContext()
                     return
                 }
                 // 快捷输入的引导符 `/`：只在「中文态 + 手上没有别的组合串」时进入。
@@ -1167,6 +1242,32 @@ class FeiheIme : InputMethodService() {
                     quickMode = true
                     quickWords = emptyList()
                     pushComposing()
+                    return
+                }
+                // **英文态：字母直接上屏，不进组合串。**
+                //
+                // 这是英文输入的本义：按哪个键屏幕就出哪个字母，没有「先攒着
+                // 等空格确认」这一步。以前这里不分中英，一律 `pending.append`，
+                // 于是英文模式按 A 会在候选条里出现一个 A，用户还得再按空格
+                // 才上屏；连打 hello 就是攒出一串字母再整体上屏，完全是拼音的
+                // 行为——用户说的「英文模式下应该直接点了就上屏」就是这条。
+                if (!chinese) {
+                    commitText(key.code)
+                    // **必须把组合串清干净**：英文态不攒码，但 pending 里可能
+                    // 残留切换模式前打着的中文拼音。不清的话候选条会继续挂着
+                    // 那串旧码的候选，用户看到「英文模式下还有候选」。
+                    pending.setLength(0)
+                    code = ""
+                    candidates = emptyList()
+                    pendingSegments = emptyList()
+                    segmentState = null
+                    suggestions = emptyList()
+                    // 形码态也要退掉：它是中文输入的子模式，英文态留着
+                    // 会让候选条继续挂一个「形」按钮和半截筛选结果。
+                    resetAssist()
+                    refreshCandidates()
+                    refreshStatus()
+                    forgetContext()
                     return
                 }
                 pending.append(key.code)
@@ -1609,22 +1710,78 @@ class FeiheIme : InputMethodService() {
      */
     private fun refreshSegmentMode() {
         segmentState = if (chinese) {
-            SegmentState(pendingSegments.map { it.words }).takeIf { it.active }
+            // 带上每段的码：上屏时要靠它把「码 → 词」记进自造词表。
+            SegmentState(
+                segments = pendingSegments.map { it.words },
+                codes = pendingSegments.map { it.code },
+            ).takeIf { it.active }
         } else {
             null
         }
     }
 
-    /** 分段态下按了收尾键（空格/回车/标点/字符）：先把整句上屏。 */
+    /**
+     * 分段态下按了收尾键（空格/回车/标点/字符）：先把整句上屏。
+     *
+     * **这里必须学一次词**：逐字选词是用户造词的主要路径（打 feih → 选「飞」→
+     * 选「和」），而它全程不经过 [commitWord]，所以以前这条路一个字都没记住。
+     * 用户体感就是「自组词功能依然不生效」。
+     */
     private fun commitSegmentIfActive(): Boolean {
         val state = segmentState ?: return false
-        commitWord(state.sentence(), thenSuggest = false)
+        val sentence = state.sentence()
+        commitWord(sentence, thenSuggest = false)
+        // 记「码 → 词」。段码是双拼码（feih），但 phrase 表按**全拼**索引，
+        // 直接存双拼码下次查不到——必须先转成 fei he（见 pinyinOf 的注释）。
+        NativeEngine.learn(state.sentenceCode(), sentence)
+        rememberPhrase(sentence, state)
         return true
+    }
+
+    /**
+     * 把逐段拼出来的整句记成自造词。
+     *
+     * 优先用段码反查全拼（准确，尊重当前方案）；段码缺失时退回按字反查。
+     * 两条都得拿到全拼才能落库，拿不到就放弃——宁可这次不记，也别存一条
+     * 永远捞不出来的死数据。
+     */
+    private fun rememberPhrase(sentence: String, state: SegmentState) {
+        if (sentence.length < 2) return
+        // 词库里已经有 → 不是自造词
+        if (NativeEngine.pinyinOf(state.sentenceCode(), sentence).isNotEmpty()) return
+
+        // 段码可用：直接用查出来的全拼
+        val fromSeg = state.sentenceCode().takeIf { it.isNotEmpty() }
+            ?.let { NativeEngine.pinyinOf(it, sentence) }
+            ?.takeIf { it.isNotEmpty() }
+        if (fromSeg != null) {
+            NativeEngine.learnPhrase(sentence, fromSeg)
+            return
+        }
+        // 退化：逐字反查全拼
+        rememberPhraseIfNew("", sentence)
     }
 
     private fun renderCandidates() {
         val col = candidateColumn ?: return
         renderNumberRow()
+        // **英文态一条候选都不画。**
+        //
+        // 英文没有「候选」这个概念：按哪个键就该出哪个字母。以前英文模式下
+        // 候选条会残留切换前的中文候选（甚至「形」按钮和数字序号），
+        // 用户看到的是「英文模式还在联想」。
+        //
+        // 放在最前面而不是在末尾清空：后面几十行绑定逻辑全部跳过，
+        // 也杜绝了「某条分支忘了检查 chinese」再次漏出候选的可能。
+        if (!chinese && !quickMode) {
+            candidateScroll?.visibility = View.GONE
+            expandedScroll?.visibility = View.GONE
+            expandedColumn?.removeAllViews()
+            resetAssist()
+            suggestions = emptyList()
+            updateTopSlot()
+            return
+        }
         if (quickMode) {
             // 快捷结果同样是「点一下就上屏」，复用候选项的画法；但**不显示联想**
             // ——`/rq` 出来的日期后面接什么都对，联想只会把结果挤到看不见。
@@ -1679,25 +1836,27 @@ class FeiheIme : InputMethodService() {
         if (candidateExpanded) {
             val exp = expandedColumn ?: return
             candidateScroll?.visibility = View.GONE
-            exp.visibility = View.VISIBLE
+            // 可见性改在 ScrollView 上：expandedColumn 是它的内容，
+            // 让内容可见而容器 GONE 等于什么都不显示。
+            expandedScroll?.visibility = View.VISIBLE
             renderExpandedRows(exp, window)
             updateTopSlot()
             return
         }
         // 收起态：把展开容器清空藏起，避免它继续占位或残留上一次的内容
-        expandedColumn?.let {
-            it.visibility = View.GONE
-            it.removeAllViews()
-            // 恢复成固定一行高：展开时被改成 weight=1+height=0，不还回去的话
-            // 下次收起后这个槽位还会抢走剩余空间（虽然 GONE 了，但布局参数留着坑）
-            (it.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+        expandedScroll?.let { sv ->
+            sv.visibility = View.GONE
+            // 高度还回一行，并把滚动位置归零——下次展开从第一行看起
+            (sv.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
                 if (lp.height != dp(CANDIDATE_ROW_DP) || lp.weight != 0f) {
                     lp.height = dp(CANDIDATE_ROW_DP)
                     lp.weight = 0f
-                    it.layoutParams = lp
+                    sv.layoutParams = lp
                 }
             }
+            sv.scrollTo(0, 0)
         }
+        expandedColumn?.removeAllViews()
         candidateScroll?.visibility = View.VISIBLE
         val bar = ensureSingleRow(col)
 
@@ -1805,25 +1964,34 @@ class FeiheIme : InputMethodService() {
                 ),
             )
         }
-        // 展开态：把这一槽位撑到「能放多少行就多高」。
+        // 展开态：整个槽位撑到「屏幕里能放下多少」。
         //
-        // **不能用 weight=1 + height=0**：root 是直接返回给系统的输入法视图，
-        // 没有 LayoutParams、按 WRAP_CONTENT 测量——root 高度本就等于内容高度，
-        // 纵向 LinearLayout 里没有「剩余空间」可分，weight 分到 0，结果就是
-        // 展开后只有两行高（expH 恰等于内容高度）。
+        // ## 为什么现在要精确算，而不是像以前那样让 root 自己长高
         //
-        // 直接给**显式像素**：行数 × 行高。root 自己也会随之长高，输入法面板
-        // 整体变高，键盘已经在 applyExpandedChrome 里 GONE 掉，腾出的空间正好
-        // 由候选吃掉。
-        expandedColumn?.let { exp ->
-            val want = dp(CANDIDATE_ROW_DP * rows)
-            (exp.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+        // 套上 ScrollView 之后，槽位高度就是 ScrollView 的可视高度。给太多
+        // （超过 root 能拿到的）最后一行会被裁半截；给太少则下方留一片空白。
+        //
+        // `expandedRows()` 已经在按真实可用高度算了，这里把槽位设成
+        // **那些行恰好需要的高度**；如果算出来的高度仍超出可用空间（比如
+        // root 还没 measure 完），ScrollView 会接管滚动，用户不会看到半截行。
+        expandedScroll?.let { sv ->
+            val rowH = dp(CANDIDATE_ROW_DP)
+            val want = rowH * rows
+            (sv.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
                 if (lp.height != want || lp.weight != 0f) {
                     lp.height = want
                     lp.weight = 0f
-                    exp.layoutParams = lp
+                    sv.layoutParams = lp
                 }
             }
+            // 内容高度也钉死：让 ScrollView 知道内容有多高，才滚得动
+            (col.layoutParams as? ViewGroup.LayoutParams)?.let { lp ->
+                if (lp.height != want) {
+                    lp.height = want
+                    col.layoutParams = lp
+                }
+            }
+            sv.scrollTo(0, 0)
         }
         window.forEachIndexed { idx, word ->
             val row = col.getChildAt(idx / CandidateGrid.PER_ROW) as LinearLayout

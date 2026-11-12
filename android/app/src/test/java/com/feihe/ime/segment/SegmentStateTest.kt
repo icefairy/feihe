@@ -110,4 +110,46 @@ class SegmentStateTest {
         assertEquals(s, s.chooseWord("不存在"))
         assertEquals(two, two.chooseWord("张三"))
     }
+
+    // ── 整句码（给「记住这个词」用）────────────────────────────────
+
+    /** 带码时按段拼起来，段间一个空格。 */
+    @Test
+    fun `sentenceCode 按段拼码`() {
+        val s = SegmentState(
+            segments = listOf(listOf("飞"), listOf("鹤")),
+            codes = listOf("fei", "he"),
+        )
+        assertEquals("fei he", s.sentenceCode())
+    }
+
+    /**
+     * 码数和段数不匹配 → 返回空串，**不能瞎拼**。
+     *
+     * 调用方看到空串会退回「按字反查全拼」。如果这里硬拼一个残缺的码，
+     * 存进 phrase 表就是一条谁也查不出来的死数据。
+     */
+    @Test
+    fun `sentenceCode 码数不匹配时返回空`() {
+        val s = SegmentState(
+            segments = listOf(listOf("飞"), listOf("鹤")),
+            codes = listOf("fei"),
+        )
+        assertEquals("", s.sentenceCode())
+    }
+
+    @Test
+    fun `sentenceCode 没有码时返回空`() {
+        assertEquals("", two.sentenceCode())
+    }
+
+    /** 三段三码都要在，空格分隔，首尾不能有多余空格。 */
+    @Test
+    fun `sentenceCode 三段拼接无多余空格`() {
+        val s = SegmentState(
+            segments = listOf(listOf("中"), listOf("华"), listOf("人")),
+            codes = listOf("zhong", "hua", "ren"),
+        )
+        assertEquals("zhong hua ren", s.sentenceCode())
+    }
 }

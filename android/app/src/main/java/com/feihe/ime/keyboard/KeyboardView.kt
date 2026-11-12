@@ -195,7 +195,12 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
             background = keyBackground(ctx, key, shift)
             isClickable = true
             contentDescription = accessibilityLabel(key, shift)
-            setOnClickListener { onKey(key) }
+            // 空格键的点击由下面的 OnTouch 自己触发（见那里注释），
+            // 这里不能再挂 OnClickListener，否则一旦某条路径同时走了两边
+            // 就会打出两个空格。
+            if (key.kind != KeyKind.SPACE) {
+                setOnClickListener { onKey(key) }
+            }
         }
         if (key.kind == KeyKind.SHIFT) view.tag = SHIFT_TAG
         // 中/英键要能在切模式时就地改字（中 ⇄ 英），所以打上标记。
@@ -217,57 +222,74 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
             }
         }
 
-        // 空格键长按 = 按住说话。
+        // 空格键：**普通点击 + 长按说话**，两套手势共存。
         //
-        // **必须自己接管 OnTouch 而不能只用 setOnLongClickListener**：后者只在
-        // 「长按判定成功」那一刻回调一次，收不到「手指抬起」。而按住说话的语义
-        // 是「抬起 = 说完了」，收不到 UP 就永远停不下来录音。
+        // ## 为什么必须自己接管触摸并自己触发点击
         //
-        // 这里不用系统长按判定（LONG_PRESS_TIMEOUT 500ms 太长，说一句话要等半秒），
-        // 自己定 [VOICE_HOLD_MS]：短于它的当普通空格，长于它的进语音。
+        // 试过「OnTouch 返回 false 放行给 OnClickListener」，在真机上是坏的：
+        // DOWN 返回 false 后，View 不认为自己开始了一次手势，后续 UP 也就
+        // 不再回传给这个 OnTouchListener——但 `isPressed` 已经在 DOWN 里被设成
+        // true，于是用户看到键亮了（「页面上有反应」），可点击永远不触发
+        // （「没法输入空格」）。
+        //
+        // 结论：接管就完整接管，UP 时自己调 onKey(key)，一次都别指望系统。
         if (key.kind == KeyKind.SPACE) {
             val slop = VOICE_CANCEL_SLOP_DP * ctx.resources.displayMetrics.density
             var downX = 0f
             var downY = 0f
+            var moved = false
             view.setOnTouchListener { v, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         v.isPressed = true
                         voiceHoldTriggered = false
                         held = true
+                        moved = false
                         downX = ev.x
                         downY = ev.y
                         v.postDelayed(voiceHoldRunnable, VOICE_HOLD_MS)
-                        // 返回 false：不消费 DOWN，让 OnClickListener 照常工作。
-                        // 这是「点击」和「长按」共存的前提——消费了 DOWN，
-                        // View 就自己接管手势，OnClickListener 永不触发。
-                        false
+                        // 消费 DOWN：既然要自己判 UP，就必须全程接管，
+                        // 否则拿不到后续事件。
+                        true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        // 手指滑开就撤销长按判定：这是打字时的手抖，不是想说话
-                        if (held && (Math.abs(ev.x - downX) > slop ||
+                        // 手指滑出键帽范围就取消（既有长按，也有这次点击）：
+                        // 键盘上滑出去一般是想改主意，不该还把空格打上去。
+                        if (!moved && (Math.abs(ev.x - downX) > slop ||
                                 Math.abs(ev.y - downY) > slop)
                         ) {
+                            moved = true
                             held = false
+                            v.isPressed = false
                             v.removeCallbacks(voiceHoldRunnable)
                         }
-                        false
+                        true
                     }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    MotionEvent.ACTION_UP -> {
                         v.isPressed = false
-                        held = false
                         v.removeCallbacks(voiceHoldRunnable)
+                        held = false
+                        if (voiceHoldTriggered) {
+                            // 长按走了语音：松手 = 说完了，不再补一个空格
+                            voiceHoldTriggered = false
+                            onVoiceUp()
+                        } else if (!moved) {
+                            // 普通点击：自己上屏空格
+                            onKey(key)
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        v.isPressed = false
+                        v.removeCallbacks(voiceHoldRunnable)
+                        held = false
+                        // 被系统取消（来电、窗口失焦）：如果在录音就收尾，
+                        // 但不打空格——用户的手指动作并不是「点了一下」。
                         if (voiceHoldTriggered) {
                             voiceHoldTriggered = false
                             onVoiceUp()
-                            // **消费这次 UP**：已经当成长按处理过，就不该再触发一次
-                            // OnClickListener——否则「按住说话」结束时还会多打一个空格
-                            // 上屏。这是唯一需要返回 true 的分支。
-                            true
-                        } else {
-                            // 返回 false：交给 OnClickListener 打空格
-                            false
                         }
+                        true
                     }
                     else -> false
                 }

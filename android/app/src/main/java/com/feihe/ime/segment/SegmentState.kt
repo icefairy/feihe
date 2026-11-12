@@ -21,6 +21,17 @@ data class SegmentState(
     val segments: List<List<String>>,
     val selected: List<Int> = List(segments.size) { 0 },
     val focus: Int = -1,
+    /**
+     * 每段对应的拼音码，和 [segments] 同序。
+     *
+     * **必须带码**：逐字选词是用户「造词」的主要路径（打 feih → 选「飞」→ 选「和」），
+     * 而造出来的词要能被下次同码捞出来，就得存「码 → 词」。以前这里只有 words，
+     * 上屏时拿不到码，于是这条路径**一个字都没学过**——用户说的「自组词记不住」
+     * 就是它。
+     *
+     * 允许为空（老调用点），此时退化到按字反查全拼，能记但不如直接用码准。
+     */
+    val codes: List<String> = emptyList(),
 ) {
     /** 是否值得进分段态：至少两段、每段都有候选。 */
     val active: Boolean
@@ -31,6 +42,17 @@ data class SegmentState(
         for (i in segments.indices) {
             append(segments[i][selected[i]])
         }
+    }
+
+    /**
+     * 整句对应的拼音码（空格分隔），给「记住这个词」用。
+     *
+     * 段码缺失（[codes] 为空或长度不对）时返回空串——调用方据此退化到按字反查。
+     * 不能在这里现编一个：码错了会记成一条永远捞不出来的死数据。
+     */
+    fun sentenceCode(): String {
+        if (codes.size != segments.size) return ""
+        return codes.joinToString(" ") { it.trim() }.trim()
     }
 
     /** 展开第 i 段。下标越界或该段没候选就原样返回。 */
