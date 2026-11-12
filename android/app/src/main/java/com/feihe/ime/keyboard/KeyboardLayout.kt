@@ -136,16 +136,39 @@ object QwertyLayout {
         'b' to "：", 'n' to "；", 'm' to "、",
     )
 
-    private fun ch(c: Char) =
-        Key(c.uppercaseChar().toString(), KeyKind.CHAR, c.toString(), swipe = SWIPE[c])
+    /**
+     * 英文模式的上滑标点。
+     *
+     * 中文标点（`，。？！：；、`）在英文输入下是**错的**：输入 QQ 邮箱、网址、
+     * 命令行时打出全角标点，下游一律当非法字符。以前这里只有一张表，导致英文模式
+     * 下整个键盘连一个半角句号都找不到——邮箱地址根本没法输完。
+     *
+     * 数字和符号类（`1`-`0`、`@ # ¥ % & * - ( /`）两边共用，不重复定义。
+     */
+    val SWIPE_EN: Map<Char, String> = SWIPE + mapOf(
+        'z' to "!", 'x' to "?", 'c' to ",", 'v' to ".",
+        'b' to ":", 'n' to ";", 'm' to "'",
+    )
 
-    val rows: List<List<Key>> = listOf(
+    /** 按中英模式取上滑表。英文用半角，中文用全角。 */
+    fun swipeMap(chinese: Boolean): Map<Char, String> =
+        if (chinese) SWIPE else SWIPE_EN
+
+    private fun ch(c: Char, chinese: Boolean = true) =
+        Key(
+            c.uppercaseChar().toString(),
+            KeyKind.CHAR,
+            c.toString(),
+            swipe = swipeMap(chinese)[c],
+        )
+
+    private val CHINESE_ROWS: List<List<Key>> = listOf(
         // 第一排 10 键
-        listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p').map(::ch),
+        listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p').map{ ch(it, true) },
 
         // 第二排 9 键。真机键盘左右各留半格，手指不容易误触边缘；
         // 这里靠容器 padding 撑，不塞占位键（占位键会被读屏软件念出来）。
-        listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l').map(::ch),
+        listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l').map{ ch(it, true) },
 
         // 第三排：Shift + 7 字母 + 删除
         //
@@ -153,26 +176,43 @@ object QwertyLayout {
         // 用户要求**全部去掉**，改由 `c`/`m`/`v` 上滑输入。空格两侧现在只有功能键，
         // 拇指盲按时不会再蹭到标点。
         listOf(Key("⇧", KeyKind.SHIFT, weight = 1.5f)) +
-            listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map(::ch) +
+            listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map{ ch(it, true) } +
             listOf(Key("⌫", KeyKind.DELETE, weight = 1.5f)),
 
         // 第四排：数字页 / 中英 / 表情 / 控制 / 空格 / 回车
         //
         // 原来这里是「123 中 😊 ，、␣ 。↵」，去掉三个标点后空出两个位置，正好装下
-        // 「导航」页入口。空格权重从 2.1 提到 3.4（总权重仍是 8.2，见单测），
-        // 因为它是这一排唯一会被盲按的键，标点腾出来的宽度应该给它。
+        // 「导航」页入口。
+        //
+        // **空格居中是靠左右权重相等实现的**：左边 123/中/😊/⌘ 共 3.6，右边只有
+        // 回车 1.2，空格被挤到偏右（用户反馈"空格太偏右"）。把 😊 和 ⌘ 挪到空格
+        // 右边，左右各 2.6 / 2.6，空格正好落在正中间。总权重仍是 8.2，和其它三排
+        // 对齐，键盘不会因此变宽变窄。
         listOf(
-            Key("123", KeyKind.PAGE, "digits", weight = 1f),
-            Key("中", KeyKind.MODE, weight = 1f),
-            // 表情入口。以前只有数字页/符号页底部有 😊，字母页上找不到——
-            // 而聊天时八成时间都在字母页。
-            Key("😊", KeyKind.PAGE, "emoji", weight = 0.8f),
-            // 光标/编辑控制入口：方向键、复制粘贴、全选。手机上编长文刚需。
-            Key("⌘", KeyKind.PAGE, "nav", weight = 0.8f),
-            Key("", KeyKind.SPACE, weight = 3.4f),
-            Key("↵", KeyKind.ENTER, weight = 1.2f),
+            Key("123", KeyKind.PAGE, "digits", weight = 1.5f),
+            Key("中", KeyKind.MODE, weight = 1.5f),
+            Key("", KeyKind.SPACE, weight = 4f),
+            Key("😊", KeyKind.PAGE, "emoji", weight = 1f),
+            Key("⌘", KeyKind.PAGE, "nav", weight = 1f),
+            Key("↵", KeyKind.ENTER, weight = 1f),
         ),
     )
+
+    /** 英文模式：字母键的上滑改半角标点，其余结构完全一致。 */
+    private val ENGLISH_ROWS: List<List<Key>> = listOf(
+        listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p').map{ ch(it, false) },
+        listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l').map{ ch(it, false) },
+        listOf(Key("⇧", KeyKind.SHIFT, weight = 1.5f)) +
+            listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map{ ch(it, false) } +
+            listOf(Key("⌫", KeyKind.DELETE, weight = 1.5f)),
+        CHINESE_ROWS.last(),
+    )
+
+    val rows: List<List<Key>> get() = CHINESE_ROWS
+
+    /** 按中英模式取行数据。中英切换要重建键盘才能换掉键帽小字和上滑内容。 */
+    fun rowsOf(chinese: Boolean): List<List<Key>> =
+        if (chinese) CHINESE_ROWS else ENGLISH_ROWS
 
     /** 所有字母键的 code。测试用：必须是 26 个互不相同的小写字母。 */
     val letterCodes: List<String>
@@ -262,7 +302,7 @@ object NumericLayout {
 
     private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f, swipe = SWIPE[s])
 
-    val rows: List<List<Key>> = listOf(
+    private val CHINESE_ROWS: List<List<Key>> = listOf(
         listOf("1", "2", "3").map(::txt),
         listOf("4", "5", "6").map(::txt),
         listOf("7", "8", "9").map(::txt),
@@ -271,6 +311,29 @@ object NumericLayout {
         // `符` 去符号页，`ABC` 回字母页，`123` 在符号页上用来回数字页。
         compactFunctionRow(listOf(NAV_LETTERS, NAV_SYMBOLS, NAV_EMOJI)),
     )
+
+    /**
+     * 英文数字页：底部两角换成半角 `,` `.`。
+     *
+     * 填表、写小数、输 IP/版本号时这两格是刚需，英文模式下给全角逗号句号等于没有。
+     */
+    private val ENGLISH_ROWS: List<List<Key>> = listOf(
+        listOf("1", "2", "3").map(::txt),
+        listOf("4", "5", "6").map(::txt),
+        listOf("7", "8", "9").map(::txt),
+        listOf(
+            Key(",", KeyKind.TEXT, ",", weight = 2f, swipe = ";"),
+            Key("0", KeyKind.TEXT, "0", weight = 2f, swipe = ":"),
+            Key(".", KeyKind.TEXT, ".", weight = 2f, swipe = "~"),
+        ),
+        compactFunctionRow(listOf(NAV_LETTERS, NAV_SYMBOLS, NAV_EMOJI)),
+    )
+
+    val rows: List<List<Key>> get() = CHINESE_ROWS
+
+    /** 按中英模式取数字页行数据。 */
+    fun rowsOf(chinese: Boolean): List<List<Key>> =
+        if (chinese) CHINESE_ROWS else ENGLISH_ROWS
 
     /** 所有直接上屏的字符。测试用：不许有重复，也不许混进字母。 */
     val textCodes: List<String>
@@ -305,7 +368,15 @@ object SymbolLayout {
 
     private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f, swipe = SWIPE[s])
 
-    val rows: List<List<Key>> = listOf(
+    /** 英文符号页：半角标点。以前整张符号页全是全角，英文输入找不到句号/逗号。 */
+    private val EN_SWIPE: Map<String, String> = mapOf(
+        "," to "<", "." to ">", ";" to "|", "!" to "\"",
+        "?" to "'", ":" to "~", "'" to "`", "\"" to "\\",
+        "(" to "{", ")" to "}", "[" to "<", "]" to ">",
+        "-" to "_", "_" to "=", "/" to "|", "+" to "*",
+    )
+
+    private val CHINESE_ROWS: List<List<Key>> = listOf(
         // 顿号跟逗号、句号放一排：它们是同一类「断句」标点，列举报菜名用得最多。
         // 以前它夹在「！：」中间，找的时候要逐格扫一遍。
         listOf("，", "。", "、").map(::txt),
@@ -314,6 +385,29 @@ object SymbolLayout {
         listOf("…", "—", "·").map(::txt),
         compactFunctionRow(listOf(NAV_LETTERS, NAV_DIGITS, NAV_EMOJI)),
     )
+
+    /**
+     * 英文符号页。
+     *
+     * 结构照抄中文页（5 行、每行 3 个、最后一行功能键）——**行数和行高必须一致**，
+     * 否则中英切换时键盘高度会跳，输入框跟着上下蹿。只把内容换成半角。
+     *
+     * 这里必须有 `.` 和 `,`：用户反馈英文模式下整个键盘（连通符号页）找不到句号，
+     * QQ 邮箱地址写不完。字母页上滑也补了半角句号，两条路都能打到。
+     */
+    private val ENGLISH_ROWS: List<List<Key>> = listOf(
+        listOf(",", ".", ";").map { Key(it, KeyKind.TEXT, it, weight = 2f, swipe = EN_SWIPE[it]) },
+        listOf("!", "?", ":").map { Key(it, KeyKind.TEXT, it, weight = 2f, swipe = EN_SWIPE[it]) },
+        listOf("'", "(", ")").map { Key(it, KeyKind.TEXT, it, weight = 2f, swipe = EN_SWIPE[it]) },
+        listOf("\"", "-", "/").map { Key(it, KeyKind.TEXT, it, weight = 2f, swipe = EN_SWIPE[it]) },
+        compactFunctionRow(listOf(NAV_LETTERS, NAV_DIGITS, NAV_EMOJI)),
+    )
+
+    val rows: List<List<Key>> get() = CHINESE_ROWS
+
+    /** 按中英模式取符号页行数据。 */
+    fun rowsOf(chinese: Boolean): List<List<Key>> =
+        if (chinese) CHINESE_ROWS else ENGLISH_ROWS
 
     val textCodes: List<String>
         get() = rows.flatten().filter { it.kind == KeyKind.TEXT }.map { it.code }
@@ -438,10 +532,18 @@ object NavLayout {
 
 /** 给壳用的一张小表：页 → 行数据 + 行高。避免 FeiheIme 里散落三个 when。 */
 object KeyboardPages {
-    fun rows(page: Page): List<List<Key>> = when (page) {
-        Page.LETTERS -> QwertyLayout.rows
-        Page.DIGITS -> NumericLayout.rows
-        Page.SYMBOLS -> SymbolLayout.rows
+    fun rows(page: Page): List<List<Key>> = rows(page, chinese = true)
+
+    /**
+     * 按中英模式取行数据。
+     *
+     * 只有字母页/数字页/符号页区分中英——表情和控制页没有标点，不参与。
+     * 中英切换时壳会调 `showPage` 重建键盘，所以这里只要保证"同一模式同一份数据"。
+     */
+    fun rows(page: Page, chinese: Boolean): List<List<Key>> = when (page) {
+        Page.LETTERS -> QwertyLayout.rowsOf(chinese)
+        Page.DIGITS -> NumericLayout.rowsOf(chinese)
+        Page.SYMBOLS -> SymbolLayout.rowsOf(chinese)
         Page.EMOJI -> EmojiLayout.rows
         Page.NAV -> NavLayout.rows
     }

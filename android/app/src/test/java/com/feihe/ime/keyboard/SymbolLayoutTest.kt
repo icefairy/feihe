@@ -99,4 +99,47 @@ class SymbolLayoutTest {
         assertEquals("符号页应有一个顿号键", 1, symbols.size)
         assertEquals(KeyKind.TEXT, symbols[0].kind)
     }
+
+    // ---- 英文符号页（2026-11-12 用户要求）----
+
+    /**
+     * 英文符号页**必须有半角句号和逗号**。
+     *
+     * 用户反馈：英文模式下整个键盘连通符号页都找不到句号，QQ 邮箱地址无法完成。
+     * 这条是那次反馈的直接规格锁。
+     */
+    @Test
+    fun `英文符号页有半角句号逗号`() {
+        val labels = SymbolLayout.rowsOf(chinese = false).flatten()
+            .filter { it.kind == KeyKind.TEXT }
+            .map { it.code }
+        assertTrue("英文符号页必须有半角句号 .", "." in labels)
+        assertTrue("英文符号页必须有半角逗号 ,", "," in labels)
+    }
+
+    /** 英文符号页不许再混进全角标点。 */
+    @Test
+    fun `英文符号页没有全角标点`() {
+        val labels = SymbolLayout.rowsOf(chinese = false).flatten()
+            .filter { it.kind == KeyKind.TEXT }
+            .map { it.code }
+        for (p in listOf("，", "。", "、", "！", "？", "：", "；")) {
+            assertTrue("英文符号页不该有全角「$p」", p !in labels)
+        }
+    }
+
+    /**
+     * 中英两套符号页的**行数和行高必须一致**。
+     *
+     * 不一致的话，中英切换时键盘总高度会跳，输入框跟着上下蹿——这类回归在真机上
+     * 表现为"打字时整个聊天窗口抖一下"，比崩溃还难描述。
+     */
+    @Test
+    fun `中英符号页行数一致`() {
+        assertEquals(
+            "中英符号页行数必须相同，否则切模式时键盘高度会跳",
+            SymbolLayout.rowsOf(chinese = true).size,
+            SymbolLayout.rowsOf(chinese = false).size,
+        )
+    }
 }

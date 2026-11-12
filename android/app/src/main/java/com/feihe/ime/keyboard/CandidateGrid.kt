@@ -19,7 +19,13 @@ package com.feihe.ime.keyboard
  */
 object CandidateGrid {
 
-    /** 展开态最多几行。再多会把键盘挤出去——手机上候选条比键盘还高很荒唐。 */
+    /**
+     * 展开态默认最多几行。
+     *
+     * 这个值只在**没告诉它能用多高**时兜底用。实际渲染时由调用方按可用高度算出
+     * 真实行数传进来（见 [expandedCount] 的 maxRows 参数）——展开态会把键盘区
+     * 整块收起来，那时候能铺七八行，写死 3 行等于白白浪费一半屏幕。
+     */
     const val MAX_ROWS = 3
 
     /** 展开态每行几个。12 个字的宽度在 1080p 竖屏上正好铺满，不用横滑。 */
@@ -29,10 +35,14 @@ object CandidateGrid {
      * 展开后要显示多少候选。
      *
      * @param total 手上实际有多少候选
+     * @param maxRows 这次实际能放几行。默认用 [MAX_ROWS]（不接管键盘时的保守值）
      * @return 实际渲染的个数；0 表示没候选（调用方直接把候选条收起来）
      */
-    fun expandedCount(total: Int): Int =
-        if (total <= 0) 0 else minOf(total, MAX_ROWS * PER_ROW)
+    fun expandedCount(total: Int, maxRows: Int = MAX_ROWS): Int {
+        if (total <= 0) return 0
+        val rows = if (maxRows <= 0) MAX_ROWS else maxRows
+        return minOf(total, rows * PER_ROW)
+    }
 
     /**
      * 展开后占几行。不足一行也算一行，空候选算 0 行。
@@ -40,8 +50,8 @@ object CandidateGrid {
      * 这个数直接决定候选条容器的高度（行数 × 行高），所以必须和 [expandedCount]
      * 用同一个 [PER_ROW]，不能各算各的。
      */
-    fun rows(total: Int): Int {
-        val n = expandedCount(total)
+    fun rows(total: Int, maxRows: Int = MAX_ROWS): Int {
+        val n = expandedCount(total, maxRows)
         return if (n == 0) 0 else (n + PER_ROW - 1) / PER_ROW
     }
 
@@ -51,9 +61,14 @@ object CandidateGrid {
      * **行数不足时按实际行数算**：只有 4 个候选时，一页就是 4 个而不是 18 个——
      * 否则 `hasNext` 会算成「还有下一页」，用户点 › 之后候选条瞬间清空。
      */
-    fun pageSize(total: Int, expanded: Boolean, collapseSize: Int): Int =
+    fun pageSize(
+        total: Int,
+        expanded: Boolean,
+        collapseSize: Int,
+        maxRows: Int = MAX_ROWS,
+    ): Int =
         if (!expanded) collapseSize.coerceAtLeast(1)
-        else expandedCount(total).coerceAtLeast(1)
+        else expandedCount(total, maxRows).coerceAtLeast(1)
 
     /**
      * 当前页该渲染的候选窗口。
@@ -61,9 +76,16 @@ object CandidateGrid {
      * 页码超出范围时**夹回最后一页**而不是返回空表：用户展开后从第 3 页切到只有
      * 1 页的候选时，返回空表会让候选条看起来「卡死了」。
      */
-    fun window(candidates: List<String>, page: Int, total: Int, expanded: Boolean, collapseSize: Int): List<String> {
+    fun window(
+        candidates: List<String>,
+        page: Int,
+        total: Int,
+        expanded: Boolean,
+        collapseSize: Int,
+        maxRows: Int = MAX_ROWS,
+    ): List<String> {
         if (candidates.isEmpty()) return emptyList()
-        val size = pageSize(total, expanded, collapseSize)
+        val size = pageSize(total, expanded, collapseSize, maxRows)
         val lastPage = ((candidates.size - 1) / size).coerceAtLeast(0)
         val p = page.coerceIn(0, lastPage)
         val start = p * size
@@ -78,8 +100,14 @@ object CandidateGrid {
      * **拿 total 比，不要拿 [expandedCount] 比**：expandedCount 是「一页装几个」，
      * 不是「总共有几个」。用它当上限会让 45 个候选展开后算出「只有一页、没有下一页」。
      */
-    fun hasNext(total: Int, page: Int, expanded: Boolean, collapseSize: Int): Boolean =
-        (page + 1) * pageSize(total, expanded, collapseSize) < total
+    fun hasNext(
+        total: Int,
+        page: Int,
+        expanded: Boolean,
+        collapseSize: Int,
+        maxRows: Int = MAX_ROWS,
+    ): Boolean =
+        (page + 1) * pageSize(total, expanded, collapseSize, maxRows) < total
 
     /**
      * 收起态候选条里一共有几个格子。

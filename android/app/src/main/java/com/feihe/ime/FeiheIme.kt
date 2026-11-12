@@ -216,6 +216,15 @@ class FeiheIme : InputMethodService() {
     /** 键盘容器。字母页和数字页在这里换，**不是**重建整个 InputView。 */
     private var keyboardHost: LinearLayout? = null
 
+    /**
+     * 展开态专用的「收起」横条。
+     *
+     * 展开时候选区把键盘整块盖掉了，字母页上那个 ▾ 跟着一起消失——没有这条，
+     * 用户展开后就没有任何办法收回去，只能按返回键退出输入法。所以它必须在
+     * 展开态常驻在最上面。
+     */
+    private var collapseBar: LinearLayout? = null
+
     /** 当前键盘页。字母 / 数字 / 符号——布尔值装不下三态，别再退回布尔。 */
     private var page: Page = Page.LETTERS
 
@@ -704,6 +713,33 @@ class FeiheIme : InputMethodService() {
             ),
         )
 
+        // 展开态的「收起」条：默认隐藏，只在候选展开时出现。
+        // 它必须在键盘**前面**（更靠上）——键盘会被 GONE 掉，这条是唯一退路。
+        collapseBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+            setOnClickListener {
+                candidateExpanded = false
+                renderCandidates()
+                refreshStatus()
+            }
+            addView(TextView(this@FeiheIme).apply {
+                text = "▴ 收起候选"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                gravity = Gravity.CENTER
+                setTextColor(Palette.of(this@FeiheIme).sub)
+            })
+        }
+        root.addView(
+            collapseBar,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
         keyboardHost = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -735,7 +771,7 @@ class FeiheIme : InputMethodService() {
         host.addView(
             KeyboardView.build(
                 this,
-                KeyboardPages.rows(target),
+                KeyboardPages.rows(target, chinese),
                 shiftState,
                 KeyboardPages.rowHeightDp(target),
                 onLongKey = { onLongKey(it) },
@@ -937,6 +973,10 @@ class FeiheIme : InputMethodService() {
                 KeyboardView.applyShiftState(keyboardHost, shiftState)
                 // 键上的字要跟着变：中文态「中」，英文态「英」
                 KeyboardView.applyModeState(keyboardHost, chinese)
+                // **必须重建键盘**：三张有标点的页（字母/数字/符号）的上滑内容都
+                // 按中英模式各生成一份，键帽小字是画进 Key 里的。不重建的话模式切了
+                // 但键帽还显示中文标点、上滑仍打出「。，？！」——英文模式邮箱都写不完。
+                showPage(page)
                 // 切英文时把中文候选丢掉：那批候选是按中文码查的，留着只会误导
                 forgetContext()
                 // 快捷输入只在中文态存在；切到英文时手上那截 `/rq` 不能留在组合态里
@@ -1271,9 +1311,15 @@ class FeiheIme : InputMethodService() {
         val assistChip = assistAvailable()
         val window = visibleCandidates()
         val hasPrev = candPage > 0
-        val hasNext = CandidateGrid.hasNext(candidates.size, candPage, candidateExpanded, pageSize())
+        val hasNext = CandidateGrid.hasNext(
+            candidates.size, candPage, candidateExpanded, pageSize(), expandedRows(),
+        )
         // 形码筛空了：给一句提示。否则候选条上只剩一个「形」按钮，看着像坏了。
         val emptyAssist = assistActive && assistKeys.isNotEmpty() && window.isEmpty()
+
+        // 展开态：把键盘整块藏起来，候选区吃掉腾出的所有高度（能铺七八行）。
+        // 收起态：键盘还原、候选条回到单行。
+        applyExpandedChrome(candidateExpanded)
 
         // 展开态：多行 × 每行 6 个。收起态：单行横滑。两条路共用同一套候选项绑定，
         // 只是外层容器不同（见 ensureMultiRow / ensureSingleRow）。
@@ -1306,16 +1352,22 @@ class FeiheIme : InputMethodService() {
         // 这个 total 是由一串条件拼出来的，将来再加一种格子很容易又漏算。
         var i = 0
         fun nextSlot(): TextView? = bar.getChildAt(i++) as? TextView
+        // 展开/收起箭头放**第一位**，紧跟在「形」和验证码之后。
+        //
+        // 以前放在最末尾：候选一多（比如 45 个），它就排到要横滑到最右边才看得见，
+        // 等于把入口藏起来了。收起态候选条是横滑的，左边永远默认可见，放这才找得到。
+        //
+        // 注意要排在 assistChip/otp 之后：那两个是「形码筛选」「验证码提示」这种
+        // 状态位，必须压在最左，箭头挤到它们前面会让人以为筛选按钮没了。
         if (assistChip) nextSlot()?.let { bindAssistView(it) }
         if (otp != null) nextSlot()?.let { bindOtpView(it, otp) }
+        if (expandToggle) nextSlot()?.let { bindExpandToggle(it) }
         if (hasPrev) nextSlot()?.let { bindPageView(it, "‹", -1) }
         if (emptyAssist) nextSlot()?.let { bindHintView(it, "形码无匹配，退格重试") }
         window.forEachIndexed { idx, word ->
             nextSlot()?.let { bindCandidateView(it, word, idx == 0, code) }
         }
         if (hasNext) nextSlot()?.let { bindPageView(it, "›", 1) }
-        // 展开/收起开关：只在真有候选时出现，否则候选条上会多一个没用的箭头
-        if (expandToggle) nextSlot()?.let { bindExpandToggle(it) }
         if (suggestions.isNotEmpty()) {
             nextSlot()?.let { bindSeparatorView(it) }
             suggestions.forEach { word ->
@@ -1357,7 +1409,7 @@ class FeiheIme : InputMethodService() {
      * [candidateExpanded] 的注释。
      */
     private fun renderExpandedRows(col: LinearLayout, window: List<String>) {
-        val rows = CandidateGrid.rows(window.size)
+        val rows = CandidateGrid.rows(window.size, expandedRows())
         // 行数变了就补/删行容器。每行固定高度，容器高度 = 行数 × 行高。
         while (col.childCount > rows) col.removeViewAt(col.childCount - 1)
         while (col.childCount < rows) {
@@ -1373,7 +1425,8 @@ class FeiheIme : InputMethodService() {
                 ),
             )
         }
-        resizeCandidateHost(rows)
+        // 展开态把高度撑满（键盘已藏起来了，下面没有东西接着）
+        resizeCandidateHost(0)
         window.forEachIndexed { idx, word ->
             val row = col.getChildAt(idx / CandidateGrid.PER_ROW) as LinearLayout
             val slot = idx % CandidateGrid.PER_ROW
@@ -1400,10 +1453,41 @@ class FeiheIme : InputMethodService() {
     private fun resizeCandidateHost(rows: Int) {
         val scroll = candidateScroll ?: return
         val lp = scroll.layoutParams ?: return
-        val want = dp(CANDIDATE_ROW_DP * rows.coerceAtLeast(1))
+        // 展开态：候选区**吃掉整个键盘的高度**（键盘区被 GONE 掉了，见
+        // applyExpandedChrome）。此时不能按行数算高度——按行数算会留一大片空白，
+        // 明明能显示 8 行却只显示 3 行。用 0 作为哨兵表示「撑满」。
+        val want = if (rows <= 0) {
+            LinearLayout.LayoutParams.MATCH_PARENT
+        } else {
+            dp(CANDIDATE_ROW_DP * rows)
+        }
         if (lp.height != want) {
             lp.height = want
             scroll.layoutParams = lp
+        }
+    }
+
+    /**
+     * 展开态把键盘区整块收起，把屏幕让给候选。
+     *
+     * 用户要的就是这个：候选多的时候，底下的字母键一点用都没有（选词又不靠它），
+     * 却占掉小半个屏幕。展开时把它藏掉，候选区就能铺七八行。
+     *
+     * 收起态必须原样还原：keyboardHost 是 GONE 的话整个输入法只剩一条候选栏，
+     * 用户会以为输入法坏了。所以这是个对称的开关，不是单向的 show/hide。
+     */
+    private fun applyExpandedChrome(expanded: Boolean) {
+        val kh = keyboardHost ?: return
+        val nr = numberRowHost
+        collapseBar?.visibility = if (expanded) View.VISIBLE else View.GONE
+        if (expanded) {
+            kh.visibility = View.GONE
+            nr?.visibility = View.GONE
+        } else {
+            kh.visibility = View.VISIBLE
+            // 数字选词行原本就有自己的显隐逻辑（没候选时 GONE），
+            // 这里不能无脑 VISIBLE，否则没候选时会冒出一条空行。
+            nr?.let { it.visibility = if (it.childCount > 0) View.VISIBLE else View.GONE }
         }
     }
 
@@ -1427,8 +1511,43 @@ class FeiheIme : InputMethodService() {
      * 收起态 = 设置里的「候选个数」（5/7/9）；展开态 = 行 × 列（见 [CandidateGrid]）。
      * 两个模式都从这里取，保证展开/收起切换时窗口计算一致。
      */
+    /**
+     * 展开态实际能放几行。
+     *
+     * 展开时候选区会吃掉整个键盘的高度（键盘被 GONE 掉），所以行数不能写死——
+     * 写死 3 行的话，剩下那片空白就白白浪费了。这里按输入法视图的**真实高度**
+     * 换算：屏幕高度 - 状态条 - （上下一点留白），再除以一行的高度。
+     *
+     * 拿不到高度（还没 measure，比如刚 onCreateInputView 就 refresh）时退回
+     * [CandidateGrid.MAX_ROWS]，保证算出来的永远是个正数。
+     */
+    private fun expandedRows(): Int {
+        val rowH = dp(CANDIDATE_ROW_DP)
+        if (rowH <= 0) return CandidateGrid.MAX_ROWS
+        // 可用高度取**屏幕高度**，不是候选条自己的高度——展开那一刻候选条还没撑开，
+        // 拿它自己的高度会永远算出 1 行。
+        val screenH = resources.displayMetrics.heightPixels
+        if (screenH <= 0) return CandidateGrid.MAX_ROWS
+        // 键盘通常占屏幕 45%~55%（见 rowHeightDp 的推导），按 55% 估可用高度，
+        // 再扣掉一行余量，免得最后一行被挤出一截还要横滑。
+        val usable = (screenH * 0.55f).toInt() - rowH
+        val rows = usable / rowH
+        return rows.coerceIn(1, 8)
+    }
+
+    /**
+     * 一页几个候选。
+     *
+     * 收起态 = 设置里的「候选个数」（5/7/9）；展开态 = 行 × 列（见 [CandidateGrid]）。
+     * 两个模式都从这里取，保证展开/收起切换时窗口计算一致。
+     */
     private fun pageSize(): Int =
-        CandidateGrid.pageSize(candidates.size, candidateExpanded, candidateLimit.coerceAtLeast(1))
+        CandidateGrid.pageSize(
+            candidates.size,
+            candidateExpanded,
+            candidateLimit.coerceAtLeast(1),
+            expandedRows(),
+        )
 
     /**
      * 当前页的候选。候选一共 [CAND_FETCH] 个，靠 ‹ › 翻页，不靠横滑。
@@ -1436,7 +1555,14 @@ class FeiheIme : InputMethodService() {
      * 页码越界时夹回最后一页（不是返回空表），见 [CandidateGrid.window]。
      */
     private fun visibleCandidates(): List<String> =
-        CandidateGrid.window(candidates, candPage, candidates.size, candidateExpanded, candidateLimit.coerceAtLeast(1))
+        CandidateGrid.window(
+            candidates,
+            candPage,
+            candidates.size,
+            candidateExpanded,
+            candidateLimit.coerceAtLeast(1),
+            expandedRows(),
+        )
 
     /** 翻页箭头。`delta` = -1 上一页 / +1 下一页。 */
     private fun bindPageView(v: TextView, label: String, delta: Int) {
