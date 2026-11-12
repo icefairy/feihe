@@ -297,43 +297,44 @@ object NumericLayout {
         "4" to "÷", "5" to "=", "6" to "%",
         "7" to "(", "8" to ")", "9" to "/",
         "0" to "：",
-        "，" to "；", "。" to "～",
     )
 
     private fun txt(s: String) = Key(s, KeyKind.TEXT, s, weight = 2f, swipe = SWIPE[s])
 
-    private val CHINESE_ROWS: List<List<Key>> = listOf(
+    /**
+     * 数字页**不分中英**，底部两角一律是半角 `,` 和 `.`。
+     *
+     * ## 为什么中文模式也不用全角
+     *
+     * 以前中文页是 `，0。`。但数字页的用途是算账、填表、写金额、输电话和版本号——
+     * 这些场景下游（Excel、银行 App、表单校验、命令行）**一律不认全角标点**：
+     * `12。5` 不是小数，`1，000` 不是千分位，而是两个多余字符。
+     *
+     * 更要紧的是**小数点**：中文键盘上原本根本没有半角 `.`，付钱时输 `12.5` 得切
+     * 到英文页再切回来。这已经不是「不方便」而是「这条路走不通」。
+     *
+     * 全角标点在中文文本里当然该用，但它属于**文字输入**；数字页是**数字输入**。
+     * 两个场景的标点规则本来就不同，不该共用一套。
+     */
+    private val ROWS: List<List<Key>> = listOf(
         listOf("1", "2", "3").map(::txt),
         listOf("4", "5", "6").map(::txt),
         listOf("7", "8", "9").map(::txt),
-        listOf("，", "0", "。").map(::txt),
+        listOf(
+            // `.` 就是小数点：键面写 `.` 而不是「点」，按下去直接上屏半角句点
+            Key(",", KeyKind.TEXT, ",", weight = 2f, swipe = ";"),
+            Key("0", KeyKind.TEXT, "0", weight = 2f, swipe = ":"),
+            Key(".", KeyKind.TEXT, ".", weight = 2f, swipe = "~"),
+        ),
         // 功能排：和数字行一样按「总权重 6」分，否则这一排的键宽会和上面跳一格。
         // `符` 去符号页，`ABC` 回字母页，`123` 在符号页上用来回数字页。
         compactFunctionRow(listOf(NAV_LETTERS, NAV_SYMBOLS, NAV_EMOJI)),
     )
 
-    /**
-     * 英文数字页：底部两角换成半角 `,` `.`。
-     *
-     * 填表、写小数、输 IP/版本号时这两格是刚需，英文模式下给全角逗号句号等于没有。
-     */
-    private val ENGLISH_ROWS: List<List<Key>> = listOf(
-        listOf("1", "2", "3").map(::txt),
-        listOf("4", "5", "6").map(::txt),
-        listOf("7", "8", "9").map(::txt),
-        listOf(
-            Key(",", KeyKind.TEXT, ",", weight = 2f, swipe = ";"),
-            Key("0", KeyKind.TEXT, "0", weight = 2f, swipe = ":"),
-            Key(".", KeyKind.TEXT, ".", weight = 2f, swipe = "~"),
-        ),
-        compactFunctionRow(listOf(NAV_LETTERS, NAV_SYMBOLS, NAV_EMOJI)),
-    )
+    val rows: List<List<Key>> get() = ROWS
 
-    val rows: List<List<Key>> get() = CHINESE_ROWS
-
-    /** 按中英模式取数字页行数据。 */
-    fun rowsOf(chinese: Boolean): List<List<Key>> =
-        if (chinese) CHINESE_ROWS else ENGLISH_ROWS
+    /** 数字页中英一致。保留这个签名是为了和其它页的调用点统一。 */
+    fun rowsOf(chinese: Boolean): List<List<Key>> = ROWS
 
     /** 所有直接上屏的字符。测试用：不许有重复，也不许混进字母。 */
     val textCodes: List<String>

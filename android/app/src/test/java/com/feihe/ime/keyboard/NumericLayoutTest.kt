@@ -69,9 +69,39 @@ class NumericLayoutTest {
     }
 
     @Test
-    fun `字符不重复`() {
-        val codes = NumericLayout.textCodes
-        assertEquals("数字页上有重复字符：$codes", codes.size, codes.toSet().size)
+    fun `数字页不出现全角标点 小数点必须是半角`() {
+        // 用户明确要求：数字键盘不该有中文句号，应该换成英文并能当小数点。
+        // 这不是偏好问题——`12。5` 在银行/表单/Excel 里都不是 12.5，
+        // 而中文键盘原本连半角 `.` 都打不出来，等于小额支付这条路是断的。
+        val codes = NumericLayout.textCodes.toSet()
+        assertFalse("数字页不该出现全角句号「。」", "。" in codes)
+        assertFalse("数字页不该出现全角逗号「，」", "，" in codes)
+        assertTrue("数字页必须有半角小数点「.」", "." in codes)
+        assertTrue("数字页必须有半角逗号「,」", "," in codes)
+    }
+
+    @Test
+    fun `小数点就在底排 和 0 相邻`() {
+        // 输 12.5 时手不用换位置。放在别处（比如符号页）等于没修。
+        val bottom = NumericLayout.rows[3]
+        assertEquals("底排应是 , 0 . 三键", listOf(",", "0", "."), bottom.map { it.code })
+    }
+
+    @Test
+    fun `中英模式下数字页完全一致`() {
+        // 数字页的用途是中英共通的（算账、填表、输版本号），
+        // 分两套只会让「中文下打不出小数点」这种坑重新长回来。
+        val zh = NumericLayout.rowsOf(true).flatten().map { it.code }
+        val en = NumericLayout.rowsOf(false).flatten().map { it.code }
+        assertEquals("中英数字页不该有差异", zh, en)
+    }
+
+    @Test
+    fun `小数点直接上屏 不进组合串`() {
+        // 必须是 TEXT 而不是 PUNCT：PUNCT 会先把候选上屏再粘标点，
+        // 而在数字页上用户往往什么都没在打组合串，走了 PUNCT 只会多一次无用操作。
+        val dot = NumericLayout.rows.flatten().first { it.code == "." }
+        assertEquals(KeyKind.TEXT, dot.kind)
     }
 
     // ── 上滑运算符号（2026-11-12 新增）────────────────────────────

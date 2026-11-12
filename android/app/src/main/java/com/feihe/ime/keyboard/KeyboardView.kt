@@ -26,11 +26,24 @@ object KeyboardView {
 /**
  * 空格键按住多久进语音（毫秒）。
  *
- * 系统长按判定是 500ms，说一句话前要干等半秒，手感很糟。220ms 大约是
- * 「明确按住」和「只是打字手滑」的分界：正常打空格通常 60~120ms，
- * 想说话时手指会自然多停留一会儿。
+ * ## 为什么从 220ms 提到 400ms
+ *
+ * 220ms 太短了：普通人点一下键的接触时长是 150~250ms（按下到抬起），
+ * 落在 220ms 两侧，**同一个手势有时当空格、有时当语音**。用户体感就是
+ * 「空格单击完全失效了」——其实是按钮把每一次稍慢的点击都吃成了长按。
+ *
+ * 400ms 是明确的分界：正常点击达不到，想说一句话也无需干等。
+ * 系统长按判定 500ms 太迟钝，所以不用系统的。
  */
-private const val VOICE_HOLD_MS = 220L
+private const val VOICE_HOLD_MS = 400L
+
+/**
+ * 手指移动超过这个距离（dp）就取消语音判定。
+ *
+ * 打字时手指常带一点滑动，尤其空格这种大键。不判移动的话「手一歪」
+ * 也会进语音，而用户本意是打空格。
+ */
+private const val VOICE_CANCEL_SLOP_DP = 24f
 
     /**
      * 上档键的 tag。
@@ -150,6 +163,8 @@ private const val VOICE_HOLD_MS = 220L
         // 空格键长按说话的状态。每建一个键就重置：键盘页切换后旧的判定必须作废，
         // 否则「上一页按到一半的长按」会误触发新页面上的语音。
         var voiceHoldTriggered = false
+        // 长按判定是否还有效（手指没滑开）。滑开就置 false 并撤销定时器。
+        var held = false
         val voiceHoldRunnable = Runnable {
             voiceHoldTriggered = true
             onLongKey(key)
@@ -211,22 +226,46 @@ private const val VOICE_HOLD_MS = 220L
         // 这里不用系统长按判定（LONG_PRESS_TIMEOUT 500ms 太长，说一句话要等半秒），
         // 自己定 [VOICE_HOLD_MS]：短于它的当普通空格，长于它的进语音。
         if (key.kind == KeyKind.SPACE) {
+            val slop = VOICE_CANCEL_SLOP_DP * ctx.resources.displayMetrics.density
+            var downX = 0f
+            var downY = 0f
             view.setOnTouchListener { v, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         v.isPressed = true
                         voiceHoldTriggered = false
+                        held = true
+                        downX = ev.x
+                        downY = ev.y
                         v.postDelayed(voiceHoldRunnable, VOICE_HOLD_MS)
-                        false // 放行给 OnClickListener：没到时长就是普通空格
+                        // 返回 false：不消费 DOWN，让 OnClickListener 照常工作。
+                        // 这是「点击」和「长按」共存的前提——消费了 DOWN，
+                        // View 就自己接管手势，OnClickListener 永不触发。
+                        false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        // 手指滑开就撤销长按判定：这是打字时的手抖，不是想说话
+                        if (held && (Math.abs(ev.x - downX) > slop ||
+                                Math.abs(ev.y - downY) > slop)
+                        ) {
+                            held = false
+                            v.removeCallbacks(voiceHoldRunnable)
+                        }
+                        false
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         v.isPressed = false
+                        held = false
                         v.removeCallbacks(voiceHoldRunnable)
                         if (voiceHoldTriggered) {
                             voiceHoldTriggered = false
                             onVoiceUp()
+                            // **消费这次 UP**：已经当成长按处理过，就不该再触发一次
+                            // OnClickListener——否则「按住说话」结束时还会多打一个空格
+                            // 上屏。这是唯一需要返回 true 的分支。
                             true
                         } else {
+                            // 返回 false：交给 OnClickListener 打空格
                             false
                         }
                     }
