@@ -80,4 +80,35 @@ object CandidateGrid {
      */
     fun hasNext(total: Int, page: Int, expanded: Boolean, collapseSize: Int): Boolean =
         (page + 1) * pageSize(total, expanded, collapseSize) < total
+
+    /**
+     * 收起态候选条里一共有几个格子。
+     *
+     * 这个数必须和 `FeiheIme.renderCandidates()` 里实际绑定的顺序**逐项对齐**，
+     * 否则 `getChildAt` 会取到 null。之前漏算了「展开/收起箭头」：候选从 1 个
+     * 变成 2 个以上时多绑一格而容器没扩容，按第二个键直接 NPE 闪退。
+     *
+     * 抽成纯函数就是为了让这条容易漏的条件链能被单测盯住——它散在渲染代码里，
+     * 加一种新格子忘了同步 total，崩的是整个输入法。
+     *
+     * 绑定顺序（和 renderCandidates 一致）：形 → 验证码 → ‹ → 空提示 → 候选 → › → 箭头 → 分隔符 → 联想
+     */
+    fun barSlots(
+        assistChip: Boolean,
+        otp: Boolean,
+        hasPrev: Boolean,
+        candidateCount: Int,
+        hasNext: Boolean,
+        emptyAssist: Boolean,
+        expandToggle: Boolean,
+        suggestionCount: Int,
+    ): Int =
+        (if (assistChip) 1 else 0) +
+            (if (otp) 1 else 0) +
+            (if (hasPrev) 1 else 0) +
+            candidateCount +
+            (if (hasNext) 1 else 0) +
+            (if (emptyAssist) 1 else 0) +
+            (if (expandToggle) 1 else 0) +
+            (if (suggestionCount > 0) 1 + suggestionCount else 0)
 }

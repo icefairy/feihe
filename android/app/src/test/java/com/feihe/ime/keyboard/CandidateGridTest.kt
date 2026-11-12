@@ -101,4 +101,93 @@ class CandidateGridTest {
             assertTrue("$n 个候选算出 $rows 行，装不下 $cnt 个", rows * CandidateGrid.PER_ROW >= cnt)
         }
     }
+
+    // ---- 候选条格子数（barSlots）----
+    //
+    // 这一组盯的是 0.3.22 的真崩溃：按第一个键正常、按第二个键必闪退。
+    // 原因是 total 漏算了「展开/收起箭头」，候选数从 1 变 2 以上时多绑一格，
+    // getChildAt 返回 null，`as TextView` 抛 NPE。
+
+    @Test
+    fun `候选从 1 个变 2 个时格子数要跟着变`() {
+        // 第一个键：1 个候选，不出现展开箭头
+        val one = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 1,
+            hasNext = false, emptyAssist = false, expandToggle = false, suggestionCount = 0,
+        )
+        // 第二个键：2 个候选，展开箭头出现 → 必须多一格
+        val two = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 2,
+            hasNext = false, emptyAssist = false, expandToggle = true, suggestionCount = 0,
+        )
+        assertEquals(1, one)
+        assertEquals(3, two)
+        assertEquals("多出的候选 + 箭头要正好 2 格", one + 2, two)
+    }
+
+    @Test
+    fun `每个可选格子都要被计入 barSlots`() {
+        // 全关：只剩候选本身
+        assertEquals(
+            5,
+            CandidateGrid.barSlots(
+                assistChip = false, otp = false, hasPrev = false, candidateCount = 5,
+                hasNext = false, emptyAssist = false, expandToggle = false, suggestionCount = 0,
+            ),
+        )
+        // 全开：形1 + 验证码1 + ‹1 + 候选5 + ›1 + 空提示1 + 箭头1 + 分隔符1 + 联想2 = 14
+        assertEquals(
+            14,
+            CandidateGrid.barSlots(
+                assistChip = true, otp = true, hasPrev = true, candidateCount = 5,
+                hasNext = true, emptyAssist = true, expandToggle = true, suggestionCount = 2,
+            ),
+        )
+    }
+
+    @Test
+    fun `没有联想时不占分隔符`() {
+        val without = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 3,
+            hasNext = false, emptyAssist = false, expandToggle = true, suggestionCount = 0,
+        )
+        val with = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 3,
+            hasNext = false, emptyAssist = false, expandToggle = true, suggestionCount = 1,
+        )
+        assertEquals("1 个联想要占「分隔符 + 自身」两格", without + 2, with)
+    }
+
+    @Test
+    fun `格子数永远够放下所有要绑的东西`() {
+        // 穷举常见组合，确认 barSlots 不小于实际绑定次数。
+        for (cand in 0..9) {
+            for (sug in 0..3) {
+                for (assist in listOf(false, true)) {
+                    for (otp in listOf(false, true)) {
+                        for (prev in listOf(false, true)) {
+                            for (next in listOf(false, true)) {
+                                for (toggle in listOf(false, true)) {
+                                    val slots = CandidateGrid.barSlots(
+                                        assist, otp, prev, cand, next, false, toggle, sug,
+                                    )
+                                    var need = cand
+                                    if (assist) need++
+                                    if (otp) need++
+                                    if (prev) need++
+                                    if (next) need++
+                                    if (toggle) need++
+                                    if (sug > 0) need += 1 + sug
+                                    assertEquals(
+                                        "cand=$cand sug=$sug assist=$assist otp=$otp prev=$prev next=$next toggle=$toggle",
+                                        need, slots,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

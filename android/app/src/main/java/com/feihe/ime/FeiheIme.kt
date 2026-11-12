@@ -1285,27 +1285,41 @@ class FeiheIme : InputMethodService() {
         val bar = ensureSingleRow(col)
 
         // 复用已有的 TextView：候选 + 分隔符 + 联想按顺序对位，多了删、少了补。
-        val total = (if (assistChip) 1 else 0) + (if (otp == null) 0 else 1) +
-            (if (hasPrev) 1 else 0) + window.size + (if (hasNext) 1 else 0) +
-            (if (emptyAssist) 1 else 0) +
-            (if (suggestions.isEmpty()) 0 else 1 + suggestions.size)
+        // 格子总数交给 CandidateGrid.barSlots 算，和单测共用同一份逻辑：
+        // 之前这里手写条件链漏了「展开/收起箭头」，候选从 1 个变成 2 个以上时
+        // 多绑一格而容器没扩容，getChildAt 返回 null，`as TextView` 直接 NPE 闪退
+        // （现象就是按第一个键正常、按第二个键必崩）。
+        val expandToggle = candidates.size > 1
+        val total = CandidateGrid.barSlots(
+            assistChip = assistChip,
+            otp = otp != null,
+            hasPrev = hasPrev,
+            candidateCount = window.size,
+            hasNext = hasNext,
+            emptyAssist = emptyAssist,
+            expandToggle = expandToggle,
+            suggestionCount = suggestions.size,
+        )
         while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
         while (bar.childCount < total) bar.addView(TextView(this))
+        // 兜底：候选条里少一格只是少显示一个候选，绝不能让按键崩掉整个输入法。
+        // 这个 total 是由一串条件拼出来的，将来再加一种格子很容易又漏算。
         var i = 0
-        if (assistChip) bindAssistView(bar.getChildAt(i++) as TextView)
-        if (otp != null) bindOtpView(bar.getChildAt(i++) as TextView, otp)
-        if (hasPrev) bindPageView(bar.getChildAt(i++) as TextView, "‹", -1)
-        if (emptyAssist) bindHintView(bar.getChildAt(i++) as TextView, "形码无匹配，退格重试")
+        fun nextSlot(): TextView? = bar.getChildAt(i++) as? TextView
+        if (assistChip) nextSlot()?.let { bindAssistView(it) }
+        if (otp != null) nextSlot()?.let { bindOtpView(it, otp) }
+        if (hasPrev) nextSlot()?.let { bindPageView(it, "‹", -1) }
+        if (emptyAssist) nextSlot()?.let { bindHintView(it, "形码无匹配，退格重试") }
         window.forEachIndexed { idx, word ->
-            bindCandidateView(bar.getChildAt(i++) as TextView, word, idx == 0, code)
+            nextSlot()?.let { bindCandidateView(it, word, idx == 0, code) }
         }
-        if (hasNext) bindPageView(bar.getChildAt(i++) as TextView, "›", 1)
+        if (hasNext) nextSlot()?.let { bindPageView(it, "›", 1) }
         // 展开/收起开关：只在真有候选时出现，否则候选条上会多一个没用的箭头
-        if (candidates.size > 1) bindExpandToggle(bar.getChildAt(i++) as TextView)
+        if (expandToggle) nextSlot()?.let { bindExpandToggle(it) }
         if (suggestions.isNotEmpty()) {
-            bindSeparatorView(bar.getChildAt(i++) as TextView)
+            nextSlot()?.let { bindSeparatorView(it) }
             suggestions.forEach { word ->
-                bindSuggestionView(bar.getChildAt(i++) as TextView, word)
+                nextSlot()?.let { bindSuggestionView(it, word) }
             }
         }
         updateTopSlot()
