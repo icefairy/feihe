@@ -288,6 +288,15 @@ class FeiheIme : InputMethodService() {
     private var fieldType = 0
     private var fieldHint: CharSequence? = null
 
+    /**
+     * 当前输入框的 IME_ACTION（`EditorInfo.imeOptions and IME_MASK_ACTION`）。
+     *
+     * 回车键要靠它决定「这一下是什么意思」：地址栏是 GO、搜索框是 SEARCH、
+     * 聊天框是 NONE（= 换行）。以前完全没存这个值，回车一律当换行——
+     * 在浏览器地址栏里就是「不跳转」。
+     */
+    private var fieldAction = EditorInfo.IME_ACTION_NONE
+
     /** 候选条上要提示的验证码；null = 没有。只在没有候选时显示，避免顶掉候选的位置。 */
     private var otpCode: String? = null
 
@@ -405,6 +414,7 @@ class FeiheIme : InputMethodService() {
         clearComposing()
         fieldType = info?.inputType ?: 0
         fieldHint = info?.hintText
+        fieldAction = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION) ?: EditorInfo.IME_ACTION_NONE
         // 换输入框是抓剪贴板的时机：用户刚从短信里复制验证码，切回来正好被记下。
         // 读不到的场合也正常（密码框、宿主不允许），见 readClipboard。
         readClipboard()
@@ -679,6 +689,7 @@ class FeiheIme : InputMethodService() {
         if (info != null) {
             fieldType = info.inputType
             fieldHint = info.hintText
+            fieldAction = info.imeOptions and EditorInfo.IME_MASK_ACTION
         }
         // 窗口重新弹出 = 一次新的输入会话，界面状态必须回到初始。
         //
@@ -1604,17 +1615,25 @@ class FeiheIme : InputMethodService() {
                 // 空格才是「选第一个」——这两个键必须分工，否则用户想原样上屏
                 // 时无路可走（以前回车也选候选，等于两个键干同一件事）。
                 if (chinese && pending.isNotEmpty()) {
+                    // 原样上屏那串字母，**然后照样要把回车这一下交出去**：
+                    // 用户打了一半拼音（或直接粘了一串）想按回车访问，如果这里
+                    // 上屏完就 return，回车动作永远发不出去——那和「按了没反应」一样。
                     commitPending()
+                    performEnterAction()
                     forgetContext()
                     return
                 }
-                // 分段态也要收尾，同样不换行
+                // 分段态也要收尾，同样不换行，但回车动作照发
                 if (commitSegmentIfActive()) {
+                    performEnterAction()
                     forgetContext()
                     return
                 }
-                // 走到这里说明手上没有任何待处理输入 = 用户就是想换行
-                commitText("\n")
+                // 手上没有任何待处理输入 → 这一下回车的语义交给宿主决定：
+                // 地址栏是「访问」、搜索框是「搜索」、多行输入框才是换行。
+                // 以前这里无条件 commitText("\n")，在单行输入框里会被宿主清洗成
+                // **一个空格**，地址栏因此永远不跳转（用户报的就是这个）。
+                performEnterAction()
                 forgetContext()
             }
 
@@ -3330,6 +3349,43 @@ class FeiheIme : InputMethodService() {
         prevWord = ""
         renderCandidates()
         refreshStatus()
+    }
+
+    /**
+     * 「回车这一下是什么意思」——按宿主声明的 IME action 决定。
+     *
+     * ## 为什么要区分，不能一律发 `\n`
+     *
+     * 单行输入框（浏览器地址栏、搜索框、用户名框）**不接受换行**。宿主收到 `\n`
+     * 会把它清洗掉或者变成一个空格——用户看到的就是「按回车冒出个空格，
+     * 页面没动」。地址栏的 `IME_ACTION_GO`、搜索框的 `IME_ACTION_SEARCH` 必须走
+     * `performEditorAction`，那是宿主自己的「提交」入口，等效于点键盘上的前往键。
+     *
+     * 多行框（聊天、备忘录）的 action 是 `IME_ACTION_NONE`，那时才真的发换行。
+     *
+     * 顺序很讲究：**动作要在上屏之后发**。先发 action 的话，宿主可能拿旧的
+     * 文本去搜索/导航（少最后几个字），而且某些实现在 action 后会重置输入状态，
+     * 导致紧接着的 commitText 丢失。
+     */
+    private fun performEnterAction() {
+        val ic = currentInputConnection
+        // NONE / UNSPECIFIED = 宿主没声明动作，按多行处理：真换行
+        val action = fieldAction
+        val isMultiline = (fieldType and android.text.InputType.TYPE_MASK_CLASS) ==
+            android.text.InputType.TYPE_CLASS_TEXT &&
+            (fieldType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0
+        if (action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED) {
+            // 多行框和「没声明动作」的框：换行是唯一合理语义。
+            // 单行框没有动作声明时也别硬塞 \n（会被清洗成空格），改为不做事——
+            // 那种宿主本来就没定义回车该干什么。
+            if (isMultiline) {
+                commitText("\n")
+            }
+            return
+        }
+        // 有明确动作：交给宿主。`performEditorAction` 不会自己上屏，
+        // 调用方必须已经 commit 完手上的组合串（见 ENTER 分支）。
+        ic?.performEditorAction(action)
     }
 
     private fun commitPending() {
