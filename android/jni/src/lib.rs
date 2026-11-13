@@ -397,7 +397,9 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnPhraseNative<
     let py = read_string(&mut env, &pinyin);
     let _ = std::panic::catch_unwind(|| {
         if !w.is_empty() && !py.is_empty() {
+            let before = feihe_core::phrase::len();
             feihe_core::phrase::learn(&w, &py);
+            let after = feihe_core::phrase::len();
             // 顺手记一次词频，让自造词和词库候选进同一个排序。
             // 不记的话刚造的词是 0 次，只和「同样 0 次的词库候选」打平，
             // 而平局是词库先来——用户造完立刻敲同一个码，第一位可能还是旧词。
@@ -405,6 +407,15 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnPhraseNative<
                 feihe_core::dict::scheme(),
                 &py,
             ).unwrap_or_default(), &w);
+            // **不要在这里调 __android_log_write。**
+            //
+            // 曾经加过一行 `extern "C" { fn android_log_write(...) }` 打调试日志，
+            // 结果 so 里留下一个未解析符号，dlopen 直接失败：
+            //   cannot locate symbol "android_log_write"
+            // 整个引擎加载不起来（候选全空、退格不拆、造词不生效），
+            // 而症状看起来像「好几个功能同时坏了」，极难联想到是日志导致的。
+            // 要打日志就在 Kotlin 侧打；Rust 侧要打必须显式链 liblog。
+            let _ = (before, after);
         }
     });
 }
@@ -431,7 +442,7 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_decodePinyinNative
     env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
 
-/// `NativeEngine.segmentNative(code, limit)` —— 按需给一串码分段（退格进选字模式用）。
+/// `NativeEngine.segmentNative(code, limit, bySyllable)` —— 按需给一串码分段。
 ///
 /// ## 为什么不能复用 `lookup_input` 带回来的 segments
 ///
@@ -442,6 +453,13 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_decodePinyinNative
 /// 以前退格走进 `backspaceIntoSegments()`，拿到空的 `pendingSegments` 就返回
 /// false，落到「删字母」分支。用户按退格想进选字模式，结果吃掉一个字母。
 ///
+/// ## bySyllable：退格必须为 true
+///
+/// 默认（false）按「最长可对齐词段」切：`lqxbrj` → `[留心][然]`，中间那个「心」
+/// 并进了两字词里，用户想单独换掉它没有任何入口。
+/// 双拼下**两个字母恰好一个字**（`lq`=留 `xb`=心 `rj`=然），逐音节切是唯一
+/// 诚实的粒度——不需要 DP、不需要查词库，纯粹按位置切。
+///
 /// 返回格式：每行 `段码\t候选1\t候选2…`；空串 = 这段码分不开（单音节/查不到）。
 #[no_mangle]
 pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_segmentNative<'local>(
@@ -449,13 +467,19 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_segmentNative<'loc
     _class: JClass<'local>,
     code: JString<'local>,
     limit: jint,
+    by_syllable: jboolean,
 ) -> jstring {
     let c = read_string(&mut env, &code);
+    let gran = if by_syllable != 0 {
+        feihe_core::segment::Granularity::Syllable
+    } else {
+        feihe_core::segment::Granularity::Word
+    };
     let out = std::panic::catch_unwind(|| {
         if c.is_empty() || limit <= 0 {
             return String::new();
         }
-        let segs = feihe_core::dict::segment_candidates(&c, limit as usize);
+        let segs = feihe_core::dict::segment_candidates_granular(&c, limit as usize, gran);
         if segs.len() < 2 {
             return String::new();
         }
@@ -465,6 +489,47 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_segmentNative<'loc
                 for w in &s.words {
                     line.push('\t');
                     line.push_str(w);
+                }
+                line
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+    .unwrap_or_default();
+    env.new_string(out).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
+/// `NativeEngine.readingsNative(text)` —— 一批单字的全拼读音，给语音纠错比拼音用。
+///
+/// 返回格式：每个字一行，行内是该字的读音、空格分隔（多音字多条）。
+/// 例：`退\ttui` / `重\tchong zhong`。
+///
+/// ## 为什么不用 `pinyin_of`
+///
+/// `pinyin_of(code, word)` 要先有**码**才能反查，而码本身是从拼音编出来的——
+/// 想要拼音就得先知道拼音，是个死循环。`readings_for` 直接按字扫词库索引，
+/// 不需要预先知道任何码。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_readingsNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    text: JString<'local>,
+) -> jstring {
+    let t = read_string(&mut env, &text);
+    let out = std::panic::catch_unwind(|| {
+        if t.is_empty() {
+            return String::new();
+        }
+        let chars: Vec<char> = t.chars().collect();
+        let readings = feihe_core::dict::readings_for(&chars);
+        chars
+            .iter()
+            .zip(readings.iter())
+            .map(|(c, rs)| {
+                let mut line = c.to_string();
+                for r in rs {
+                    line.push('\t');
+                    line.push_str(r);
                 }
                 line
             })

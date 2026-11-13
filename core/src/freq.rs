@@ -101,6 +101,10 @@ static LAST_FLUSH: Mutex<Option<Instant>> = Mutex::new(None);
 static LAST_MTIME: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
 /// 最近使用序号。每次 `bump` 领一个，只用于淘汰排序。
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 正在从磁盘刷新。**防递归用**：`refresh()` 内部会 `with_table`，
+/// 而 `with_table` 会 `ensure_loaded`，`ensure_loaded` 又要检查 mtime——
+/// 没有这个闸就会无限递归，栈溢出把宿主打挂。
+static REFRESHING: AtomicBool = AtomicBool::new(false);
 
 fn next_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::Relaxed) + 1
@@ -235,6 +239,14 @@ fn halve(t: &mut HashMap<String, Ent>) {
 }
 
 /// 惰性加载：第一次用到才读文件。
+///
+/// ## 为什么顺带检查 mtime
+///
+/// 词频是**多进程共享**的：A 软件里选过的词，切到 B 软件应该立刻排在前面。
+/// 只在进程启动时读一次的话，B 那边永远是旧顺序，用户体感是「学习时灵时不灵」。
+///
+/// 这里只做「要不要刷新」的判断，真正的刷新交给 `refresh()`（它有 flush 合并逻辑）。
+/// 用 `REFRESHING` 防递归：`refresh()` 内部会 `with_table` → 回到本函数。
 fn ensure_loaded() {
     if TABLE.read().map(|g| g.is_none()).unwrap_or(false) {
         let text = std::fs::read_to_string(file()).unwrap_or_default();
@@ -244,6 +256,16 @@ fn ensure_loaded() {
                 *g = Some(map);
             }
         }
+    }
+    // 已经在刷新流程里就不再进来（否则 refresh → with_table → ensure_loaded
+    // → refresh 无限递归）
+    if REFRESHING.load(Ordering::Relaxed) {
+        return;
+    }
+    let disk_mtime = std::fs::metadata(file()).ok().and_then(|x| x.modified().ok());
+    let known = LAST_MTIME.lock().ok().and_then(|g| *g);
+    if disk_mtime != known {
+        refresh();
     }
 }
 
@@ -409,6 +431,18 @@ fn flush_inner(merge_disk: bool) {
 /// 只在文件 mtime 变了的时候才真读盘——`Activate` 是高频动作，
 /// 不能每次都解析一遍几千行的文本。
 pub fn refresh() {
+    // 防递归闸：`refresh` 内部会 `with_table`，而它调 `ensure_loaded`，
+    // `ensure_loaded` 见 mtime 没变就不再回来；但 flush 里也会 `with_table`，
+    // 那时 LAST_MTIME 可能还没更新 → 又进来 → 无限递归。
+    // 用一个标志把整段刷新封成不可重入。
+    if REFRESHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    refresh_inner();
+    REFRESHING.store(false, Ordering::SeqCst);
+}
+
+fn refresh_inner() {
     let path = file();
     // **文件不存在 = 用户要重置**（文件头和模块文档都承诺「删掉本文件即重置」）。
     //

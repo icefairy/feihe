@@ -81,33 +81,4 @@ class SuggestPolicyTest {
         assertFalse(HostContext.canRead(0))
     }
 
-    // ── CandidateBarPolicy ────────────────────────────────────────
-
-    @Test
-    fun `没有联想时按用户上限给满`() {
-        assertEquals(9, CandidateBarPolicy.candidateSlots(9, false))
-        assertEquals(7, CandidateBarPolicy.candidateSlots(7, false))
-        assertEquals(5, CandidateBarPolicy.candidateSlots(5, false))
-    }
-
-    @Test
-    fun `有联想时候选压到 6 个`() {
-        assertEquals(6, CandidateBarPolicy.candidateSlots(9, true))
-        assertEquals(6, CandidateBarPolicy.candidateSlots(7, true))
-        assertEquals("本来就不满 6 的不动", 5, CandidateBarPolicy.candidateSlots(5, true))
-    }
-
-    @Test
-    fun `非法上限回落到默认`() {
-        assertEquals(9, CandidateBarPolicy.sanitize(0))
-        assertEquals(9, CandidateBarPolicy.sanitize(100))
-        assertEquals(9, CandidateBarPolicy.sanitize(-1))
-        assertEquals(7, CandidateBarPolicy.sanitize(7))
-    }
-
-    @Test
-    fun `档位只有 5 7 9`() {
-        assertEquals(listOf(5, 7, 9), CandidateBarPolicy.LIMITS)
-        assertEquals(CandidateBarPolicy.DEFAULT_LIMIT, CandidateBarPolicy.LIMITS.last())
-    }
 }

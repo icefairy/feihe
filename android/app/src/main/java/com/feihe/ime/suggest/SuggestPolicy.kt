@@ -86,28 +86,3 @@ object HostContext {
     private fun isSeparator(c: Char): Boolean =
         !isCjk(c) && !isAsciiWord(c)
 }
-
-/**
- * 候选条容量：候选和联想共用一行横向滚动条时怎么分配。
- *
- * 以前固定给 9 个候选，联想 `→词` 排在后面，候选一满就得横滑才看得见联想。
- * 改成**有联想时把候选压到 6 个**，给联想留出位置；没有联想时按用户设的上限给满。
- */
-object CandidateBarPolicy {
-    /** 候选上限的可选档位。单测钉住，防止设置页和读取端各写一份。 */
-    val LIMITS = listOf(5, 7, 9)
-
-    const val DEFAULT_LIMIT = 9
-
-    /** 有联想时最多给几个候选。留出 `→词` 的位置（SUGGEST_LIMIT 是 5，横滑一点即可）。 */
-    const val RESERVED_FOR_SUGGESTIONS = 6
-
-    /** 设置值不合法（手改过 SharedPreferences）时回落到默认档。 */
-    fun sanitize(limit: Int): Int = if (limit in LIMITS) limit else DEFAULT_LIMIT
-
-    /** 本次实际渲染几个候选。 */
-    fun candidateSlots(limit: Int, hasSuggestions: Boolean): Int {
-        val n = sanitize(limit)
-        return if (hasSuggestions) minOf(n, RESERVED_FOR_SUGGESTIONS) else n
-    }
-}

@@ -72,7 +72,18 @@ object NativeEngine {
      *
      * `utcOffsetMinutes` 给自定义短语的 `{hour}` 之类变量用——Rust 侧拿不到时区。
      */
+    /**
+     * 引擎数据目录（`init` 传进来的那个绝对路径）。
+     *
+     * 给 [phrases] 这类需要**直接读文件**的场景用：自造词是低频小文件，
+     * 整读一次几毫秒，不值得为它再加一个 JNI 序列化接口。
+     */
+    private var dataDir: String = ""
+
     fun init(dataDir: String) {
+        // 记下来给 `phrases()` 这类直接读文件的场景用。**必须在 ensureLoaded()
+        // 之前赋值**：那样即使引擎加载失败，这条路径也还有值。
+        this.dataDir = dataDir
         if (!ensureLoaded()) return
         val offset = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000
         runCatching { initNative(dataDir, offset) }
@@ -265,11 +276,19 @@ object NativeEngine {
      * 整码一定查得到（不然他压根没有词可拆），所以那条路上的 segments 恒为空，
      * 退格就会落到「删字母」，把用户的码吃掉一截。
      *
+     * [bySyllable] 默认 true：**两个字母一个字**，退格逐字改字必须用这个。
+     * 传 false 才是「最长可对齐词段」——`lqxbrj` 会被切成 `[留心][然]`，
+     * 中间的字没有入口可换。
+     *
      * 返回空表 = 这串码分不开（单音节，或某段查不到字）。
      */
-    fun segments(code: String, limit: Int = 9): List<Pair<String, List<String>>> {
+    fun segments(
+        code: String,
+        limit: Int = 9,
+        bySyllable: Boolean = true,
+    ): List<Pair<String, List<String>>> {
         if (code.isEmpty() || limit <= 0 || !ensureLoaded()) return emptyList()
-        val raw = runCatching { segmentNative(code, limit) }.getOrDefault("")
+        val raw = runCatching { segmentNative(code, limit, bySyllable) }.getOrDefault("")
         if (raw.isEmpty()) return emptyList()
         return raw.split('\n').mapNotNull { line ->
             val parts = line.split('\t')
@@ -278,6 +297,62 @@ object NativeEngine {
             val words = parts.drop(1).filter { it.isNotEmpty() }
             if (words.isEmpty()) null else segCode to words
         }
+    }
+
+    /**
+     * 读用户自造词库（`phrases.txt`），解析成「词面 + 全拼」。
+     *
+     * 文件格式：`词<TAB>全拼<TAB>次数`，全拼音节用空格分隔（`退格\ttui ge\t3`）。
+     * 次数列可能不存在（老版本的文件只有两列），所以按列数宽松解析。
+     *
+     * 为什么直接读文件而不是加一个 JNI 列接口：自造词是**低频小文件**
+     * （一个人一天造不了几个词），整读一次几毫秒；而 JNI 每加一个接口就要
+     * 在 Rust/Kotlin 两侧各写一份序列化，为这点收益不值得。
+     * 用户真正需要的是「纠错时能用上这些词」，不是「有个 API」。
+     */
+    fun phrases(): List<Pair<String, String>> {
+        if (!ensureLoaded()) return emptyList()
+        val f = runCatching { java.io.File(filesDirPath(), "phrases.txt") }.getOrNull() ?: return emptyList()
+        if (!f.isFile) return emptyList()
+        return runCatching {
+            f.readLines(Charsets.UTF_8).mapNotNull { line ->
+                val parts = line.split('\t')
+                if (parts.size < 2) return@mapNotNull null
+                val word = parts[0].trim()
+                val pinyin = parts[1].trim()
+                // 全拼必须是「音节 空格 音节」的形式，空或带制表符的都算坏数据
+                if (word.isEmpty() || pinyin.isEmpty() || pinyin.contains('\t')) null
+                else word to pinyin
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** 引擎数据目录（`NativeEngine.init` 传进来的那个）。 */
+    private fun filesDirPath(): String = dataDir
+
+    /**
+     * 一批单字 → 各自的全拼读音（`退` → `tui`）。
+     *
+     * **不能走 `pinyinOf(code, word)`**：那个要先用拼音编出码才能反查，
+     * 想要拼音得先知道拼音，是个死循环。`readings_for` 直接按字扫词库索引。
+     *
+     * 返回 `字 → 读音列表`（多音字多条）。查不到的字不出现在表里，
+     * 纠错器据此跳过该字——宁可这次不纠，也不能拿猜的拼音去比对。
+     */
+    fun readings(text: String): Map<String, List<String>> {
+        if (text.isEmpty() || !ensureLoaded()) return emptyMap()
+        val raw = runCatching { readingsNative(text) }.getOrDefault("")
+        if (raw.isEmpty()) return emptyMap()
+        val out = LinkedHashMap<String, List<String>>()
+        for (line in raw.split('\n')) {
+            if (line.isEmpty()) continue
+            val parts = line.split('\t')
+            val ch = parts[0]
+            if (ch.isEmpty()) continue
+            val rs = parts.drop(1).filter { it.isNotEmpty() }
+            if (rs.isNotEmpty()) out[ch] = rs
+        }
+        return out
     }
 
     /**
@@ -487,7 +562,9 @@ object NativeEngine {
 
     private external fun decodePinyinNative(code: String): String
 
-    private external fun segmentNative(code: String, limit: Int): String
+    private external fun segmentNative(code: String, limit: Int, bySyllable: Boolean): String
+
+    private external fun readingsNative(text: String): String
 
     private external fun configNative(): String
 

@@ -63,7 +63,6 @@ class SettingsActivity : Activity() {
     private var voiceModelDesc: TextView? = null
     private var schemeBox: LinearLayout? = null
     private var inputBox: LinearLayout? = null
-    private var candidateBox: LinearLayout? = null
     private var assistBox: LinearLayout? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -184,11 +183,9 @@ class SettingsActivity : Activity() {
         list.addView(card("辅助码", assistBox!!))
         renderAssist()
 
-        // 候选个数：手机候选条是单行横向滚动，"行数"在这里就是"一次给几个"。
-        // 纯界面开关（UiPrefs），引擎没加载也能改，所以 alwaysEnabled。
-        candidateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        list.addView(card("候选个数", candidateBox!!))
-        renderCandidateLimit()
+        // 「候选个数」这一项已删除：候选条不再有数量上限，收起态横滑、展开态滚动，
+        // 「一屏给几个」不再是一个需要用户设置的量。留着一个不起作用的选项比删掉更糟
+        // ——用户会以为改了没用是 bug。
 
         list.addView(
             card(
@@ -260,6 +257,12 @@ class SettingsActivity : Activity() {
                     // 从输入法进程弹系统授权框会被拒。打开设置页时顺手要一次。
                     if (on) requestMicPermissionIfNeeded()
                 },
+                switchRow(
+                    "语音结果按自造词纠正",
+                    "识别结果和自造词库拼音完全吻合才替换（默认关；长按麦克风可撤销）",
+                    UiPrefs.voiceCorrect(this),
+                    alwaysEnabled = true,
+                ) { UiPrefs.setVoiceCorrect(this, it) },
                 actionRow("语音模型", voiceModelSummary()) { showVoiceInfo() },
             ),
         )
@@ -475,33 +478,6 @@ class SettingsActivity : Activity() {
                 renderInputMode()
             },
         )
-    }
-
-    /**
-     * 候选个数（5 / 7 / 9）。
-     *
-     * 手机候选条是单行横向滚动，桌面端那种"候选行数"在这儿没有对应物，用户真正能
-     * 调的是**一次给几个**。单独说明"有联想时会自动少给几个"，否则用户会以为设了 9
-     * 却只看到 6 个是 bug —— 那是 [com.feihe.ime.suggest.CandidateBarPolicy] 在给
-     * 联想让位。
-     */
-    private fun renderCandidateLimit() {
-        val box = candidateBox ?: return
-        box.removeAllViews()
-        val cur = UiPrefs.candidateLimit(this)
-        com.feihe.ime.suggest.CandidateBarPolicy.LIMITS.forEach { n ->
-            box.addView(
-                choiceRow(
-                    "$n 个",
-                    cur == n,
-                    true,
-                    if (n == 9) "默认。有联想时仍会自动压到 6 个，给 →词 留位置" else null,
-                ) {
-                    UiPrefs.setCandidateLimit(this, n)
-                    renderCandidateLimit()
-                },
-            )
-        }
     }
 
     private fun renderScheme() {

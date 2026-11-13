@@ -200,14 +200,62 @@ fn load_from_disk() -> Vec<Entry> {
     parse(&std::fs::read_to_string(file()).unwrap_or_default())
 }
 
+/// 惰性加载：第一次用到才读文件。
+///
+/// ## 为什么每次都要比一次 mtime（不是「只读一次」）
+///
+/// 自造词是**多个进程共享**的用户数据：输入法进程、设置页进程、Windows 端、
+/// 甚至用户手改文件，随时可能写进同一个 `phrases.txt`。
+///
+/// 只在进程启动时读一次的直接后果（用户报过）：
+/// **在 A 软件里造的词，切到 B 软件后打同一个码还是不出来**——因为 B 那边的
+/// 进程内存里是旧表，而且它根本不知道磁盘变了。
+///
+/// 代价：每次读取多一次 `stat`（微秒级，几十万条词库的查询本身要几百微秒）。
+/// 收益：跨进程/跨窗口的写入立刻可见，不需要重启输入法。
+///
+/// 只在 mtime 真的变了才整读整解析，所以稳态下就是一个 stat。
 fn ensure_loaded() {
-    if TABLE.read().map(|g| g.is_none()).unwrap_or(false) {
+    if TABLE.read().map(|g| g.is_none()).unwrap_or(true) {
         let t = Table::build(load_from_disk());
         if let Ok(mut g) = TABLE.write() {
             if g.is_none() {
                 *g = Some(t);
             }
         }
+    }
+    refresh_if_changed();
+}
+
+/// 磁盘比内存新就整份重读。**不合并**：用户改掉一行，这里就该跟着变。
+///
+/// ## 只在「文件存在且更新了」时才动内存表
+///
+/// 文件不存在时**故意什么都不做**。看起来「删文件 = 清空」很合理，但这条在
+/// 读路径上做会误杀：`learn()` 写完内存还没落盘的那一瞬间、或者写盘失败
+/// （目录只读），文件就是不存在，此时清空等于把用户刚造的词当场扔掉。
+///
+/// 真正的「删文件即清空」走 [`refresh`]（显式调用，导入备份/切窗口时用），
+/// 那里没有这个竞态。读路径只负责「别人的新数据我能看见」这一件事。
+fn refresh_if_changed() {
+    let path = file();
+    let Some(m) = std::fs::metadata(&path).ok().and_then(|x| x.modified().ok()) else {
+        // 文件还没生成（或已被删）。保留内存表，见上面的理由。
+        return;
+    };
+    {
+        let mut g = match LAST_MTIME.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        if *g == Some(m) {
+            return;
+        }
+        *g = Some(m);
+    }
+    let disk = load_from_disk();
+    if let Ok(mut g) = TABLE.write() {
+        *g = Some(Table::build(disk));
     }
 }
 

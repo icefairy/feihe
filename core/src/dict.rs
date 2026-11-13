@@ -602,10 +602,23 @@ pub struct SegmentChoice {
 
 /// 长串 → 每段的候选。任一段查不到字就整体放弃，理由同 [`compose_sentence_with`]。
 pub fn segment_candidates(code: &str, limit: usize) -> Vec<SegmentChoice> {
+    segment_candidates_granular(code, limit, crate::segment::Granularity::Word)
+}
+
+/// 按指定粒度分段取候选。
+///
+/// **退格逐字改字必须用 [`Granularity::Syllable`]**：默认的 `Word` 会贪心取最长的
+/// 可对齐词段，`lqxbrj` 于是切成 `[留心][然]` —— 用户想单独换掉中间那个「心」，
+/// 它被并进了「留心」这两字词里，没有任何入口能改。
+pub fn segment_candidates_granular(
+    code: &str,
+    limit: usize,
+    granularity: crate::segment::Granularity,
+) -> Vec<SegmentChoice> {
     // ALIGN_SCAN 是「扫多少条才找得到对齐候选」的下界（见上面的推导），
     // 取候选时至少要看这么多条，否则可能一条对齐的都没剩。
     let scan = limit.max(ALIGN_SCAN);
-    segment_candidates_with(code, limit, any_aligned, |s| {
+    segment_candidates_with_granular(code, limit, granularity, any_aligned, |s| {
         lookup(s, scan).into_iter().map(|w| w.into_owned()).collect()
     })
 }
@@ -621,10 +634,27 @@ pub fn segment_candidates_with(
     has: impl Fn(&str) -> bool,
     candidates: impl Fn(&str) -> Vec<String>,
 ) -> Vec<SegmentChoice> {
+    segment_candidates_with_granular(
+        code,
+        limit,
+        crate::segment::Granularity::Word,
+        has,
+        candidates,
+    )
+}
+
+/// [`segment_candidates_with`] 的带粒度版本（纯逻辑，词典操作从参数进来）。
+pub fn segment_candidates_with_granular(
+    code: &str,
+    limit: usize,
+    granularity: crate::segment::Granularity,
+    has: impl Fn(&str) -> bool,
+    candidates: impl Fn(&str) -> Vec<String>,
+) -> Vec<SegmentChoice> {
     if code.len() < 4 || limit == 0 {
         return Vec::new();
     }
-    let segs = crate::segment::plan(code, false, has);
+    let segs = crate::segment::plan_with(code, false, granularity, has);
     if segs.len() < 2 {
         return Vec::new();
     }

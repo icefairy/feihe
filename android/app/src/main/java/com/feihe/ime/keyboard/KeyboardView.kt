@@ -11,6 +11,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.feihe.ime.Palette
+import com.feihe.ime.UiPrefs
 
 /**
  * 把 [KeyboardPages] 的行数据画成一棵 View 树。
@@ -179,10 +180,13 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
                 else -> key.label
             }
             gravity = Gravity.CENTER
-            // 数字/符号页的键比字母页宽得多，字符也跟着放大一点，不然看着像空的
+            // 数字/符号页的键比字母页宽得多，字符也跟着放大一点，不然看着像空的。
+            // **调试大键盘的字号必须同比放大**：键高放大 2.6 倍而字不变，
+            // 看起来像一排空盒子，反而更难确认「我点的是哪个键」。
+            val sizeScale = UiPrefs.keyScale(ctx)
             setTextSize(
                 TypedValue.COMPLEX_UNIT_SP,
-                if (key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT) 20f else 16f,
+                (if (key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT) 20f else 16f) * sizeScale,
             )
             // 点亮的 ⇧ 用反色（底色是强调色），其余按「可打的字 / 功能键」分两档
             setTextColor(

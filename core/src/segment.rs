@@ -115,17 +115,59 @@ pub fn split_segments(units: &[String], has: impl Fn(&str) -> bool) -> Vec<Strin
 /// DP 失败（某个音节在词库里完全没有）时退回逐音节：这时候拼出来的东西质量差，
 /// 但**比空候选条强**——用户至少能看到自己敲的音节各自对应什么字。
 pub fn plan(code: &str, pinyin_mode: bool, has: impl Fn(&str) -> bool) -> Vec<String> {
+    plan_with(code, pinyin_mode, Granularity::Word, has)
+}
+
+/**
+ * 分段的粒度。
+ *
+ * ## 为什么需要两种
+ *
+ * 打一长串拼音时，用户想要的是**整词**——`vhsjli` 切成「张三|李」比「张|三|李」
+ * 更接近他的话（见 `plan_prefers_longer_segments_when_the_rest_still_fits`）。
+ *
+ * 但他按了退格想改某个字时，需求反过来了：他要的是**能单独换掉中间那个字**，
+ * 这时候「留校|然」是灾难——中间那个字的候选根本没有入口。
+ *
+ * 所以粒度是**调用方的意图**，不是语言的属性，得让调用方指定。
+ */
+pub enum Granularity {
+    /// 贪心取最长的可对齐词段（默认，打长串时用）
+    Word,
+    /// 一个音节一段（退格逐字改字时用）
+    Syllable,
+}
+
+/// [`plan`] 的带粒度版本。
+pub fn plan_with(
+    code: &str,
+    pinyin_mode: bool,
+    granularity: Granularity,
+    has: impl Fn(&str) -> bool,
+) -> Vec<String> {
     let units = syllables(code, pinyin_mode);
     if units.len() < 2 {
         return Vec::new();
     }
-    let codes = split_segments(&units, has);
-    if codes.len() >= 2 {
-        codes
-    } else {
-        units
+    match granularity {
+        Granularity::Word => {
+            let codes = split_segments(&units, has);
+            if codes.len() >= 2 {
+                codes
+            } else {
+                units
+            }
+        }
+        // 逐音节：**不做 DP**，直接每个音节一段。
+        //
+        // 不能用 `split_segments` 之后再拆——那已经按最长词切好了，
+        // 再拆就把「留校」这两字词的信息丢了一半，用户也不一定想拆成单字
+        // （他可能只想换掉「留」，保留「校」）。直接回音节是最诚实的粒度：
+        // 每段正好对应一个字的读音，改哪段就是改哪个字。
+        Granularity::Syllable => units,
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -167,6 +209,36 @@ mod tests {
         // 假词库：单音节和「张三」都有，`vhsjli` 整串没有
         let has = |c: &str| matches!(c, "vh" | "sj" | "li" | "vhsj");
         assert_eq!(split_segments(&units, has), vec!["vhsj", "li"]);
+    }
+
+    /// **逐音节粒度：两个字母一个字，不查词库、不做 DP。**
+    ///
+    /// 这是退格逐字改字的唯一正确粒度。用户打 `lqxbrj` 想要「刘|欣|然」，
+    /// 而默认的 Word 粒度会把中间两字并成词（`[留心][然]`），
+    /// 那个「心」就再也没法单独换了。
+    #[test]
+    fn syllable_granularity_is_one_syllable_per_segment() {
+        // 假词库里有 `lqxb` 这个两字词，Word 粒度一定会并起来
+        let has = |c: &str| matches!(c, "lq" | "xb" | "rj" | "lqxb");
+        assert_eq!(
+            plan_with("lqxbrj", false, Granularity::Word, has),
+            vec!["lqxb", "rj"],
+            "Word 粒度应该合并成两字词"
+        );
+        assert_eq!(
+            plan_with("lqxbrj", false, Granularity::Syllable, has),
+            vec!["lq", "xb", "rj"],
+            "Syllable 粒度必须切成三段，哪怕词库里有 lqxb"
+        );
+    }
+
+    /// 逐音节粒度下音节数就是字数，和码长严格对应。
+    #[test]
+    fn syllable_granularity_len_matches_code_len() {
+        let has = |_: &str| true;
+        let segs = plan_with("lqxbrj", false, Granularity::Syllable, has);
+        assert_eq!(segs.len(), 3);
+        assert!(segs.iter().all(|s| s.chars().count() == 2), "双拼每段两键");
     }
 
     /// 有一段的词库里完全没有 → DP 无解 → 退回逐音节（比空候选条强）。
