@@ -691,6 +691,10 @@ class FeiheIme : InputMethodService() {
             fieldType = info.inputType
             fieldHint = info.hintText
             fieldAction = info.imeOptions and EditorInfo.IME_MASK_ACTION
+            // 临时：核实宿主到底报什么 action（验完删）
+            android.util.Log.i("FeiheEnter", "inputType=0x" + Integer.toHexString(info.inputType) +
+                " imeOptions=0x" + Integer.toHexString(info.imeOptions) +
+                " action=" + fieldAction + " -> " + EnterSpec.decide(chinese, false, fieldAction))
         }
         // 窗口重新弹出 = 一次新的输入会话，界面状态必须回到初始。
         //

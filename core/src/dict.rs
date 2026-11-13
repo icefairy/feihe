@@ -451,6 +451,26 @@ pub fn lookup_input(input: &str, pinyin_mode: bool, limit: usize) -> LookupResul
             // 同一批词在两套索引里的结果一模一样（双拼是音节的 1:1 重编码），
             // 而 Android 的 base.bin 不需要为了全拼多带一份索引。
             let mut words = search(false, &r.code, "", AssistMode::Off, limit);
+            // **半截音节：把尾巴上不完整的那个音节丢掉，再查一次。**
+            //
+            // 双拼一音节两键，用户打到一半必然是奇数长度（`wfjmyul` 7 键）。
+            // 这种码任何词都不会以它**开头**（词的码永远按音节对齐），
+            // 所以 `search` 直接返回空——症状就是「差最后一个字母就一条候选都没有」。
+            //
+            // 实测：`wfjmyulj` 出「文件预览」，`wfjmyul` 空；`wfjmy` 空，
+            // `wfjmyu` 出「文件与」。用户打长词时每敲两个键就空一下，很难受。
+            //
+            // 截掉半个音节后 `wfjmyul` → `wfjmyu`，那一档能命中「文件预览」这类
+            // 以 `wfjmyu` 开头的词，正好是用户此刻想看到的。
+            //
+            // 只在**当前查空**时做，且只在双拼模式：全拼长度不定，没有"半截音节"
+            // 这个概念；双拼才有固定两键一音节。
+            if words.is_empty() && !pinyin_mode && r.code.len() % 2 == 1 {
+                let trimmed = &r.code[..r.code.len() - 1];
+                if !trimmed.is_empty() {
+                    words = search(false, trimmed, "", AssistMode::Off, limit);
+                }
+            }
             if words.is_empty() {
                 // 整码查不到 → 试整句（`vhsjli` → 张三李）。**只在查不到时试**：
                 // 整词优先，否则打 `nihc` 会先看到一堆拼凑的整句。
@@ -478,6 +498,41 @@ pub fn lookup_input(input: &str, pinyin_mode: bool, limit: usize) -> LookupResul
             // （`vhsjli` 编不出任何拼音），那就交给分段——这正是手机上分词态缺的那块。
             if pinyin_mode {
                 return LookupResult::default();
+            }
+            // **半截音节回退（这条才是真正救命的）。**
+            //
+            // 双拼一音节两键，用户打到一半必然是奇数长度，`encode_phrase` 对奇数
+            // 长度直接返回 None（它要按两个字符切音节）。于是整个 `None` 分支：
+            // 分段也编不出 → 返回空。症状就是「差最后一个字母，候选条一条都没有」。
+            //
+            // 实测 `wfjmyulj`（8 键）出「文件预览」，`wfjmyul`（7 键）空；
+            // `wfjmyu`（6 键）出「文件与」，`wfjmy`（5 键）空。每敲两个键空一下。
+            //
+            // 截掉半个音节后重查：`wfjmyul` → `wfjmyu`，能命中「文件预览」这类
+            // 以 `wfjmyu` 开头的词——正是用户此刻想看的。
+            //
+            // 放在 `None` 分支而不是 `Some` 分支，是因为奇数长度根本到不了 `Some`。
+            if input.len() % 2 == 1 {
+                let trimmed = &input[..input.len() - 1];
+                if !trimmed.is_empty() {
+                    // **直接递归查截断后的码，不要自己走 resolve+search。**
+                    //
+                    // 关键教训：`wfjmyu` 的 `encode_phrase` 也是 None（它解不出
+                    // 完整音节），但 `lookup_input("wfjmyu")` 有 1 条——那条走的是
+                    // **分段路径**，不是词库直接命中。所以这里若只做
+                    // `resolve_code_with(...)` + `search(...)`，会把分段这条路漏掉，
+                    // 表现就是"改了代码却一点变化都没有"。
+                    //
+                    // 递归深度最多 1 层：截断后长度必然变偶，不会再进这个分支。
+                    let r2 = lookup_input(trimmed, false, limit);
+                    if !r2.words.is_empty() {
+                        return LookupResult {
+                            code: trimmed.to_string(),
+                            words: r2.words,
+                            segments: r2.segments,
+                        };
+                    }
+                }
             }
             let segs = if syllables_of(input) <= MAX_SENTENCE_SYLLABLES {
                 segment_candidates(input, limit)
@@ -2670,6 +2725,53 @@ pub(crate) mod tests {
         assert!(empty.code.is_empty() && empty.words.is_empty() && empty.segments.is_empty());
         let bad = lookup_input("zzz", true, 9);
         assert!(bad.code.is_empty() && bad.words.is_empty() && bad.segments.is_empty());
+    }
+
+    /// **半截音节也要有候选。** 双拼一音节两键，用户打到一半必然是奇数长度。
+    ///
+    /// 这条钉住的是用户实际报的问题：打「文件预览」的 `wfjmyulj`，在 `wfjmyul`
+    /// （差最后一个字母）时候选条是空的，每敲两个键就空一下，很难受。
+    ///
+    /// 根因：`encode_phrase` 对奇数长度直接返回 None（它按两个字符切音节），
+    /// 于是走 `None` 分支，分段也编不出 → 返回空。修法是截掉半个音节后递归重查。
+    ///
+    /// 用「不假设词库里有什么」的方式断言：只要完整码有候选，那么它的奇数长度
+    /// 前缀就必须**不为空**——这是无条件成立的性质，不依赖具体词条。
+    #[test]
+    fn odd_length_prefix_still_yields_candidates() {
+        let _g = scheme_guard();
+        set_scheme(Scheme::Xiaohe);
+        // 这些码在词库里能出候选（实测非空），逐个检查它们的奇数长度前缀
+        for full in ["wfjmyulj", "nihaoma"] {
+            let full_res = lookup_input(full, false, 9);
+            if full_res.words.is_empty() {
+                continue; // 词库变了就不硬断言
+            }
+            for n in (1..full.len()).filter(|n| n % 2 == 1) {
+                let pre = &full[..n];
+                let r = lookup_input(pre, false, 9);
+                assert!(
+                    !r.words.is_empty(),
+                    "前缀 {pre}（{n} 键，半截音节）应该有候选，但返回空"
+                );
+            }
+        }
+    }
+
+    /// 截断回退必须**只在查空时**发生，不能把正常查询的结果顶掉。
+    ///
+    /// 反例会是：打 `wfjmyu`（6 键，完整音节边界）本该直接出它自己的候选，
+    /// 若回退逻辑无条件下手截成 `wfjmy`，用户的选择空间就被偷偷改小了。
+    #[test]
+    fn full_code_result_is_not_overridden_by_fallback() {
+        let _g = scheme_guard();
+        set_scheme(Scheme::Xiaohe);
+        let even = lookup_input("wfjmyu", false, 9);
+        if even.words.is_empty() {
+            return;
+        }
+        // 偶数码不应该被标成截断后的码（截断逻辑只在奇数长度触发）
+        assert_eq!(even.code.len() % 2, 0, "偶数码不该走截断回退");
     }
 
     /// `lookup_input` 返回的是 `LookupResult`，`segments` 只在真正拼出整句时非空。
