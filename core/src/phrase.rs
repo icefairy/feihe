@@ -124,8 +124,20 @@ impl Table {
         let arr = self.index(which);
         let start = arr.partition_point(|(c, _)| c.as_ref() < code);
         let mut hits: Vec<(u32, u32)> = Vec::new(); // (次数, entries 下标)
+        // **码长上限：最多比输入多一个字。**
+        //
+        // 前缀匹配本身没有远近概念，`lqx`（1.5 音节）会把「刘欣然」（6 键）也带出来，
+        // 那是三个字——用户还没打完一个字就看到三字词，候选条会被长词淹掉。
+        //
+        // 尺度沿用 dict 侧的 `reach_cap`：双拼 +2 键 = +1 个字；全拼 +4 字母 = +1 个字。
+        // 两处必须一致，否则同一个词在「词库候选」和「自造词候选」里出现的时机不同，
+        // 用户会看到「打一半有词库的词、却没有自己造的」这种莫名其妙的不一致。
+        let cap = code.len() + if which == Idx::Flat { 4 } else { 2 };
         for (c, i) in &arr[start..] {
-            if c.as_ref() != code {
+            let hit = c.as_ref().starts_with(code) && c.as_ref().len() <= cap;
+            if !hit {
+                // 索引按码升序，`partition_point` 保证 arr[start] >= code，
+                // 所以第一个不匹配就是已经越过整个前缀段。
                 break;
             }
             hits.push((self.entries[*i as usize].n, *i));
@@ -564,9 +576,37 @@ mod tests {
         assert_eq!(t.words_with_code(Idx::Flat, "limingyuan").len(), 1);
         // 微软双拼：li=l+i、ming=m+`;`、yuan=y+r
         assert_eq!(t.words_with_code(Idx::Ms, "lim;yr").len(), 1);
-        // 别的码不能命中（整码匹配，不做前缀）
-        assert!(t.words_with_code(Idx::Xiaohe, "limk").is_empty());
+        // 比词码更长的输入不该命中
         assert!(t.words_with_code(Idx::Xiaohe, "limkyrr").is_empty());
+    }
+
+    /// **打到一半也要能查到自造词**（前缀匹配）。
+    ///
+    /// 用户报：造了「刘欣然」（lqxbrj），打到 `lqxbr` 差一个字母时候选条里
+    /// 没有它，必须打满 6 个字母才出。原因是 `words_with_code` 原来精确匹配
+    /// `c == code`，自造词永远只认整码。
+    ///
+    /// 「李明远」6 键，所以 5 键 / 4 键都该命中（cap = 输入 + 2 键 = 多一个字）。
+    #[test]
+    fn partial_code_finds_learned_phrase() {
+        let t = Table::build(vec![ent("李明远", "li ming yuan")]);
+        assert_eq!(t.words_with_code(Idx::Xiaohe, "limkyr").len(), 1, "整码");
+        assert_eq!(t.words_with_code(Idx::Xiaohe, "limky").len(), 1, "差一字母");
+        assert_eq!(t.words_with_code(Idx::Xiaohe, "limk").len(), 1, "差一音节");
+    }
+
+    /// 前缀匹配必须受「最多多一个字」的码长上限约束。
+    ///
+    /// 「李明远」6 键 = 3 个字。打 `li`（1 个字）或 `lim`（1.5 个字）时
+    /// 不该冒出三字词——候选条会被长词淹掉，而且和 dict 侧的 `reach_cap`
+    /// 不一致（同一个词在词库候选和自造词候选里出现的时机不同）。
+    #[test]
+    fn partial_code_respects_reach_cap() {
+        let t = Table::build(vec![ent("李明远", "li ming yuan")]);
+        // cap = len + 2，所以 4 键及以上能命中 6 键词，3 键以下不能
+        assert!(t.words_with_code(Idx::Xiaohe, "limk").len() == 1, "4 键 -> cap 6，应命中");
+        assert!(t.words_with_code(Idx::Xiaohe, "lim").is_empty(), "3 键 -> cap 5，不该命中 6 键词");
+        assert!(t.words_with_code(Idx::Xiaohe, "li").is_empty(), "2 键 -> cap 4，不该命中 6 键词");
     }
 
     /// 学一个词之后必须立刻查得到（写盘在测试里被跳过，内存表要先生效）。

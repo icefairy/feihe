@@ -1998,7 +1998,7 @@ class FeiheIme : InputMethodService() {
             // 只打了 `/` 时 key 是空串，引擎返回全部命令的当前值——正好当预览。
             quickWords = NativeEngine.quickCandidates(
                 pending.toString().removePrefix(NativeEngine.quickPrefix()),
-                SEG_CAND_LIMIT,
+                QUICK_CAND_LIMIT,
             )
             renderCandidates()
             return
@@ -3468,12 +3468,27 @@ private const val CANDIDATE_ROW_DP = 40f
         private const val CAND_FETCH = 200
 
         /**
-         * 分段选字时每段给几个候选；快速命令预览用同一档。
+         * 分段选字时**每个字**给几个候选。
          *
-         * 这里是**每个字**的候选数，不是整条候选条的数量——双拼两码同音字通常几十个，
-         * 给 9 个覆盖常用字已经够用，再多只是增加横滑距离。和上面 [CAND_FETCH]
-         * 不是一回事，别合并。
+         * ## 为什么不能只给 9 个
+         *
+         * 原值 9，理由是「双拼两码同音字通常几十个，9 个够用」。**这个判断是错的**：
+         * 逐字选词是用户自造词的唯一路径，用户要的那个字如果排在 10 名以后
+         * （生僻字、人名用字、方言字），就**永远选不到**——候选条横滑到底也只有 9 个，
+         * 用户会以为输入法里没这个字。
+         *
+         * 和 [CAND_FETCH] 取同一个值：两条路径都是「把同码候选摊开让人挑」，
+         * 没有任何理由一条给 200 一条给 9。想限制数量的话，UI 层横滑/滚动已经
+         * 在承担这个职责了，不该在数据层偷偷截断。
          */
-        private const val SEG_CAND_LIMIT = 9
+        private const val SEG_CAND_LIMIT = CAND_FETCH
+
+        /**
+         * 快速命令（`/rq`、`/sj` 之类）的预览条数。
+         *
+         * 和分段选字**必须分开**：命令只有十来条，给 200 会让预览条长得没法看，
+         * 而且命令是「点一下就上屏」的，多了反而增加误触。
+         */
+        private const val QUICK_CAND_LIMIT = 9
     }
 }
