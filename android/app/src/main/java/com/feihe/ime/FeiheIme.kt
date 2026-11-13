@@ -888,7 +888,7 @@ class FeiheIme : InputMethodService() {
                 setTextColor(statusPalette.sub)
                 background = android.graphics.drawable.GradientDrawable().apply {
                     setColor(statusPalette.chipBg)
-                    setStroke(dp(1.5f), statusPalette.chipStroke)
+                    setStroke(dp(CHIP_STROKE_DP), statusPalette.chipStroke)
                     cornerRadius = dp(4f).toFloat()
                 }
                 // 显式尺寸：minWidth 在按内容测量的场景下不可靠（实测过 w=0）。
@@ -1100,7 +1100,9 @@ class FeiheIme : InputMethodService() {
             // 内容居中：条本身是整宽（点哪儿都能收），但**胶囊框**跟着文字走。
             gravity = Gravity.CENTER
             visibility = View.GONE
-            setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
+            // 垂直不留 padding：高度由外层 LayoutParams 钉成 CANDIDATE_ROW_DP，
+            // 这里再加 6dp 的话实际是 52dp，药丸就跟候选行对不齐了。
+            setPadding(dp(8f), 0, dp(8f), 0)
             setOnClickListener {
                 candidateExpanded = false
                 renderCandidates()
@@ -1135,13 +1137,15 @@ class FeiheIme : InputMethodService() {
                     // 顺带把描边色从 stroke(0xFF9AA0A8) 换成 chipStroke：
                     // 前者是分隔线用的亮灰，画在键盘底色上对比度不够；
                     // 后者是给小控件准备的，深一档。
-                    setStroke(dp(1.5f), pal.chipStroke)
+                    setStroke(dp(CHIP_STROKE_DP), pal.chipStroke)
                 }
-                // 左右留白比上下大：药丸需要横向余量才像按钮
-                setPadding(dp(16f), dp(7f), dp(16f), dp(7f))
+                // 左右留白比上下大：药丸需要横向余量才像按钮。
+                // 垂直方向要撑满整行高度（见下面 collapseBar 的 40dp），
+                // 只靠 7dp padding 的话实际高度约 33dp，手指点着发虚。
+                setPadding(dp(16f), 0, dp(16f), 0)
                 addView(TextView(this@FeiheIme).apply {
                     text = "▴ 收起候选"
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                     gravity = Gravity.CENTER
                     setTextColor(pal.sub)
                 })
@@ -1149,9 +1153,10 @@ class FeiheIme : InputMethodService() {
         }
         root.addView(
             collapseBar,
+            // 高度钉成一行候选的高度：药丸跟着撑满，点哪都能收。
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(CANDIDATE_ROW_DP),
             ),
         )
 
@@ -2648,6 +2653,11 @@ class FeiheIme : InputMethodService() {
                 text = "‹ 返回"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                 setTextColor(Palette.of(this@FeiheIme).sub)
+                // 高度跟候选行对齐，别让操作行比候选格矮一截（点不准）
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    dp(CANDIDATE_ROW_DP),
+                )
                 setPadding(dp(10f), 0, dp(14f), 0)
                 setOnClickListener {
                     // 回 chip 视图：没有「当前段」了，形码态一起退掉
@@ -2754,7 +2764,23 @@ class FeiheIme : InputMethodService() {
         // root 还没 measure 完），ScrollView 会接管滚动，用户不会看到半截行。
         expandedScroll?.let { sv ->
             val rowH = dp(CANDIDATE_ROW_DP)
-            val want = rowH * rows
+            // **可视高度取「屏幕给多少」，不是「内容有多高」。**
+            //
+            // 这里原来写的是 `want = rowH * rows`，即 ScrollView 的可视高度
+            // 直接等于内容高度。后果：内容永远刚好塞满可视区 → 永远滚不动，
+            // 而 ScrollView 又会按这个高度向上要空间 → 候选一多就把键盘撑到
+            // 占满整屏。用户看到的「15 行 4 列铺满 70% 屏幕、不是滚动」就是它。
+            //
+            // ScrollView 的正确用法是反过来的：
+            //   可视高度 = min(内容高度, 可用高度)
+            //   - 内容比可用高度少 → 收缩到内容高度，下方不留一大片空白
+            //   - 内容比可用高度多 → 钉在可用高度，内部滚动
+            //
+            // 可用高度来自 expandedUsableHeight()（读屏幕坐标算的，没有负反馈），
+            // 已经在 expandedRows() 里用了同一套，这里只是把上限也取出来。
+            val contentH = rowH * rows
+            val maxVisible = expandedUsableHeight() + rowH  // 补回 expandedRows 扣掉的那一行余量
+            val want = if (maxVisible > 0) minOf(contentH, maxVisible) else contentH
             (sv.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
                 if (lp.height != want || lp.weight != 0f) {
                     lp.height = want
@@ -2934,7 +2960,7 @@ class FeiheIme : InputMethodService() {
         // 不调 setColor：默认透明填充。见 bindAssistView 里的说明——
         // 显式设全透明色会让部分系统版本跳过整张 shape 的绘制。
         v.background = GradientDrawable().apply {
-            setStroke(dp(1.5f), Palette.of(this@FeiheIme).chipStroke)
+            setStroke(dp(CHIP_STROKE_DP), Palette.of(this@FeiheIme).chipStroke)
             cornerRadius = dp(4f).toFloat()
         }
         // **点击区要够大**：13sp 的字加 padding 只有约 30dp 宽，手指点上去
@@ -2946,8 +2972,21 @@ class FeiheIme : InputMethodService() {
         // minimumWidth 才是「无论父容器怎么量，至少这么宽」的硬约束。
         v.minWidth = dp(48f)
         v.minimumWidth = dp(48f)
+        // **高度也必须显式给。**
+        //
+        // 父容器是 `bar.addView(TextView(this))` / `head.addView(...)`，
+        // 都没带 LayoutParams，于是 TextView 按 WRAP_CONTENT 量——
+        // 13sp 的字加零垂直 padding 只有约 17dp 高。用户反馈「高度很窄，
+        // 不好点」就是它：宽度撑到了 48dp，高度还是个字高。
+        //
+        // 钉成一行候选的标准行高（CANDIDATE_ROW_DP = 40dp），
+        // 和候选格同高之后整条候选栏的基线才对得齐。
+        v.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            dp(CANDIDATE_ROW_DP),
+        )
         v.gravity = Gravity.CENTER
-        v.setPadding(dp(6f), 0, dp(6f), 0)
+        v.setPadding(dp(10f), 0, dp(10f), 0)
         v.setTextColor(Palette.of(this).sub)
         v.contentDescription =
             if (candidateExpanded) "收起候选" else "展开候选，共 $total 个"
@@ -3275,7 +3314,7 @@ class FeiheIme : InputMethodService() {
         // 填充用 chipStroke 的极淡版本：肉眼能看到色块，又不会抢候选词的注意力。
         v.background = GradientDrawable().apply {
             setColor(if (assistActive) p.accentBg else p.chipBg)
-            setStroke(dp(1.5f), if (assistActive) p.accent else p.chipStroke)
+            setStroke(dp(CHIP_STROKE_DP), if (assistActive) p.accent else p.chipStroke)
             cornerRadius = dp(4f).toFloat()
         }
         // **必须显式给 LayoutParams 一个固定宽度。**
@@ -3910,6 +3949,17 @@ class FeiheIme : InputMethodService() {
          * 「字被截断/折行」这个用户实际遇到的问题，大字号下的贴边属于观感问题。
          */
         private const val CANDIDATE_ROW_DP = 40f
+
+        /**
+         * 控件描边宽度。
+         *
+         * 1dp 而不是 1.5dp：440dpi 屏上 1dp≈2.75px、1.5dp≈4px，4px 的框在
+         * 一排候选文字里显得笨重，用户反馈「那几个功能按钮边框有点粗」。
+         * 1dp 仍然清晰可辨（配合 chipBg 浅底），但不会抢候选词的视觉重心。
+         *
+         * **不要低于 1dp**：再细在低密度屏上会被抗锯齿吃掉，框又会变回「看不见」。
+         */
+        private const val CHIP_STROKE_DP = 1f
 
         /** 数字选词行的高度（dp）。恒定占位，不随候选有无伸缩。 */
         private const val NUM_ROW_DP = 36f
