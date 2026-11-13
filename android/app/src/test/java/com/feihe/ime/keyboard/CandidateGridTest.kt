@@ -15,11 +15,12 @@ class CandidateGridTest {
 
     @Test
     fun `不足一屏时按实际个数换行`() {
+        val per = CandidateGrid.PER_ROW
         assertEquals(0, CandidateGrid.rows(0))
         assertEquals(1, CandidateGrid.rows(1))
-        assertEquals(1, CandidateGrid.rows(6))
-        assertEquals(2, CandidateGrid.rows(7))
-        assertEquals(3, CandidateGrid.rows(18))
+        assertEquals(1, CandidateGrid.rows(per))
+        assertEquals(2, CandidateGrid.rows(per + 1))
+        assertEquals(3, CandidateGrid.rows(per * 3))
     }
 
     @Test
@@ -36,25 +37,28 @@ class CandidateGridTest {
 
     @Test
     fun `展开态一页是行乘列`() {
-        assertEquals(18, CandidateGrid.pageSize(45, expanded = true, collapseSize = 9))
+        val perPage = CandidateGrid.PER_ROW * CandidateGrid.MAX_ROWS
+        assertEquals(perPage, CandidateGrid.pageSize(45, expanded = true, collapseSize = 9))
         // 只有 4 个候选时，一页就是 4 个——否则 hasNext 会误报「还有下一页」
         assertEquals(4, CandidateGrid.pageSize(4, expanded = true, collapseSize = 9))
     }
 
     @Test
-    fun `展开态窗口取前十八个`() {
+    fun `展开态窗口取满一页`() {
         val all = (1..45).map { "c$it" }
+        val perPage = CandidateGrid.PER_ROW * CandidateGrid.MAX_ROWS
         val w = CandidateGrid.window(all, 0, all.size, expanded = true, collapseSize = 9)
-        assertEquals(18, w.size)
+        assertEquals(perPage, w.size)
         assertEquals("c1", w.first())
-        assertEquals("c18", w.last())
+        assertEquals("c$perPage", w.last())
     }
 
     @Test
-    fun `展开态第二页从第十九个开始`() {
+    fun `展开态第二页紧接第一页`() {
         val all = (1..45).map { "c$it" }
+        val perPage = CandidateGrid.PER_ROW * CandidateGrid.MAX_ROWS
         val w = CandidateGrid.window(all, 1, all.size, expanded = true, collapseSize = 9)
-        assertEquals("c19", w.first())
+        assertEquals("c${perPage + 1}", w.first())
     }
 
     @Test
@@ -78,10 +82,11 @@ class CandidateGridTest {
         assertTrue(CandidateGrid.hasNext(45, 0, expanded = false, collapseSize = 9))
         // 最后一页没有
         assertFalse(CandidateGrid.hasNext(9, 0, expanded = false, collapseSize = 9))
-        // 展开态 45 个 → 18 一页，第 0 页有
+        // 展开态 45 个 → 一页 = 行×列，第 0 页有
         assertTrue(CandidateGrid.hasNext(45, 0, expanded = true, collapseSize = 9))
-        // 展开态 18 个 → 只有一页
-        assertFalse(CandidateGrid.hasNext(18, 0, expanded = true, collapseSize = 9))
+        // 展开态刚好一页 → 没有下一页
+        val perPage = CandidateGrid.PER_ROW * CandidateGrid.MAX_ROWS
+        assertFalse(CandidateGrid.hasNext(perPage, 0, expanded = true, collapseSize = 9))
     }
 
     @Test
@@ -213,5 +218,125 @@ class CandidateGridTest {
             emailSuffixCount = 4,
         )
         assertEquals("4 条邮箱候选要占 1 分隔 + 4 自身 = 5 格", base + 5, withEmail)
+    }
+
+    // ── 展开态格子宽度：两字词不能折行 ────────────────────────────────
+    //
+    // 用户报的现象：展开候选后，两字词「智慧」显示成上下两行（上面智、下面慧），
+    // 六个格子各自竖排，整片候选区看起来像乱码，还误以为候选词重复了。
+    //
+    // 根因是每个格子 = 屏宽/6 且左右 padding 各 14dp，可用宽度不够两个字。
+    // 修法是把格内 padding 收到 6dp 并强制单行；这组测试钉住「收完之后装得下」。
+
+    @Test
+    fun `展开态格子宽度要装得下两字词`() {
+        // 360dp 屏 - 容器左右各 8dp(共16) = 344 可用 / 4 列 = 86dp，
+        // 再扣格内左右各 6dp(共12) = 74dp 给文字。
+        assertEquals(
+            "344/4=86，减 12 → 74dp",
+            74,
+            CandidateGrid.cellWidthDp(screenWidthDp = 360, horizontalPaddingDp = 16, cellPaddingDp = 12),
+        )
+    }
+
+    @Test
+    fun `两字词在 360dp 屏上不折行`() {
+        // 只放真正的两字词（vihv 的实际候选里两字的是这四个）
+        val words = listOf("只会", "智慧", "指挥", "知会")
+        assertFalse(
+            "两字词 40dp < 74dp 可用，不应折行",
+            CandidateGrid.willTruncate(words, screenWidthDp = 360),
+        )
+    }
+
+    @Test
+    fun `vihv 的完整候选里最长三字词只省略不折行`() {
+        // 真实候选：只会/智慧/指挥/知会/指挥官/指挥部/智慧的/指挥员/指挥下/止回阀
+        val real = listOf(
+            "只会", "智慧", "指挥", "知会", "指挥官",
+            "指挥部", "智慧的", "指挥员", "指挥下", "止回阀",
+        )
+        // 4 列后三字词也装得下，整组候选都不该被截断
+        assertFalse(
+            "vihv 的全部候选（最长三字）都应完整显示，不该省略",
+            CandidateGrid.willTruncate(real, screenWidthDp = 360),
+        )
+    }
+
+    @Test
+    fun `三字词在 360dp 屏上完整显示不被截断`() {
+        // 这是把 PER_ROW 从 6 改成 4 的直接原因：6 列时三字词被截成「指…」
+        assertFalse(
+            "三字词 60dp < 74dp 可用，必须完整显示",
+            CandidateGrid.willTruncate(listOf("指挥官", "止回阀", "智慧的"), screenWidthDp = 360),
+        )
+    }
+
+    @Test
+    fun `旧的 14dp 格内内边距会挤坏两字词`() {
+        // 回归防线：如果谁把格内 padding 改回 28dp（左右各 14），这条会红
+        assertTrue(
+            "格内 28dp 时可用只有 58dp，两字词能装下；但三字词 60dp 装不下",
+            CandidateGrid.willTruncate(
+                listOf("指挥官"),
+                screenWidthDp = 360,
+                cellPaddingDp = 28,
+            ),
+        )
+    }
+
+    // ── 列数自适应：换屏 / 系统字号都不能把三字词挤掉 ──────────────
+
+    @Test
+    fun `360dp 屏算 4 列`() {
+        // 344 可用 / 72 每格 = 4.7 → 4 列。6 列时三字词会被截成「指…」
+        assertEquals(4, CandidateGrid.columnsFor(screenWidthDp = 360))
+    }
+
+    @Test
+    fun `窄屏 320dp 也算 4 列而不是挤成 3 列`() {
+        // 304 / 72 = 4.2 → 4。每格 76dp，三字词 72dp 刚好
+        assertEquals(4, CandidateGrid.columnsFor(screenWidthDp = 320))
+    }
+
+    @Test
+    fun `大屏平板自动加列`() {
+        // 800 - 16 = 784 / 72 = 10.8 → 夹到 MAX_COLS=6
+        assertEquals(6, CandidateGrid.columnsFor(screenWidthDp = 800))
+        // 500 - 16 = 484 / 72 = 6.7 → 仍夹到 6
+        assertEquals(6, CandidateGrid.columnsFor(screenWidthDp = 500))
+    }
+
+    @Test
+    fun `超小屏也至少排 2 列`() {
+        assertEquals(2, CandidateGrid.columnsFor(screenWidthDp = 120))
+        assertEquals(2, CandidateGrid.columnsFor(screenWidthDp = 0))
+    }
+
+    @Test
+    fun `系统字号放大后列数要减少`() {
+        // 字号 1.3 倍时三字词需 78dp+12=90dp，344/90 = 3.8 → 3 列
+        assertEquals(3, CandidateGrid.columnsFor(screenWidthDp = 360, fontScale = 1.3f))
+        // 字号 1.5 倍：344/102 = 3.4 → 3
+        assertEquals(3, CandidateGrid.columnsFor(screenWidthDp = 360, fontScale = 1.5f))
+        // 字号 2.0（超大）：344/132 = 2.6 → 2
+        assertEquals(2, CandidateGrid.columnsFor(screenWidthDp = 360, fontScale = 2.0f))
+    }
+
+    @Test
+    fun `算出的列数必须保证三字词装得下`() {
+        // 不变式：任何屏宽 / 任何字号下，按算出的列数分格都要装得下三字词
+        for (w in listOf(320, 360, 400, 480, 600, 800)) {
+            for (fs in listOf(1.0f, 1.15f, 1.3f, 1.5f)) {
+                val cols = CandidateGrid.columnsFor(w, fontScale = fs)
+                val cell = CandidateGrid.cellWidthDp(w, cellPaddingDp = CandidateGrid.CELL_PADDING_DP)
+                val perCell = (w - CandidateGrid.CONTAINER_PADDING_DP) / cols - CandidateGrid.CELL_PADDING_DP
+                val triple = (20f * 3f * fs).toInt()
+                assertTrue(
+                    "width=$w fontScale=$fs cols=$cols 每格 ${perCell}dp 装不下三字词 ${triple}dp（cellWidthDp=$cell）",
+                    perCell >= triple,
+                )
+            }
+        }
     }
 }

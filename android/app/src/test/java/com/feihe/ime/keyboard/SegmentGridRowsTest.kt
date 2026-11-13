@@ -33,11 +33,14 @@ class SegmentGridRowsTest {
         if (words == 0) 0 else (words + CandidateGrid.PER_ROW - 1) / CandidateGrid.PER_ROW
 
     @Test
-    fun `99 个候选要有 17 行 —— 不能按屏幕高度截断`() {
-        // `vi` 的实际候选数，正是崩掉那次的那个段
-        assertEquals(17, gridRows(99))
+    fun `99 个候选的行数按列数算 —— 不能按屏幕高度截断`() {
+        // `vi` 的实际候选数，正是崩掉那次的那个段。
+        // 行数随 PER_ROW 变化（4 列 = 25 行，6 列 = 17 行），所以按公式算，
+        // 不写死数字 —— 否则改列数时这条会误红，让人以为越界 bug 回来了。
+        val expect = (99 + CandidateGrid.PER_ROW - 1) / CandidateGrid.PER_ROW
+        assertEquals(expect, gridRows(99))
         // 加上操作行
-        assertEquals(18, gridRows(99) + 1)
+        assertEquals(expect + 1, gridRows(99) + 1)
     }
 
     @Test
@@ -64,8 +67,8 @@ class SegmentGridRowsTest {
         // 内容 18 行，屏幕只放得下 8 行：容器高度按 8 行算，内容仍 18 行
         val contentRows = gridRows(99) + 1
         val visibleRows = contentRows.coerceAtMost(8)
-        assertEquals(18, contentRows)
-        assertEquals(8, visibleRows)
+        assertEquals((99 + CandidateGrid.PER_ROW - 1) / CandidateGrid.PER_ROW + 1, contentRows)
+        assertEquals(minOf(contentRows, 8), visibleRows)
         assertTrue("内容必须比可视区高，否则 ScrollView 滚不动", contentRows > visibleRows)
     }
 

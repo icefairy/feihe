@@ -28,8 +28,67 @@ object CandidateGrid {
      */
     const val MAX_ROWS = 3
 
-    /** 展开态每行几个。12 个字的宽度在 1080p 竖屏上正好铺满，不用横滑。 */
-    const val PER_ROW = 6
+    /**
+     * 展开态每行几个。**运行时按屏幕宽度自适应**（见 [columnsFor]）。
+     *
+     * 以前是 `const val = 6`，导致 360dp 屏上每格只有 57dp、扣掉格内 padding
+     * 剩 45dp，三字词（指挥官 / 止回阀 / 智慧的，20sp 需 60dp）被截成「指…」。
+     * 改成 4 又会在平板/大屏上浪费一整排空间 —— 写死任何数字都不对，
+     * 因为用户的屏宽、系统字号都可能不同。
+     *
+     * 现在由 [FeiheIme.updateColumns] 在创建输入视图和配置变化时按真实屏宽算，
+     * 保证「三字词一定装得下」这个不变式在各种屏幕上成立。
+     *
+     * **只在主线程读写**（输入视图只有一份，渲染与配置回调都在主线程）。
+     */
+    @Volatile
+    var PER_ROW = 4
+
+    /** 折叠态/展开态共用的最小列数（再窄也要能并排看两个候选）。 */
+    const val MIN_COLS = 2
+
+    /** 最大列数：再宽也不铺太多，一行超过 6 个手指点不准。 */
+    const val MAX_COLS = 6
+
+    /**
+     * 一个格子至少要留多少宽度（dp），才能完整显示「三字候选词」。
+     *
+     * 三字 × 20sp = 60dp 文字 + 格内左右 padding 12dp = 72dp。
+     * 低于这个宽度就必须靠 ellipsize 截断，用户看到「指…」等于没有候选。
+     */
+    const val MIN_CELL_DP = 72
+
+    /**
+     * 按屏幕宽度算出该用几列。
+     *
+     * 不变式：每格可用宽度 >= 三字词宽度（默认 60dp），这样最常见的三字候选
+     * 一定能完整显示；同时列数夹在 [MIN_COLS]..[MAX_COLS] 之间，窄屏不至于
+     * 挤成一列，宽屏也不至于一行铺七八个点到隔壁。
+     *
+     * @param screenWidthDp 屏幕可用宽度（dp，已扣系统栏）
+     * @param fontScale 系统字号缩放（`scaledDensity / density`）；用户把字号
+     *   调大时汉字实际占宽同步变大，列数必须跟着减，否则又会被截断
+     * @param textSizeDp 候选字号（默认 20sp）
+     * @param containerPaddingDp 候选行容器的左右内边距之和
+     * @param cellPaddingDp 单个格子的左右内边距之和
+     */
+    fun columnsFor(
+        screenWidthDp: Int,
+        fontScale: Float = 1f,
+        textSizeDp: Float = 20f,
+        containerPaddingDp: Int = CONTAINER_PADDING_DP,
+        cellPaddingDp: Int = CELL_PADDING_DP,
+    ): Int {
+        if (screenWidthDp <= 0) return MIN_COLS
+        val usable = screenWidthDp - containerPaddingDp
+        if (usable <= 0) return MIN_COLS
+        // 三字词在系统字号放大后需要的实际宽度
+        val scale = if (fontScale > 0f) fontScale else 1f
+        val triple = (textSizeDp * 3f * scale + cellPaddingDp).toInt()
+        val need = maxOf(triple, MIN_CELL_DP)
+        val cols = usable / need
+        return cols.coerceIn(MIN_COLS, MAX_COLS)
+    }
 
     /**
      * 展开后要显示多少候选。
@@ -108,6 +167,53 @@ object CandidateGrid {
         maxRows: Int = MAX_ROWS,
     ): Boolean =
         (page + 1) * pageSize(total, expanded, collapseSize, maxRows) < total
+
+    /**
+     * 展开态每个格子能分到多少宽度（dp）。
+     *
+     * 用来判断「最长的候选词能不能装进一格」。装不进就会折行——两字词竖着
+     * 排成上下两行，整片候选区看起来像乱码（用户报的「两字词汇展开候选显示有问题」）。
+     *
+     * ## 为什么 cellPaddingDp 默认值要跟渲染代码绑定
+     *
+     * 默认值就是 `bindCandidateView` 里 `setPadding(dp(x),0,dp(x),0)` 的 x×2。
+     * 两处必须一致，否则测试会「绿着但线上折行」——那正是这个 bug 逃过测试的原因。
+     * 改渲染 padding 时这里必须同步，测试里有断言盯着这个等式。
+     */
+    const val CELL_PADDING_DP = 12  // = bindCandidateView 的 6dp × 2
+    const val CONTAINER_PADDING_DP = 16  // = 行容器 setPadding(dp(8f)) × 2
+
+    fun cellWidthDp(
+        screenWidthDp: Int,
+        horizontalPaddingDp: Int = CONTAINER_PADDING_DP,
+        cellPaddingDp: Int = CELL_PADDING_DP,
+    ): Int {
+        if (screenWidthDp <= 0) return 0
+        val usable = screenWidthDp - horizontalPaddingDp
+        if (usable <= 0) return 0
+        return (usable / PER_ROW) - cellPaddingDp
+    }
+
+    /**
+     * 这组候选在展开态会不会折行（即最长那个词装不进一格）。
+     *
+     * 汉字宽度约等于字号（20sp ≈ 20dp），所以「字数 × 20dp」就是它需要的宽度。
+     * 只在测试和诊断用——正式渲染靠 `maxLines=1` 硬保证不折行，
+     * 但这个判据能提前告诉我们「格子太窄，字会被省略成 智… 而不是正常显示」。
+     */
+    fun willTruncate(
+        words: List<String>,
+        screenWidthDp: Int,
+        textSizeDp: Int = 20,
+        horizontalPaddingDp: Int = CONTAINER_PADDING_DP,
+        cellPaddingDp: Int = CELL_PADDING_DP,
+    ): Boolean {
+        if (words.isEmpty()) return false
+        val avail = cellWidthDp(screenWidthDp, horizontalPaddingDp, cellPaddingDp)
+        if (avail <= 0) return true
+        val worst = words.maxOf { w -> w.codePointCount(0, w.length) * textSizeDp }
+        return worst > avail
+    }
 
     /**
      * 收起态候选条里一共有几个格子。

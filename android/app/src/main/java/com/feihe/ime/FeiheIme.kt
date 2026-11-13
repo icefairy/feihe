@@ -342,6 +342,7 @@ class FeiheIme : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
+
         // 数据目录用 filesDir：输入法进程随时可能被杀，配置和词频都必须落盘到
         // 应用私有目录（不是缓存目录——缓存会被系统清掉）。
         NativeEngine.init(filesDir.absolutePath)
@@ -417,6 +418,7 @@ class FeiheIme : InputMethodService() {
     }
 
     private fun modeLabel(): String = if (pinyinMode) "全拼" else "双拼"
+
 
     override fun onStartInput(info: EditorInfo?, restarting: Boolean) {
         super.onStartInput(info, restarting)
@@ -822,6 +824,9 @@ class FeiheIme : InputMethodService() {
     override fun onEvaluateFullscreenMode(): Boolean = false
 
     override fun onCreateInputView(): View {
+        // 展开列的列数按真实屏宽算（换手机、折叠屏展开、系统字号变大都要重算）。
+        // 放在建视图之前：后面所有 PER_ROW 的使用都依赖它已经是正确值。
+        updateColumns()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             // **根视图必须有不透明背景。**
@@ -2711,15 +2716,44 @@ class FeiheIme : InputMethodService() {
             val v = row.getChildAt(slot) as? TextView ?: TextView(this).also {
                 row.addView(it, LinearLayout.LayoutParams(0, dp(CANDIDATE_ROW_DP), 1f))
             }
+            // 复用格子时要把上一轮当成占位格用过的点击态恢复回来
+            v.isClickable = true
+            v.isLongClickable = true
             bindCandidateView(v, word, idx == 0, code)
         }
-        // 每行末尾多余的格子要删掉：上一页这行可能有 6 个，这一页只有 2 个
+        // 每行收尾：真候选不足 6 个的，用不可点的透明格补满。
+        //
+        // 为什么必须补：LinearLayout 的 weight 是在**该行实际有几个子 View**
+        // 之间均分的。第一行 6 个各得 1/6，最后一行只有 4 个就各得 1/4 ——
+        // 最后一行明显比上面宽，整片候选区左右不对齐，看着像排版坏了。
+        // 补满 6 个之后每列宽度一致，行列才对得齐。
         for (r in 0 until rows) {
             val row = col.getChildAt(r) as LinearLayout
             val keep = minOf(CandidateGrid.PER_ROW, window.size - r * CandidateGrid.PER_ROW)
-            while (row.childCount > keep) row.removeViewAt(row.childCount - 1)
+            while (row.childCount > CandidateGrid.PER_ROW) row.removeViewAt(row.childCount - 1)
+            while (row.childCount < CandidateGrid.PER_ROW) row.addView(newPlaceholderCell())
+            // keep 之后的位置都是占位格：清干净，别让上一页的字残留在那儿
+            for (c in keep until row.childCount) {
+                (row.getChildAt(c) as? TextView)?.let { ph ->
+                    ph.text = ""
+                    ph.background = null
+                    ph.isClickable = false
+                    ph.isLongClickable = false
+                    ph.setOnClickListener(null)
+                    ph.setOnLongClickListener(null)
+                }
+            }
         }
     }
+
+    /** 展开态用来把每行补满 6 格的透明占位：只为等宽，不可点、无内容。 */
+    private fun newPlaceholderCell(): TextView =
+        TextView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, dp(CANDIDATE_ROW_DP), 1f)
+            isClickable = false
+            isLongClickable = false
+            text = ""
+        }
 
     /**
      * 改候选条容器的高度。
@@ -2965,7 +2999,29 @@ class FeiheIme : InputMethodService() {
         v.background = null
         v.text = word
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-        v.setPadding(dp(14f), 0, dp(14f), 0)
+        // **候选词绝不允许折行。**
+        //
+        // 展开态每个格子宽度 = 屏宽 / 6（约 60dp），而两字词「智慧」在 20sp 下
+        // 约需 44dp，加上左右各 14dp 的 padding 就是 72dp —— 超了，TextView 会
+        // 把第二个字折到下一行。用户看到的就是「两字词竖着排成两行」：
+        // 上面「智」下面「慧」，六个格子各占一格，整片候选区像乱码。
+        //
+        // 这是去掉候选上限、候选变多之后的连带问题：以前一页只有 5~9 个，
+        // 单行横滑时格子宽度按内容自适应，两字词不会被挤；改成 6 列固定等分后
+        // 才暴露。修法是**单行 + 省略号 + 收紧 padding**，三件事缺一不可：
+        // 只加单行不收紧 padding，字会被省略成「智…」；只收紧不给单行，
+        // 宽度一不够又折行。
+        v.maxLines = 1
+        v.isSingleLine = true
+        v.ellipsize = android.text.TextUtils.TruncateAt.END
+        // 展开态 6 列时左右各 14dp 太挤（168dp 全被 padding 吃掉），收到 6dp。
+        // 单行横滑时格子是按内容 WRAP_CONTENT 的，6dp 也足够透气。
+        //
+        // **必须用 CandidateGrid.CELL_PADDING_DP / 2**：候选格子宽度的判据
+        // （`willTruncate`）读的是同一个常量。两边各写一个数字的话，测试会
+        // 绿着而线上折行 —— 这个 bug 就是这么逃过去的。
+        val cellPad = CandidateGrid.CELL_PADDING_DP / 2
+        v.setPadding(dp(cellPad.toFloat()), 0, dp(cellPad.toFloat()), 0)
         // 第一个候选高亮：它对应空格，得让人看出来
         val p = Palette.of(this)
         v.setTextColor(if (first) p.accent else p.text)
@@ -3598,6 +3654,52 @@ class FeiheIme : InputMethodService() {
 
     private fun dp(v: Float): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
+    /**
+     * 按当前屏幕宽度和系统字号，重算展开态每行几列。
+     *
+     * ## 为什么必须自适应，不能写死
+     *
+     * 展开候选的格子是「屏宽 ÷ 列数」等分出来的。列数写死 6 时，窄屏（360dp）
+     * 每格只有 57dp，扣掉格内 padding 剩 45dp，三字词「指挥官」需要 60dp
+     * → 被 ellipsize 截成「指…」，等于候选废了。写死 4 又会在平板/大屏上
+     * 每格宽到离谱、一行只放 4 个，浪费一半横向空间。
+     *
+     * 换手机、折叠屏展开/折叠、用户把系统字号调大 —— 这几种情况屏宽或字宽都会变，
+     * 所以列数必须在**每次创建输入视图**和**配置变化**时重算。
+     *
+     * 判据见 [CandidateGrid.columnsFor]：每格至少放得下三字词。
+     */
+    private fun updateColumns() {
+        val dm = resources.displayMetrics
+        val widthDp = (dm.widthPixels / dm.density).toInt()
+        // 系统字号缩放：用户调大字号时汉字实际占宽同步变大，列数要跟着减
+        val fontScale = if (dm.density > 0f) dm.scaledDensity / dm.density else 1f
+        val cols = CandidateGrid.columnsFor(widthDp, fontScale)
+        if (cols != CandidateGrid.PER_ROW) {
+            CandidateGrid.PER_ROW = cols
+            // 列数变了，已铺好的网格全部作废，下一次 renderCandidates 重建
+            expandedColumn?.removeAllViews()
+            candidateExpanded = false
+        }
+    }
+
+    /**
+     * 配置变化（换屏、旋转、系统字号改、深色模式切换）后重算列数并重绘。
+     *
+     * 不重算的后果：用户在设置里把字号从「小」调到「超大」，回来打字时列数
+     * 还是按旧字号算的，三字词立刻被截断——而且这个 bug 会一直持续到输入法
+     * 进程被重启。
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val before = CandidateGrid.PER_ROW
+        updateColumns()
+        if (before != CandidateGrid.PER_ROW || candidateExpanded) {
+            renderCandidates()
+        }
+    }
+
+
     companion object {
         private const val TAG = "FeiheIme"
 
@@ -3613,8 +3715,19 @@ class FeiheIme : InputMethodService() {
         /** 顶部那一行的高度（dp）。状态栏和候选条轮流用，所以取两者较高的那个。 */
         private const val TOP_SLOT_DP = 44f
 
-/** 候选条每一行的高度。展开态是「行数 × 这个值」。 */
-private const val CANDIDATE_ROW_DP = 40f
+        /**
+         * 候选条每一行的高度（dp）。展开态是「行数 × 这个值」。
+         *
+         * 固定 40dp 是按 20sp 候选字算的（字高约 27dp + 上下留白），经 `dp()`
+         * 按屏幕密度缩放，不是像素死值。
+         *
+         * **已知边界**：它不随系统字号（fontScale）放大。用户把字号调到 2.0 倍时
+         * 20sp 实际占 40dp，会贴满整行高度。没改成自适应是因为 20 处使用点都在
+         * 高度计算里（行高×行数、容器高度、ScrollView 可视区），一动就要重新
+         * 验证整套纵向布局；而列数自适应（[CandidateGrid.columnsFor]）已经解决了
+         * 「字被截断/折行」这个用户实际遇到的问题，大字号下的贴边属于观感问题。
+         */
+        private const val CANDIDATE_ROW_DP = 40f
 
         /** 数字选词行的高度（dp）。恒定占位，不随候选有无伸缩。 */
         private const val NUM_ROW_DP = 36f
