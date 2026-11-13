@@ -392,13 +392,13 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnPhraseNative<
     _class: JClass<'local>,
     word: JString<'local>,
     pinyin: JString<'local>,
-) {
+) -> jboolean {
     let w = read_string(&mut env, &word);
     let py = read_string(&mut env, &pinyin);
-    let _ = std::panic::catch_unwind(|| {
+    let saved = std::panic::catch_unwind(|| {
         if !w.is_empty() && !py.is_empty() {
             let before = feihe_core::phrase::len();
-            feihe_core::phrase::learn(&w, &py);
+            let ok = feihe_core::phrase::learn(&w, &py);
             let after = feihe_core::phrase::len();
             // 顺手记一次词频，让自造词和词库候选进同一个排序。
             // 不记的话刚造的词是 0 次，只和「同样 0 次的词库候选」打平，
@@ -416,8 +416,16 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_learnPhraseNative<
             // 而症状看起来像「好几个功能同时坏了」，极难联想到是日志导致的。
             // 要打日志就在 Kotlin 侧打；Rust 侧要打必须显式链 liblog。
             let _ = (before, after);
+            ok
+        } else {
+            false
         }
-    });
+    })
+    .unwrap_or(false);
+    // 把「有没有真正写到磁盘」回给 Kotlin，由它打日志。
+    // 内存里学到的词本次立刻可用，但写盘失败意味着重启后就没了——
+    // 这两件事必须让用户/日志能区分开。
+    return saved as jboolean;
 }
 
 /// `NativeEngine.decodePinyinNative(code)` —— 双拼码 → 全拼（`fwhe` → `fei he`）。

@@ -300,12 +300,17 @@ pub fn words_for(code: &str, pinyin: bool) -> Vec<String> {
 ///
 /// 写盘策略和 `pin` 一样：**先读盘、再改、再写盘**。自造词是低频事件（一个人
 /// 一天也不会造几个），每次整读整写完全不是问题，换来的是多进程之间不互相覆盖。
-pub fn learn(word: &str, pinyin: &str) {
+/// 记一个自造词。
+///
+/// @return 是否**成功落盘**。内存表总是会更新（本次输入立即可用），
+/// 但磁盘写失败意味着重启后这个词就没了——调用方必须能看到这个区别，
+/// 否则用户遇到的是「今天造的词明天不见了」而且毫无线索。
+pub fn learn(word: &str, pinyin: &str) -> bool {
     if word.is_empty() || word.is_ascii() || pinyin.is_empty() {
-        return;
+        return false;
     }
     if shuangpin::encode_pinyin(Scheme::Xiaohe, pinyin).is_none() {
-        return;
+        return false;
     }
     // 整个「合并磁盘 → 累加 → 前插」都在写锁内完成。
     //
@@ -350,7 +355,7 @@ pub fn learn(word: &str, pinyin: &str) {
         let entries = std::mem::take(&mut t.entries);
         *t = Table::build(entries);
     });
-    write_now();
+    write_now()
 }
 
 /// 学到的词条数（设置窗显示用）
@@ -370,10 +375,14 @@ pub fn clear() -> usize {
 }
 
 /// 把内存表整份写盘（原子改名），顺序就是「新学的在前」。
-fn write_now() {
+/// 把内存表整份写盘。
+///
+/// @return 是否写成功。失败**不重试**（自造词是低频事件，下一次 learn 会整份重写），
+/// 但必须把失败告诉调用方——静默吞掉的话，用户看到的是「词造了，过两天又没了」。
+fn write_now() -> bool {
     // 测试进程绝不写盘（和 config::save 同样的理由）
     if cfg!(test) {
-        return;
+        return true;
     }
     let text = with_table(|t| {
         let mut s = String::with_capacity(t.entries.len() * 24 + 64);
@@ -390,15 +399,18 @@ fn write_now() {
     });
 
     // 走统一的原子写（临时名带进程 id，见 `config::write_atomic`）。
-    // 写失败不重试：自造词是低频事件，下一次 learn 会整份重写。
     let path = file();
-    let _ = crate::config::write_atomic(&path, &text);
+    let ok = match crate::config::write_atomic(&path, &text) {
+        Ok(()) => true,
+        Err(_) => false,
+    };
     // 记下自己刚写的 mtime，免得紧接着的 refresh() 白读一遍
     if let Some(m) = std::fs::metadata(&path).ok().and_then(|x| x.modified().ok()) {
         if let Ok(mut g) = LAST_MTIME.lock() {
             *g = Some(m);
         }
     }
+    ok
 }
 
 /// 别的进程记过新词之后把内容拉进来。**在 `Activate` 里调**（切窗口、切输入法时）。

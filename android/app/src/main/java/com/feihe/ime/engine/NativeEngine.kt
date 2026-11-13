@@ -242,7 +242,13 @@ object NativeEngine {
      */
     fun learnPhrase(word: String, pinyin: String) {
         if (word.isEmpty() || pinyin.isEmpty() || !ensureLoaded()) return
-        runCatching { learnPhraseNative(word, pinyin) }
+        val saved = runCatching { learnPhraseNative(word, pinyin) }.getOrDefault(false)
+        if (!saved) {
+            // 内存里已经记上了（本次输入立刻可用），但**磁盘没写成功**——
+            // 重启后这个词就没了。这条日志是用户报「造的词过几天又不见了」时
+            // 唯一能查到实情的线索，别删。
+            Log.w(TAG, "自造词写盘失败：word=[$word] pinyin=[$pinyin]（本次可用，重启后丢失）")
+        }
     }
 
     /**
@@ -556,7 +562,7 @@ object NativeEngine {
 
     private external fun learnNative(code: String, word: String)
 
-    private external fun learnPhraseNative(word: String, pinyin: String)
+    private external fun learnPhraseNative(word: String, pinyin: String): Boolean
 
     private external fun pinyinOfNative(code: String, word: String): String
 
