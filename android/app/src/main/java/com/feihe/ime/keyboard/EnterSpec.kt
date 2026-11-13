@@ -49,8 +49,8 @@ object EnterSpec {
         /**
          * 什么都不做。
          *
-         * **任何情况下都不该返回这个值。** 保留它只是为了在测试里断言
-         * "没有输入时绝不能落到这个分支"——那个分支曾经让 Termux 完全不可用。
+         * 用于声明了 DONE / SEND 这类「完成」动作的输入框：宿主会把回车
+         * 理解成「收工」，连带收起键盘。我们没有需要提交的东西，就不要触发它。
          */
         data object DoNothing : Decision
     }
@@ -65,12 +65,41 @@ object EnterSpec {
         if (pendingNotEmpty) return Decision.CommitOnly
 
         // 第二层：没输入，把这下回车交给宿主。
-        // **默认是 Newline，不是 DoNothing**——理由见类注释的第三条。
+        //
+        // **白名单：只有 GO / SEARCH 交出去，DONE/SEND 类什么都不发，其余换行。**
+        //
+        // 为什么不能"任何非 NONE 的 action 都交给宿主"：飞书/微信的聊天输入框
+        // 声明的是 IME_ACTION_DONE(3)（实测 imeOptions=0x10000003）。
+        // 把 DONE 交出去 = 触发宿主"完成并收起键盘"，用户看到的就是
+        // **按一下回车键盘自己消失了，还得手动点回来**。
+        //
+        // 只有 GO / SEARCH 这种"提交后还要继续用键盘"的动作才值得交出去：
+        // 地址栏 GO 跳转、搜索框 SEARCH 搜索，两者都不收键盘。
+        // SEND / DONE / NEXT / PREVIOUS 是"完成类"动作，宿主处理它们时会收键盘
+        // 或挪焦点，都会打断连续输入，所以什么都不发。
         return when (imeAction) {
-            EditorInfo.IME_ACTION_NONE,
-            EditorInfo.IME_ACTION_UNSPECIFIED,
-            0 -> Decision.Newline
-            else -> Decision.PerformEditorAction(imeAction)
+            // 跳转/搜索：交出去，这两个动作不会收键盘
+            EditorInfo.IME_ACTION_GO,
+            EditorInfo.IME_ACTION_SEARCH -> Decision.PerformEditorAction(imeAction)
+
+            // **DONE / SEND 等"完成类"动作：什么都不发。**
+            //
+            // 这类框（飞书/微信聊天、Settings 搜索）声明 DONE 的意思是
+            // 「回车 = 完成这一轮输入」。宿主对它的处理**包括收起键盘**。
+            // 实测飞书/微信的 imeOptions=0x10000003（action=DONE），
+            // 只要往这种框里发换行符或 performEditorAction(DONE)，键盘立刻消失，
+            // 用户得手动点回来——这就是「回车后键盘自己收起」的根因。
+            //
+            // 用户要的只是"把手上那串字母上屏"，上屏已经在上一层做完了；
+            // 这一层没有输入可上，就不该再触发宿主的完成逻辑。
+            EditorInfo.IME_ACTION_DONE,
+            EditorInfo.IME_ACTION_SEND,
+            EditorInfo.IME_ACTION_NEXT,
+            EditorInfo.IME_ACTION_PREVIOUS -> Decision.DoNothing
+
+            // 真·没有声明动作（Termux 的 TYPE_NULL 终端就是这种）：发换行。
+            // 这是最严重那次事故的分支，绝不能再改成"什么都不做"之外的东西。
+            else -> Decision.Newline
         }
     }
 }

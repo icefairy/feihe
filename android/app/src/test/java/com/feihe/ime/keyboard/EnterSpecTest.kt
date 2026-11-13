@@ -68,6 +68,34 @@ class EnterSpecTest {
     }
 
     @Test
+    fun `没有输入 + 飞书微信的 DONE —— 什么都不发，绝不能收键盘`() {
+        // 飞书/微信聊天框实测 imeOptions=0x10000003，action=IME_ACTION_DONE(3)。
+        // 曾经把 DONE 交给宿主 → 触发"完成并收键盘"，用户按一下回车键盘就没了，
+        // 得手动点回来。这是明确不可接受的行为。
+        assertEquals(
+            EnterSpec.Decision.DoNothing,
+            EnterSpec.decide(
+                chinese = true,
+                pendingNotEmpty = false,
+                imeAction = android.view.inputmethod.EditorInfo.IME_ACTION_DONE,
+            ),
+        )
+    }
+
+    @Test
+    fun `没有输入 + SEND —— 什么都不发，不触发发送、不收键盘`() {
+        // SEND 也是收键盘的动作，同样不能交出去，也不该发换行。
+        assertEquals(
+            EnterSpec.Decision.DoNothing,
+            EnterSpec.decide(
+                chinese = true,
+                pendingNotEmpty = false,
+                imeAction = android.view.inputmethod.EditorInfo.IME_ACTION_SEND,
+            ),
+        )
+    }
+
+    @Test
     fun `没有输入 + 地址栏 —— 交给宿主跳转`() {
         assertEquals(
             EnterSpec.Decision.PerformEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_GO),
@@ -90,17 +118,40 @@ class EnterSpecTest {
     }
 
     @Test
-    fun `规格两半都必须成立`() {
-        // 有输入 → CommitOnly；没输入 → 至少要做点什么（绝不能是 DoNothing）
+    fun `有输入时任何框都只上屏`() {
+        // 第一层规格与宿主无关，中英 / 各种 action 组合都必须是 CommitOnly
         listOf(true, false).forEach { ch ->
-            listOf(0, android.view.inputmethod.EditorInfo.IME_ACTION_GO).forEach { act ->
-                val withInput = EnterSpec.decide(ch, pendingNotEmpty = true, imeAction = act)
-                assertEquals(EnterSpec.Decision.CommitOnly, withInput)
-
-                val noInput = EnterSpec.decide(ch, pendingNotEmpty = false, imeAction = act)
-                assertFalse("没输入时绝不能什么都不做（Termux 会废掉）",
-                    noInput == EnterSpec.Decision.DoNothing)
+            listOf(
+                0,
+                android.view.inputmethod.EditorInfo.IME_ACTION_GO,
+                android.view.inputmethod.EditorInfo.IME_ACTION_DONE,
+                android.view.inputmethod.EditorInfo.IME_ACTION_SEND,
+            ).forEach { act ->
+                assertEquals(
+                    EnterSpec.Decision.CommitOnly,
+                    EnterSpec.decide(ch, pendingNotEmpty = true, imeAction = act),
+                )
             }
+        }
+    }
+
+    @Test
+    fun `只有真正没有 action 的框才发换行 —— Termux 不能废`() {
+        // 这条钉住最严重那次事故：Termux 的 TYPE_NULL 终端 imeAction=0，
+        // 曾经因为"没有 action 就什么都不做"让回车彻底失效、命令行不可用。
+        // 反过来 DONE/SEND 也不能掉进 Newline，否则宿主收到换行会收键盘。
+        listOf(true, false).forEach { ch ->
+            assertEquals(
+                EnterSpec.Decision.Newline,
+                EnterSpec.decide(ch, pendingNotEmpty = false, imeAction = 0),
+            )
+            assertEquals(
+                EnterSpec.Decision.DoNothing,
+                EnterSpec.decide(
+                    ch, pendingNotEmpty = false,
+                    imeAction = android.view.inputmethod.EditorInfo.IME_ACTION_DONE,
+                ),
+            )
         }
     }
 }
