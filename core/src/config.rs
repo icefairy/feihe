@@ -719,17 +719,26 @@ mod tmp_tests {
     /// 临时文件名必须带进程 id：两个宿主进程同时写盘时，固定的 `.tmp` 名会被
     /// 两边交叉写坏，rename 上去的是两份内容的混合体——用户看到的是「学习记录
     /// 莫名其妙少几条、还冒出乱码行」，而且完全无法复现。
+    ///
+    /// **路径要用 `PathBuf::from_iter` 按平台拼，不要写死 `C:\...`**：
+    /// 反斜杠在 Linux 上不是分隔符，`Path::new("C:\\Users\\...")` 会被当成
+    /// 一整段文件名，`file_name()` 返回整个串、断言里一比对就失败。
+    /// 这条曾经长期「红着跑」，被当成环境问题忽略掉了。
     #[test]
     fn tmp_path_is_per_process() {
-        let p = std::path::Path::new("C:\\Users\\x\\AppData\\Roaming\\Feihe\\freq.txt");
-        let t = tmp_path(p);
+        let p: std::path::PathBuf = ["Users", "x", "Feihe", "freq.txt"].iter().collect();
+        let t = tmp_path(&p);
         let name = t.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(name.starts_with("freq.txt."), "{name}");
-        assert!(name.ends_with(".tmp"), "{name}");
-        assert!(name.contains(&std::process::id().to_string()), "{name}");
+        assert!(name.starts_with("freq.txt."), "以 freq.txt. 开头: {name}");
+        assert!(name.ends_with(".tmp"), "以 .tmp 结尾: {name}");
+        assert!(
+            name.contains(&std::process::id().to_string()),
+            "带进程 id {}: {name}",
+            std::process::id()
+        );
         assert_ne!(t, p, "临时文件不能正好是目标文件");
         // 不同进程不同名，同进程稳定
-        assert_eq!(tmp_path(p), t);
+        assert_eq!(tmp_path(&p), t);
     }
 }
 
