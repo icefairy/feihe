@@ -61,8 +61,12 @@ object Palette {
         val statusBg: Int,
         /** 候选与联想之间的分隔竖线 */
         val separator: Int,
-        /** 分段 chip 的描边 */
+        /** 分段 chip 的描边。**必须与 keyboardBg 有可见对比**，否则控件边界等于隐形。 */
         val chipStroke: Int,
+        /** 控件（「形」/展开/收起）的极浅填充，配合描边让边界在正常观看距离可辨 */
+        val chipBg: Int,
+        /** 强调色对应的浅底（形码激活态的按钮底色） */
+        val accentBg: Int,
         /** 更淡的提示（「↵上屏」这类） */
         val hint: Int,
         /** 错误红（引擎未就绪） */
@@ -87,7 +91,13 @@ object Palette {
         stroke = 0xFF9AA0A8.toInt(),
         statusBg = 0xFFEDEEF0.toInt(),
         separator = 0xFFBDBDBD.toInt(),
-        chipStroke = 0xFFD9DCE1.toInt(),
+        // **必须比 keyboardBg 深。** 曾经这里和 keyboardBg 是同一个值
+        // （都是 0xFFD9DCE1），描边画在候选条上等于隐形——用户反复反馈
+        // 「展开按钮/收起按钮没有边框」，查了几轮都以为是没画出来，
+        // 实际是画了但和背景同色。深色模式那套本来就是对的（0F1012 vs 3A3D42）。
+        chipStroke = 0xFFAEB4BD.toInt(),
+        chipBg = 0xFFF7F8FA.toInt(),
+        accentBg = 0xFFE8F0FE.toInt(),
         hint = 0xFF9AA0A8.toInt(),
         danger = 0xFFC5221F.toInt(),
     )
@@ -121,6 +131,8 @@ object Palette {
         statusBg = 0xFF1B1C1E.toInt(),
         separator = 0xFF5F6368.toInt(),
         chipStroke = 0xFF3A3D42.toInt(),
+        chipBg = 0xFF1B1D21.toInt(),
+        accentBg = 0xFF1F3A5F.toInt(),
         hint = 0xFF80858C.toInt(),
         danger = 0xFFFF897D.toInt(),
     )

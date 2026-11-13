@@ -1123,8 +1123,17 @@ class FeiheIme : InputMethodService() {
                 val pal = Palette.of(this@FeiheIme)
                 background = android.graphics.drawable.GradientDrawable().apply {
                     cornerRadius = dp(15f).toFloat()
-                    setColor(android.graphics.Color.TRANSPARENT)
-                    setStroke(dp(1f), pal.stroke)
+                    // **不调 setColor(TRANSPARENT)。**
+                    //
+                    // 这里是「收起按钮没有边框」的真正原因：GradientDrawable
+                    // 不设 color 时本来就是透明填充，显式设一个全透明色会在部分
+                    // Android 版本上让整张 shape 的绘制被跳过，描边跟着一起消失。
+                    // 框不是「太淡看不见」，是**根本没画出来**。
+                    //
+                    // 顺带把描边色从 stroke(0xFF9AA0A8) 换成 chipStroke：
+                    // 前者是分隔线用的亮灰，画在键盘底色上对比度不够；
+                    // 后者是给小控件准备的，深一档。
+                    setStroke(dp(1.5f), pal.chipStroke)
                 }
                 // 左右留白比上下大：药丸需要横向余量才像按钮
                 setPadding(dp(16f), dp(7f), dp(16f), dp(7f))
@@ -1245,6 +1254,10 @@ class FeiheIme : InputMethodService() {
                 KeyboardPages.rows(target, chinese),
                 shiftState,
                 KeyboardPages.rowHeightDp(target) * UiPrefs.keyScale(this),
+                // **形码态才传方案名**：非 null 时按键换成「字母小字 + 形码提示大字」，
+                // 并且标点/字母退居次要位置。退出形码态（assistActive=false）传 null，
+                // 键盘立刻恢复原样——这也是「退出形码就还原」的实现点。
+                assistMode = if (assistActive && assistMode != "off") assistMode else null,
                 onLongKey = { onLongKey(it) },
                 // 空格键松手：如果这次长按已经进了语音，抬起就结束录音。
                 //
@@ -1539,7 +1552,9 @@ class FeiheIme : InputMethodService() {
                     if (assistKeys.isNotEmpty()) {
                         assistKeys.deleteCharAt(assistKeys.length - 1)
                     } else {
+                        // 形码删空后退出形码态 → 键盘要还原成正常字母/标点
                         assistActive = false
+                        rebuildKeyboard()
                     }
                     refreshAssist()
                     return
@@ -2021,7 +2036,21 @@ class FeiheIme : InputMethodService() {
         assistActive = !assistActive
         assistKeys.setLength(0)
         assistWords = emptyList()
+        // **必须重建键盘**：形码态要把按键换成「字母小字 + 形码大字」，
+        // 那是另一个 View 结构（FrameLayout 双层），不是就地改字能变的。
+        //
+        // 只在切页/切模式时才重建键盘的老习惯在这里不适用——那个「不重建」
+        // 是为了防止候选条抖动，而进出形码态本来就是用户主动的一次模式切换，
+        // 抖一下是可接受的，看不到提示才是真问题。
+        rebuildKeyboard()
         refreshAssist()
+    }
+
+    /** 重建当前键盘页（只换键盘区，不动候选条/InputView）。 */
+    private fun rebuildKeyboard() {
+        val host = keyboardHost ?: return
+        host.removeAllViews()
+        showPage(page)
     }
 
     /**
@@ -2136,7 +2165,12 @@ class FeiheIme : InputMethodService() {
         segmentStateCode = pending.toString()
         // 换段清形码：留着会把下一段的候选筛空
         assistKeys.setLength(0)
-        if (next.focus < 0) assistActive = false
+        if (next.focus < 0 && assistActive) {
+            // **选完字自动退出形码态**（用户要求：选择了字之后退出这个模式）。
+            // 键盘同时还原，否则下次打字还顶着一屏部首提示。
+            assistActive = false
+            rebuildKeyboard()
+        }
         updateAssistWords()
         // **最后一段选完 = 整句齐了，直接上屏。**
         // 否则用户选完最后一个字还得再按空格，而候选条上已经没有任何提示了。
@@ -2871,7 +2905,6 @@ class FeiheIme : InputMethodService() {
 
     /** 展开 / 收起按钮。图标用 ▾ / ▴，点一下切换。 */
     private fun bindExpandToggle(v: TextView) {
-        v.background = null
         // **文案要能表达「还有更多」。**
         //
         // 收起态一屏只放三五个候选（这样渲染才不卡），但一个字可能有几百个候选
@@ -2882,15 +2915,35 @@ class FeiheIme : InputMethodService() {
         // 也成了「想看全量就往这儿点」的入口。
         val total = candidates.size
         v.text = when {
-            candidateExpanded -> "▴"
+            candidateExpanded -> "▴ 收起"
             total > 0 -> "▾ $total"
             else -> "▾"
         }
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (candidateExpanded) 16f else 13f)
-        // **点击区要够大**：14sp 的字加 8dp padding 只有约 30dp 宽，
-        // 手指点上去经常落到相邻的候选词上（表现为「点展开没反应」）。
-        // 横向撑到 44dp，是安卓无障碍建议的最小可点尺寸。
-        v.minWidth = dp(44f)
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (candidateExpanded) 12f else 13f)
+        // **必须画出可见的边框。**
+        //
+        // 用户反馈「展开按钮没有边框，不确定点击范围，容易点不到」。原先
+        // `background = null` + 撑 minWidth，实际是**一块看不见的透明区**：
+        // 手指不知道该往哪儿落，点偏一点就落到旁边的候选词上，表现为
+        // 「点展开没反应」（其实是选了隔壁那个字）。
+        //
+        // 描边 + 圆角和分段态的 chip 用同一套（chipStroke / 4dp），
+        // 整个候选条的视觉语言保持统一。
+        // 不调 setColor：默认透明填充。见 bindAssistView 里的说明——
+        // 显式设全透明色会让部分系统版本跳过整张 shape 的绘制。
+        v.background = GradientDrawable().apply {
+            setStroke(dp(1.5f), Palette.of(this@FeiheIme).chipStroke)
+            cornerRadius = dp(4f).toFloat()
+        }
+        // **点击区要够大**：13sp 的字加 padding 只有约 30dp 宽，手指点上去
+        // 经常落到相邻的候选词上。横向撑到 44dp，是安卓无障碍建议的最小可点尺寸。
+        //
+        // 注意 minWidth 在 LinearLayout 的 weight 布局里不一定生效（父容器按
+        // weight 分配宽度时会覆盖它），所以真正的保障是下面这行
+        // minimumWidth —— minWidth 管的是 TextView 自己的 measure 建议值，
+        // minimumWidth 才是「无论父容器怎么量，至少这么宽」的硬约束。
+        v.minWidth = dp(48f)
+        v.minimumWidth = dp(48f)
         v.gravity = Gravity.CENTER
         v.setPadding(dp(6f), 0, dp(6f), 0)
         v.setTextColor(Palette.of(this).sub)
@@ -3192,7 +3245,6 @@ class FeiheIme : InputMethodService() {
      * 只亮一个按钮的话，用户不知道刚才那两个键到底吃进去没有。
      */
     private fun bindAssistView(v: TextView) {
-        v.background = null
         val p = Palette.of(this)
         v.text = when {
             !assistActive -> "形"
@@ -3200,8 +3252,43 @@ class FeiheIme : InputMethodService() {
             else -> "形 $assistKeys"
         }
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        // **给「形」一个看得见的框。**
+        //
+        // 它是进/出形码态的开关，但原先 `background = null`——在候选条一排字里
+        // 和候选词长得一模一样，用户根本分不清「哪个是能点的按钮、哪个是候选字」。
+        // 点偏一格就选了隔壁那个字。
+        //
+        // 描边和展开按钮、「收起候选」胶囊用同一个 chipStroke，三处视觉一致：
+        // 凡是有框的都是控件，没框的都是候选文字。
+        // **不要调 setColor**：GradientDrawable 默认就是透明填充，
+        // 显式 setColor(0x00000000)（全透明）在部分 Android 版本上会让整张
+        // shape 的绘制被跳过——描边跟着一起消失，表现就是「设了边框但看不见」。
+        // 分段态那批 chip 一直可见，正是因为它们从来没设过 color。
+        // **填充 + 描边双保险。**
+        //
+        // 只画 1.5dp 描边在 440dpi 屏上只有 4px，混在一排文字里几乎看不出边界
+        // （实测截图放大到 4 倍才能辨认）。所以再给一层很浅的填充色，
+        // 让「这是一个控件」这件事在正常观看距离下就能感知到。
+        //
+        // 填充用 chipStroke 的极淡版本：肉眼能看到色块，又不会抢候选词的注意力。
+        v.background = GradientDrawable().apply {
+            setColor(if (assistActive) p.accentBg else p.chipBg)
+            setStroke(dp(1.5f), if (assistActive) p.accent else p.chipStroke)
+            cornerRadius = dp(4f).toFloat()
+        }
+        // **必须显式给 LayoutParams 一个固定宽度。**
+        //
+        // 日志实测 bind 时 `w=0`，点击坐标落在按钮上看不到任何反应——
+        // 说明它不是「还没 measure」，而是**真的被量成了 0 宽**。
+        // minWidth/minimumWidth 对 WRAP_CONTENT 的 TextView 只是「建议值」，
+        // 父容器 HorizontalScrollView 里的 LinearLayout 在分配时不一定采纳。
+        //
+        // 所以直接把宽度钉死：48dp 是安卓无障碍建议的最小可点尺寸。
+        v.gravity = Gravity.CENTER
         v.setPadding(dp(10f), 0, dp(10f), 0)
+        v.layoutParams = LinearLayout.LayoutParams(dp(48f), dp(CANDIDATE_ROW_DP))
         v.setTextColor(if (assistActive) p.accent else p.sub)
+        v.contentDescription = if (assistActive) "退出形码" else "进入形码"
         v.setOnClickListener { toggleAssist() }
     }
 

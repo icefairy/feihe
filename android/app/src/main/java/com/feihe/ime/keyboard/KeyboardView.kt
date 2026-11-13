@@ -67,6 +67,8 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
         rowHeightDp: Float = KEY_HEIGHT_DP,
         onLongKey: (Key) -> Unit = {},
         onVoiceUp: () -> Unit = {},
+        /** 形码方案：非空表示当前处于形码态，按键要显示形码提示（见 [makeAssistKey]）。 */
+        assistMode: String? = null,
         onKey: (Key) -> Unit,
     ): View {
         val p = Palette.of(ctx)
@@ -92,14 +94,144 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
             ).apply { bottomMargin = dp(ctx, GAP_DP) }
 
             for (key in row) {
-                rowView.addView(
-                    makeKey(ctx, key, shift, onLongKey, onVoiceUp, onKey),
-                    keyParams(ctx, key),
-                )
+                // 形码态：字母键换成「字母小字 + 形码大字」的双层布局，
+                // 让用户照着键面点，不用背部首表。
+                val hint = if (assistMode != null && key.kind == KeyKind.CHAR) {
+                    AssistKeyHints.hintFor(key.code.firstOrNull() ?: ' ', assistMode)
+                } else ""
+                val v = if (hint.isNotEmpty()) {
+                    makeAssistKey(ctx, key, hint, assistMode, onLongKey, onKey)
+                } else {
+                    makeKey(ctx, key, shift, onLongKey, onVoiceUp, onKey)
+                }
+                rowView.addView(v, keyParams(ctx, key))
             }
             root.addView(rowView, lp)
         }
         return root
+    }
+
+    /**
+     * 形码态下的按键：上排小字字母（淡化），下排大字形码提示。
+     *
+     * ## 为什么不是「隐藏字母、只显示部首」
+     *
+     * 用户明确要求「原来按键的标点与字母可以暂时隐藏」，但**字母必须留一点痕迹**：
+     * 形码本质还是按字母键，完全抹掉字母后，用户按下 `s` 却看不到 `s`，
+     * 会怀疑自己点错了键。所以做成「字母缩小淡化 + 部首放大」的主次关系，
+     * 既突出形码又不让人失去坐标感。
+     *
+     * ## 为什么用 FrameLayout 而不是两个 LinearLayout 子项
+     *
+     * 键高只有 46dp，两行文字垂直居中分布时，中间不留空隙会让两行挤在一起。
+     * FrameLayout + 上下两个 gravity 能各自贴边，中间的留白由键高自然分配，
+     * 并且**不改变按键本身的点击区域**（整个 FrameLayout 就是一个可点区域）。
+     *
+     * ## 长按提示
+     *
+     * 键面只放得下两个字（`s` → 手水），但 `s` 实际对应 25 个部首。长按弹气泡
+     * 把完整列表摊开——「用多了自然会」，但在会之前得有一条查得到的路。
+     */
+    private fun makeAssistKey(
+        ctx: Context,
+        key: Key,
+        hint: String,
+        mode: String?,
+        onLongKey: (Key) -> Unit,
+        onKey: (Key) -> Unit,
+    ): View {
+        val p = Palette.of(ctx)
+        val sizeScale = UiPrefs.keyScale(ctx)
+        val base = keyTextSizeSp(key) * sizeScale
+
+        // 上层：字母，缩小到 55% 并淡化，只作方位参考
+        val letter = TextView(ctx).apply {
+            text = key.label
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, base * 0.55f)
+            setTextColor(p.fnText)
+            alpha = 0.55f
+            isClickable = false
+            isFocusable = false
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL }
+        }
+        // 下层：形码提示，比字母大
+        val hintView = TextView(ctx).apply {
+            text = hint
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, base * 0.82f)
+            setTextColor(p.keyText)
+            isClickable = false
+            isFocusable = false
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL }
+        }
+
+        val box = FrameLayout(ctx).apply {
+            // 背景跟普通键一致：形码态只是「换了键上的字」，不该让整个键盘变样
+            background = keyBackground(ctx, key, ShiftState.OFF)
+            isClickable = true
+            setPadding(dp(ctx, 2f), dp(ctx, 3f), dp(ctx, 2f), dp(ctx, 3f))
+            contentDescription = "${key.label}，形码 ${hint}"
+            addView(letter)
+            addView(hintView)
+            setOnClickListener { onKey(key) }
+            // 长按：走通用的 onLongKey（去掉键/切页等），同时弹形码完整提示。
+            // 两个动作不冲突——长按弹气泡是「看看这个键有什么」，不改变输入。
+            setOnLongClickListener {
+                showAssistBubble(ctx, this, key, mode)
+                onLongKey(key)
+                true
+            }
+        }
+        return box
+    }
+
+    /**
+     * 长按某个字母键时弹出该键的**全部**部首/部件。
+     *
+     * 用 PopupWindow 而不是 Toast：气泡要贴着被按的那颗键、并且用户想看清楚时
+     * 可以盯着不放（Toast 会自己消失）。
+     *
+     * 锚点是**被长按的那颗键自己**（`anchor` 传进来），不是 DecorView：
+     * 输入法窗口的 DecorView 覆盖整个键盘，拿它当锚点会把气泡弹到屏幕角落。
+     */
+    private fun showAssistBubble(ctx: Context, anchor: View, key: Key, mode: String?) {
+        val all = AssistKeyHints.fullHint(key.code.firstOrNull() ?: ' ', mode ?: "")
+        if (all.isEmpty()) return
+        val p = Palette.of(ctx)
+        val title = if (mode == "xiaohe") "小鹤音形" else "自然码"
+        val tv = TextView(ctx).apply {
+            text = "${key.label.uppercase()} · $title\n$all"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextColor(p.keyText)
+            setPadding(dp(ctx, 12f), dp(ctx, 8f), dp(ctx, 12f), dp(ctx, 8f))
+            // 部首列表可能很长（s 键 25 个），限制宽度让它自动换行而不是拉成一长条
+            maxWidth = dp(ctx, 240f)
+            background = GradientDrawable().apply {
+                setColor(p.keyboardBg)
+                setStroke(dp(ctx, 1f), p.chipStroke)
+                cornerRadius = dp(ctx, 8f).toFloat()
+            }
+        }
+        val pop = android.widget.PopupWindow(
+            tv,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            true,
+        ).apply {
+            isOutsideTouchable = true
+            // 点气泡外任意位置关闭——输入法窗口里没有别的关闭途径
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0x00000000))
+        }
+        // 向上弹（负偏移）：气泡出现在按键上方，不挡住用户正在看的键面
+        runCatching { pop.showAsDropDown(anchor, 0, -dp(ctx, 72f)) }
+            .onFailure { pop.dismiss() } // 拿不到锚点就不弹，绝不因为提示功能崩掉输入法
     }
 
     private fun keyParams(ctx: Context, key: Key) = LinearLayout.LayoutParams(
