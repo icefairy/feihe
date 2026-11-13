@@ -39,6 +39,7 @@ import com.feihe.ime.keyboard.Backspace
 import com.feihe.ime.keyboard.CandidateGrid
 import com.feihe.ime.keyboard.Key
 import com.feihe.ime.keyboard.KeyKind
+import com.feihe.ime.keyboard.EnterSpec
 import com.feihe.ime.keyboard.KeyboardView
 import com.feihe.ime.keyboard.KeyboardPages
 import com.feihe.ime.keyboard.NavAction
@@ -1595,45 +1596,25 @@ class FeiheIme : InputMethodService() {
 
             KeyKind.ENTER -> {
                 if (quickMode) quickMode = false
-                // 英文组合态：回车先确认原文。和空格同一条规则——
-                // 用户打了半个词直接回车，本意是「就这样上屏」，不是「丢掉」。
-                if (!chinese && pending.isNotEmpty()) {
-                    commitEnglishComposing()
+                // 回车规格全在 EnterSpec 里（纯函数，EnterSpecTest 逐条钉住）。
+                // 这里只负责按判定执行，**不要再自己写 if 判断**——
+                // 这段逻辑改坏过三次，每次都是某个默认分支选反。
+                when (val dec = EnterSpec.decide(chinese, pending.isNotEmpty(), fieldAction)) {
+                    EnterSpec.Decision.CommitOnly -> {
+                        // 手上有输入：原样上屏就结束，不换行、不发 action。
+                        //   中文态 → 那串字母直接 commitText
+                        //   英文态 → 字母早就逐字上屏了，这里只清账本
+                        if (!chinese) commitEnglishComposing() else commitPending()
+                    }
+                    is EnterSpec.Decision.PerformEditorAction -> {
+                        // 没输入 + 宿主有明确动作（地址栏 GO / 搜索框 SEARCH）
+                        currentInputConnection?.performEditorAction(dec.action)
+                    }
+                    EnterSpec.Decision.Newline -> commitText("\n")
+                    // DoNothing 不存在于返回路径（测试里断言了），
+                    // when 仍需穷尽，给个空分支
+                    EnterSpec.Decision.DoNothing -> Unit
                 }
-                // **中文态回车 = 原样上屏那串字母，不选候选，也不追加换行。**
-                //
-                // 这是 Windows 输入法的语义（用户明确要求对齐）：回车是「我不要
-                // 转换，就按我打的字母上屏」。它在这些场景不可替代：
-                //   - 打验证码/车牌/型号这类拼音正好不存在的串
-                //   - 引擎把码拆错了，用户想原样拿到那串字母
-                //
-                // **有输入时不追加 `\n`**（用户明确要求）：上屏那串字母之后如果
-                // 自己再补一个换行，在很多宿主的单行输入框里会变成「提交」，或者
-                // 在聊天框里直接发出消息——用户只是想把它变成普通文本继续编辑，
-                // 不是想换行。换行是**没有输入时**才做的事（见下面最后一个分支）。
-                //
-                // 空格才是「选第一个」——这两个键必须分工，否则用户想原样上屏
-                // 时无路可走（以前回车也选候选，等于两个键干同一件事）。
-                if (chinese && pending.isNotEmpty()) {
-                    // 原样上屏那串字母，**然后照样要把回车这一下交出去**：
-                    // 用户打了一半拼音（或直接粘了一串）想按回车访问，如果这里
-                    // 上屏完就 return，回车动作永远发不出去——那和「按了没反应」一样。
-                    commitPending()
-                    performEnterAction()
-                    forgetContext()
-                    return
-                }
-                // 分段态也要收尾，同样不换行，但回车动作照发
-                if (commitSegmentIfActive()) {
-                    performEnterAction()
-                    forgetContext()
-                    return
-                }
-                // 手上没有任何待处理输入 → 这一下回车的语义交给宿主决定：
-                // 地址栏是「访问」、搜索框是「搜索」、多行输入框才是换行。
-                // 以前这里无条件 commitText("\n")，在单行输入框里会被宿主清洗成
-                // **一个空格**，地址栏因此永远不跳转（用户报的就是这个）。
-                performEnterAction()
                 forgetContext()
             }
 
@@ -3349,43 +3330,6 @@ class FeiheIme : InputMethodService() {
         prevWord = ""
         renderCandidates()
         refreshStatus()
-    }
-
-    /**
-     * 「回车这一下是什么意思」——按宿主声明的 IME action 决定。
-     *
-     * ## 为什么要区分，不能一律发 `\n`
-     *
-     * 单行输入框（浏览器地址栏、搜索框、用户名框）**不接受换行**。宿主收到 `\n`
-     * 会把它清洗掉或者变成一个空格——用户看到的就是「按回车冒出个空格，
-     * 页面没动」。地址栏的 `IME_ACTION_GO`、搜索框的 `IME_ACTION_SEARCH` 必须走
-     * `performEditorAction`，那是宿主自己的「提交」入口，等效于点键盘上的前往键。
-     *
-     * 多行框（聊天、备忘录）的 action 是 `IME_ACTION_NONE`，那时才真的发换行。
-     *
-     * 顺序很讲究：**动作要在上屏之后发**。先发 action 的话，宿主可能拿旧的
-     * 文本去搜索/导航（少最后几个字），而且某些实现在 action 后会重置输入状态，
-     * 导致紧接着的 commitText 丢失。
-     */
-    private fun performEnterAction() {
-        val ic = currentInputConnection
-        // NONE / UNSPECIFIED = 宿主没声明动作，按多行处理：真换行
-        val action = fieldAction
-        val isMultiline = (fieldType and android.text.InputType.TYPE_MASK_CLASS) ==
-            android.text.InputType.TYPE_CLASS_TEXT &&
-            (fieldType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0
-        if (action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED) {
-            // 多行框和「没声明动作」的框：换行是唯一合理语义。
-            // 单行框没有动作声明时也别硬塞 \n（会被清洗成空格），改为不做事——
-            // 那种宿主本来就没定义回车该干什么。
-            if (isMultiline) {
-                commitText("\n")
-            }
-            return
-        }
-        // 有明确动作：交给宿主。`performEditorAction` 不会自己上屏，
-        // 调用方必须已经 commit 完手上的组合串（见 ENTER 分支）。
-        ic?.performEditorAction(action)
     }
 
     private fun commitPending() {
