@@ -68,7 +68,49 @@ class EnterSpecTest {
     }
 
     @Test
-    fun `没有输入 + 飞书微信的 DONE —— 什么都不发，绝不能收键盘`() {
+    fun `飞书微信是多行框 + DONE —— 必须发换行`() {
+        // 飞书/微信聊天框实测 imeOptions=0x10000003：
+        // 低字节 DONE(3)，高位 0x100000 是 TYPE_TEXT_FLAG_MULTI_LINE。
+        // 用户要的是**换行**（别的输入法都能换行），不是被吞掉。
+        assertEquals(
+            EnterSpec.Decision.Newline,
+            EnterSpec.decide(
+                chinese = true,
+                pendingNotEmpty = false,
+                imeAction = android.view.inputmethod.EditorInfo.IME_ACTION_DONE,
+                multiline = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `多行框 + DONE 英文态也发换行`() {
+        assertEquals(
+            EnterSpec.Decision.Newline,
+            EnterSpec.decide(
+                chinese = false,
+                pendingNotEmpty = false,
+                imeAction = android.view.inputmethod.EditorInfo.IME_ACTION_DONE,
+                multiline = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `多行框 + SEND 也发换行`() {
+        assertEquals(
+            EnterSpec.Decision.Newline,
+            EnterSpec.decide(
+                chinese = true,
+                pendingNotEmpty = false,
+                imeAction = android.view.inputmethod.EditorInfo.IME_ACTION_SEND,
+                multiline = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `没有输入 + 单行框的 DONE —— 什么都不发，绝不能收键盘`() {
         // 飞书/微信聊天框实测 imeOptions=0x10000003，action=IME_ACTION_DONE(3)。
         // 曾经把 DONE 交给宿主 → 触发"完成并收键盘"，用户按一下回车键盘就没了，
         // 得手动点回来。这是明确不可接受的行为。

@@ -285,6 +285,14 @@ class FeiheIme : InputMethodService() {
     /** 当前键盘页。字母 / 数字 / 符号——布尔值装不下三态，别再退回布尔。 */
     private var page: Page = Page.LETTERS
 
+    /**
+     * [segmentState] 是在哪一串按键码上建立的。
+     *
+     * 用来区分「同一串码重绘」和「码真的变了」——前者必须保住已选的字，
+     * 后者才该丢弃。见 [refreshSegmentMode]。
+     */
+    private var segmentStateCode: String = ""
+
     /** 当前输入框的 inputType / hint。判断「像不像验证码框」用，见 [OtpCode]。 */
     private var fieldType = 0
     private var fieldHint: CharSequence? = null
@@ -691,10 +699,6 @@ class FeiheIme : InputMethodService() {
             fieldType = info.inputType
             fieldHint = info.hintText
             fieldAction = info.imeOptions and EditorInfo.IME_MASK_ACTION
-            // 临时：核实宿主到底报什么 action（验完删）
-            android.util.Log.i("FeiheEnter", "inputType=0x" + Integer.toHexString(info.inputType) +
-                " imeOptions=0x" + Integer.toHexString(info.imeOptions) +
-                " action=" + fieldAction + " -> " + EnterSpec.decide(chinese, false, fieldAction))
         }
         // 窗口重新弹出 = 一次新的输入会话，界面状态必须回到初始。
         //
@@ -1514,6 +1518,7 @@ class FeiheIme : InputMethodService() {
                     // 下一轮 `backspaceIntoSegments()` 会因为「已在分段态」直接返回 false。
                     if (segmentState != null) {
                         segmentState = null
+                        segmentStateCode = ""
                         pending.setLength(pending.length - 1)
                         pushComposing()
                     } else if (!backspaceIntoSegments()) {
@@ -1603,7 +1608,12 @@ class FeiheIme : InputMethodService() {
                 // 回车规格全在 EnterSpec 里（纯函数，EnterSpecTest 逐条钉住）。
                 // 这里只负责按判定执行，**不要再自己写 if 判断**——
                 // 这段逻辑改坏过三次，每次都是某个默认分支选反。
-                when (val dec = EnterSpec.decide(chinese, pending.isNotEmpty(), fieldAction)) {
+                when (val dec = EnterSpec.decide(
+                    chinese = chinese,
+                    pendingNotEmpty = pending.isNotEmpty(),
+                    imeAction = fieldAction,
+                    multiline = isMultilineField(),
+                )) {
                     EnterSpec.Decision.CommitOnly -> {
                         // 手上有输入：原样上屏就结束，不换行、不发 action。
                         //   中文态 → 那串字母直接 commitText
@@ -1655,6 +1665,7 @@ class FeiheIme : InputMethodService() {
                 candidates = emptyList()
                 pendingSegments = emptyList()
                 segmentState = null
+                segmentStateCode = ""
                 englishWords = emptyList()
                 englishSuggest?.query("")
                 // 组合区也要撤掉：宿主里那串带下划线的拼音必须消失，
@@ -1995,6 +2006,7 @@ class FeiheIme : InputMethodService() {
             candidates = emptyList()
             pendingSegments = emptyList()
             segmentState = null
+            segmentStateCode = ""
             // 只打了 `/` 时 key 是空串，引擎返回全部命令的当前值——正好当预览。
             quickWords = NativeEngine.quickCandidates(
                 pending.toString().removePrefix(NativeEngine.quickPrefix()),
@@ -2041,6 +2053,8 @@ class FeiheIme : InputMethodService() {
      */
     private fun afterSegmentChosen(next: com.feihe.ime.segment.SegmentState) {
         segmentState = next
+        // 记下这串码：后续重绘（展开/收起、窗口变化）靠它判断「码没变，别丢分段态」
+        segmentStateCode = pending.toString()
         // 换段清形码：留着会把下一段的候选筛空
         assistKeys.setLength(0)
         if (next.focus < 0) assistActive = false
@@ -2093,7 +2107,27 @@ class FeiheIme : InputMethodService() {
     private fun refreshSegmentMode() {
         // 候选变了就把旧的分段态收掉：留着会指向上一串码的段，选出来的字对不上。
         // 退格触发的新分段态由 backspaceIntoSegments() 自己设，不走这里。
-        if (segmentState != null) segmentState = null
+        //
+        // **但"候选变了"必须以「那串码真的变了」为准，不能靠"调了 refresh"来判断。**
+        //
+        // 这里原来是无条件 `if (segmentState != null) segmentState = null`，
+        // 造成一个很隐蔽的 bug（用户报：组词时选最后一个字，点展开候选，
+        // 前面选的全没了、直接上屏字母串）：
+        //
+        //   展开候选 → applyExpandedChrome(true) 把键盘设成 GONE
+        //            → 宿主重新布局，重入 onStartInputView()
+        //            → 它调 refreshCandidates() → 这里清掉 segmentState
+        //            → 已选的字全丢，候选条退回普通模式的字母串
+        //
+        // 换句话说：**同一个 pending 重新渲染一次就自毁**。展开/收起、
+        // 窗口尺寸变化、宿主重发 onStartInputView 都会踩到。
+        //
+        // 正确判据：分段态记录它是在哪串码上建立的（segmentStateCode）。
+        // 码没变 → 这是重绘，分段态必须原样保留；码变了 → 才该丢弃。
+        if (segmentState != null && segmentStateCode != pending.toString()) {
+            segmentState = null
+            segmentStateCode = ""
+        }
     }
 
     /**
@@ -2131,28 +2165,14 @@ class FeiheIme : InputMethodService() {
     private fun rememberPhrase(sentence: String, state: SegmentState) {
         val code = state.sentenceCode()
         val full = if (code.isEmpty()) "" else NativeEngine.decodePinyin(code)
-        android.util.Log.i(
-            "FeihePhrase",
-            "rememberPhrase sentence=[$sentence] len=${sentence.length} " +
-                "code=[$code] full=[$full] segs=${state.segments.size} codes=${state.codes}",
-        )
-        if (sentence.length < 2) {
-            android.util.Log.i("FeihePhrase", "  → 放弃：整句不足两字")
-            return
-        }
+        // 单字不记成词：一个人名/术语至少要两个字才有"一次输入上屏"的价值
+        if (sentence.length < 2) return
         // 码数必须和段数一致，否则解出来的全拼和词不对应
-        if (code.isEmpty()) {
-            android.util.Log.i("FeihePhrase", "  → 放弃：sentenceCode 为空")
-            return
-        }
+        if (code.isEmpty()) return
         // 解不出来（畸形码）就放弃：宁可这次不学，也别往 phrases.txt 写一条
         // 谁也查不出来的死数据。
-        if (full.isEmpty()) {
-            android.util.Log.i("FeihePhrase", "  → 放弃：decodePinyin 解不出全拼")
-            return
-        }
+        if (full.isEmpty()) return
         NativeEngine.learnPhrase(sentence, full)
-        android.util.Log.i("FeihePhrase", "  → 已调用 learnPhrase")
     }
 
     private fun renderCandidates() {
@@ -3181,6 +3201,7 @@ class FeiheIme : InputMethodService() {
         // **退格进来的第一段直接展开**：用户的意图就是「换个字」，还要他再点一下
         // chip 才能看候选是白折腾。这一条是他明确要求的「退格进入选字模式」。
         segmentState = next.open(0)
+        segmentStateCode = pending.toString()
         renderCandidates()
         return true
     }
@@ -3261,6 +3282,7 @@ class FeiheIme : InputMethodService() {
         pendingSegments = emptyList()
         // 整句上屏后组合结束，分段态必须一起收掉，否则候选条会留着一排旧 chip
         segmentState = null
+        segmentStateCode = ""
         // 形码跟着这次组合一起结束：留着的话下一个词的候选会被上一词的形码筛空
         resetAssist()
         candPage = 0
@@ -3305,6 +3327,7 @@ class FeiheIme : InputMethodService() {
         candidates = emptyList()
         pendingSegments = emptyList()
         segmentState = null
+        segmentStateCode = ""
         resetAssist()
         suggestions = NativeEngine.suggest(word, SUGGEST_LIMIT)
         renderCandidates()
@@ -3329,11 +3352,33 @@ class FeiheIme : InputMethodService() {
         candidates = emptyList()
         pendingSegments = emptyList()
         segmentState = null
+        segmentStateCode = ""
         suggestions = emptyList()
         // 上屏的是一串数字/符号，不能拿它当联想上下文
         prevWord = ""
         renderCandidates()
         refreshStatus()
+    }
+
+    /**
+     * 当前输入框是不是**多行**文本框。
+     *
+     * 判据只用 `inputType` 的位标志，不看 hint / 包名——那些都是猜。
+     *
+     * 这个值决定回车行为的关键分支（见 [EnterSpec.decide]）：
+     * 飞书/微信聊天框是「多行 + DONE」，要发换行；Settings 搜索是「单行 + DONE」，
+     * 要什么都不发。两者的 action 完全相同，**只能靠这个标志区分**。
+     *
+     * 注意 Termux 的终端视图是 `TYPE_NULL`，这里返回 false——它走的是
+     * 「没有 action → 发换行」那条独立分支，不依赖这个值。
+     */
+    private fun isMultilineField(): Boolean {
+        if ((fieldType and android.text.InputType.TYPE_MASK_CLASS) !=
+            android.text.InputType.TYPE_CLASS_TEXT
+        ) {
+            return false
+        }
+        return (fieldType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0
     }
 
     private fun commitPending() {
@@ -3356,6 +3401,7 @@ class FeiheIme : InputMethodService() {
         pendingSegments = emptyList()
         suggestions = emptyList()
         segmentState = null
+        segmentStateCode = ""
         renderCandidates()
         refreshStatus()
     }

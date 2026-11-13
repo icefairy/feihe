@@ -59,39 +59,52 @@ object EnterSpec {
      * @param chinese 当前是否中文模式（英文态字母已经逐字上屏，pending 只是账本）
      * @param pendingNotEmpty 手上是否还有没处理完的输入（中文的字母串 / 英文账本）
      * @param imeAction `EditorInfo.imeOptions and EditorInfo.IME_MASK_ACTION`
+     * @param multiline 输入框是否声明了 `TYPE_TEXT_FLAG_MULTI_LINE`
      */
-    fun decide(chinese: Boolean, pendingNotEmpty: Boolean, imeAction: Int): Decision {
+    fun decide(
+        chinese: Boolean,
+        pendingNotEmpty: Boolean,
+        imeAction: Int,
+        multiline: Boolean = false,
+    ): Decision {
         // 第一层：有输入就只上屏。中英两态同一条规格，与宿主是什么框无关。
         if (pendingNotEmpty) return Decision.CommitOnly
 
         // 第二层：没输入，把这下回车交给宿主。
         //
-        // **白名单：只有 GO / SEARCH 交出去，DONE/SEND 类什么都不发，其余换行。**
+        // **四层判断，顺序不能换：**
+        //   1. 有输入                    → 只上屏（已在上面返回）
+        //   2. GO / SEARCH               → 交给宿主（跳转/搜索，都不收键盘）
+        //   3. 多行框 + DONE/SEND        → 发换行（飞书/微信聊天，用户要的就是换行）
+        //   4. 单行框 + DONE/SEND        → 什么都不发（宿主会"完成并收键盘"）
+        //   5. 无 action（Termux 终端）  → 发换行
         //
-        // 为什么不能"任何非 NONE 的 action 都交给宿主"：飞书/微信的聊天输入框
-        // 声明的是 IME_ACTION_DONE(3)（实测 imeOptions=0x10000003）。
-        // 把 DONE 交出去 = 触发宿主"完成并收起键盘"，用户看到的就是
-        // **按一下回车键盘自己消失了，还得手动点回来**。
+        // ## 第 3、4 条为什么必须分开
         //
-        // 只有 GO / SEARCH 这种"提交后还要继续用键盘"的动作才值得交出去：
-        // 地址栏 GO 跳转、搜索框 SEARCH 搜索，两者都不收键盘。
-        // SEND / DONE / NEXT / PREVIOUS 是"完成类"动作，宿主处理它们时会收键盘
-        // 或挪焦点，都会打断连续输入，所以什么都不发。
+        // 飞书/微信聊天框的 imeOptions 实测是 `0x10000003`：
+        // 低字节 DONE(3)，高位 `0x100000` 是 `TYPE_TEXT_FLAG_MULTI_LINE`——**多行框**。
+        //
+        // 曾经第 3 条也被并进"什么都不发"（为了修"回车收键盘"），
+        // 结果飞书里**完全打不出换行**——用一个更常用功能的缺失换了小问题。
+        //
+        // 区别在发什么：我们发的是**换行字符**，不是 `performEditorAction(DONE)`。
+        // 多行框收到换行字符只会插入换行，不会走宿主的"完成"分支，所以不收键盘。
+        // 单行框才是任何字符都会触发清洗/提交，那种框里才该什么都不发。
+        if (multiline &&
+            imeAction != EditorInfo.IME_ACTION_GO &&
+            imeAction != EditorInfo.IME_ACTION_SEARCH
+        ) {
+            return Decision.Newline
+        }
+
         return when (imeAction) {
             // 跳转/搜索：交出去，这两个动作不会收键盘
             EditorInfo.IME_ACTION_GO,
             EditorInfo.IME_ACTION_SEARCH -> Decision.PerformEditorAction(imeAction)
 
-            // **DONE / SEND 等"完成类"动作：什么都不发。**
-            //
-            // 这类框（飞书/微信聊天、Settings 搜索）声明 DONE 的意思是
-            // 「回车 = 完成这一轮输入」。宿主对它的处理**包括收起键盘**。
-            // 实测飞书/微信的 imeOptions=0x10000003（action=DONE），
-            // 只要往这种框里发换行符或 performEditorAction(DONE)，键盘立刻消失，
-            // 用户得手动点回来——这就是「回车后键盘自己收起」的根因。
-            //
-            // 用户要的只是"把手上那串字母上屏"，上屏已经在上一层做完了；
-            // 这一层没有输入可上，就不该再触发宿主的完成逻辑。
+            // 单行框声明 DONE / SEND → 什么都不发。
+            // 单行框的 DONE 语义就是"提交并收工"，任何字符都会让它收起键盘。
+            // 多行框已在上面走 Newline，不会到这儿。
             EditorInfo.IME_ACTION_DONE,
             EditorInfo.IME_ACTION_SEND,
             EditorInfo.IME_ACTION_NEXT,
