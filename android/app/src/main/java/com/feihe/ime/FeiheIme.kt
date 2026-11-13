@@ -2327,14 +2327,33 @@ class FeiheIme : InputMethodService() {
         // 条件不成立，函数直接走到收起分支，界面毫无变化。用户看到的就是
         // 「展开没有多行」。展开是用户明确点的动作，优先级高于任何自动态。
         if (candidateExpanded) {
-            val exp = expandedColumn ?: return
-            candidateScroll?.visibility = View.GONE
-            // 可见性改在 ScrollView 上：expandedColumn 是它的内容，
-            // 让内容可见而容器 GONE 等于什么都不显示。
-            expandedScroll?.visibility = View.VISIBLE
-            renderExpandedRows(exp, window)
-            updateTopSlot()
-            return
+            // **兜底：手上没有任何可画的东西时，展开态没有存在意义。**
+            //
+            // 展开态是把键盘整块藏掉、借它的高度来铺候选。一旦候选和分段态都被
+            // 清空（上屏、删光字母、形码筛空），继续撑着就是一块空白面板 +
+            // 一根没人点的「收起」条——用户还得手动点一次才能拿回键盘。
+            //
+            // 正常路径上 commitWord / commitQuick 已经主动收了展开态（根因修在
+            // 那里）。这层兜底是防**将来新增的上屏/清空路径**再次漏掉：
+            // 收起态最坏只是候选条变窄，留着展开态却是键盘消失 + 空白面板。
+            val segNow = segmentState
+            val keep = com.feihe.ime.keyboard.ExpandedGate.keepsExpanded(
+                windowSize = window.size,
+                segmentFocus = segNow?.focus ?: -1,
+                segmentCount = segNow?.segments?.size ?: 0,
+            )
+            if (!keep) {
+                candidateExpanded = false
+            } else {
+                val exp = expandedColumn ?: return
+                candidateScroll?.visibility = View.GONE
+                // 可见性改在 ScrollView 上：expandedColumn 是它的内容，
+                // 让内容可见而容器 GONE 等于什么都不显示。
+                expandedScroll?.visibility = View.VISIBLE
+                renderExpandedRows(exp, window)
+                updateTopSlot()
+                return
+            }
         }
         // 收起态：把展开容器清空藏起，避免它继续占位或残留上一次的内容
         expandedScroll?.let { sv ->
@@ -3340,6 +3359,24 @@ class FeiheIme : InputMethodService() {
         // 形码跟着这次组合一起结束：留着的话下一个词的候选会被上一词的形码筛空
         resetAssist()
         candPage = 0
+        // **展开态必须一起收掉。**
+        //
+        // 用户报：「展开选字，选完最后一个字，候选区域空了但还留着一个约占一行
+        // 高度的空白面板，底下还有一个『收起』的点击区，还得手动再点一次。」
+        //
+        // 根因：上屏把候选数据清空了（candidates/segmentState 都置空），
+        // 但 `candidateExpanded` 这个**纯呈现标志**没人动。于是 renderCandidates
+        // 仍然按展开态走：applyExpandedChrome(true) 继续把键盘藏起来、候选区
+        // 按 expandedRows() 撑着高度——可里面已经没有候选可画，只剩操作行
+        // （‹ 返回 / 收起）。用户看到的就是一块空白 + 一根多余的收起条。
+        //
+        // 这不是分段态独有的问题：普通拼音展开候选后点一个词，同样会留下空白面板。
+        // 所以修在 commitWord 这个**所有上屏路径的汇合点**，而不是在
+        // afterSegmentChosen 里单独补一句。
+        //
+        // 判据：上屏之后手上没有可显示的东西了，就不该继续占着「为了让候选铺开」
+        // 而临时借来的整块键盘高度。
+        candidateExpanded = false
         suggestions = if (thenSuggest && chinese) {
             NativeEngine.suggest(word, SUGGEST_LIMIT)
         } else {
@@ -3408,6 +3445,8 @@ class FeiheIme : InputMethodService() {
         segmentState = null
         segmentStateCode = ""
         suggestions = emptyList()
+        // 展开态一起收（同上：上屏后没有候选可铺，不该继续占着借来的键盘高度）
+        candidateExpanded = false
         // 上屏的是一串数字/符号，不能拿它当联想上下文
         prevWord = ""
         renderCandidates()
