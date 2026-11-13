@@ -241,8 +241,16 @@ class FeiheIme : InputMethodService() {
     /** 顶部那一行（状态栏 / 候选条共用），固定高度见 [TOP_SLOT_DP]。 */
     private var topSlot: FrameLayout? = null
 
-    /** 展开态翻到第几页（0 起）。收起态不分页（一次给全部），见 [visibleCandidates]。 */
+    /** 展开态翻到第几页（0 起）。收起态按屏宽分页，见 [visibleCandidates]。 */
     private var candPage = 0
+
+    /**
+     * 展开态已经渲染了多少个候选（懒加载的游标）。
+     *
+     * 展开时先给 [CandidateGrid.EXPAND_BATCH] 个，滑到底再追加一批。
+     * 候选变化（新的一次查询）时必须归零，否则新候选会沿用旧的高度。
+     */
+    private var expandedLoaded = 0
 
     /**
      * 数字选词行的容器。**和键盘分开**：它是候选条下方一个可以 `GONE` 的独立容器，
@@ -1004,6 +1012,31 @@ class FeiheIme : InputMethodService() {
             // 滚到边界时不要多出蓝色光晕，输入法窗口里那个效果很跳
             overScrollMode = View.OVER_SCROLL_NEVER
             visibility = View.GONE
+            // **滚到底部自动追加下一批。**
+            //
+            // 展开态是懒加载：先渲染 60 个（约 18ms，一帧内），用户滑到底时
+            // 再追加 60 个。不这么做就只有两种选择——一次渲染 565 个（卡 170ms），
+            // 或者分 14 页让用户翻（比滚动累得多）。
+            //
+            // 判据用「还剩不到两行就追加」而不是「精确到底」：精确到底时用户
+            // 已经看到空白了，追加完再跳一下，观感是「卡了一下」。提前一个
+            // 生产批次，滚动是连续的。
+            setOnScrollChangeListener { _, _, scrollY, _, _ ->
+                val col = expandedColumn ?: return@setOnScrollChangeListener
+                val contentBottom = col.height
+                val viewBottom = scrollY + height
+                val nearBottom = contentBottom - viewBottom < dp(CANDIDATE_ROW_DP) * 2
+                if (nearBottom && expandedLoaded < candidates.size) {
+                    expandedLoaded = (expandedLoaded + CandidateGrid.EXPAND_BATCH)
+                        .coerceAtMost(candidates.size)
+                    // 追加批次时**不能**把滚动位置归零，否则用户滑到底就被打回顶部，
+                    // 永远看不完后面的候选。这里直接重渲染展开区（不走 renderCandidates，
+                    // 免得把展开的 chrome/键盘状态又重算一遍）。
+                    expandedColumn?.let { c ->
+                        renderExpandedRows(c, visibleCandidates(), resetScrollHere = false)
+                    }
+                }
+            }
             addView(
                 expandedColumn,
                 // FrameLayout.LayoutParams：ScrollView 是 FrameLayout 的子类，
@@ -2012,8 +2045,9 @@ class FeiheIme : InputMethodService() {
             pinyinMode,
             assistKeys.toString(),
         )
-        // 形码一变，候选整批换掉：回到第一页
+        // 形码一变，候选整批换掉：回到第一页，展开态的懒加载也要从头来
         candPage = 0
+        expandedLoaded = 0
         renderCandidates()
     }
 
@@ -2065,8 +2099,14 @@ class FeiheIme : InputMethodService() {
             code = lookup.code
             candidates = lookup.words
             pendingSegments = lookup.segments
-            // 新的一次查询 = 从第一页开始看
+            // 新的一次查询 = 从第一页开始看，展开态懒加载从头加载
+            //
+            // **expandedLoaded 必须归零**：它是「已渲染多少个」的游标。不归零的话，
+            // 用户先在 l（565 个）滑到底加载了 300 个，再按退格变成 li（281 个），
+            // 游标还停在 300 —— subList(0, 281) 会越界，或者新候选一展开就是
+            // 一大片，把懒加载的意义完全抵消。
             candPage = 0
+            expandedLoaded = 0
             // **横向滚动位置也要归零。**
             //
             // 单行候选条是 HorizontalScrollView，用户滑到右边挑完一个字之后，
@@ -2632,7 +2672,7 @@ class FeiheIme : InputMethodService() {
     }
 
 
-    private fun renderExpandedRows(col: LinearLayout, window: List<String>) {
+    private fun renderExpandedRows(col: LinearLayout, window: List<String>, resetScrollHere: Boolean = true) {
         // **内容容器自己必须是 VISIBLE。**
         //
         // expandedColumn 在 onCreateInputView 里初始化为 GONE（那时还没展开），
@@ -2640,7 +2680,17 @@ class FeiheIme : InputMethodService() {
         // ScrollView 可见、高度 550、里面 5 行也建好了，但内容容器是 GONE，
         // 用户看到的就是一片空白。日志特征：svH=550 而 colH=0 row0H=0。
         col.visibility = View.VISIBLE
-        val rows = CandidateGrid.rows(window.size, expandedRows())
+        // **行数按实际要渲染的候选算，不做「最多几屏」截断。**
+        //
+        // 以前用 CandidateGrid.rows(window.size, expandedRows())，而它内部是
+        // expandedCount() —— 会把数量截到 maxRows × PER_ROW（一屏的量）。
+        // 展开态改成懒加载后 window 有 60 个，截成 8 行 × 5 列 = 40 格，
+        // 第 41 个候选就找不到行容器 → getChildAt 返回 null → 强转 NPE 崩掉。
+        // （线上表现：点展开直接闪退。）
+        //
+        // 现在按 window.size 算真实行数，配合外面那层 ScrollView 滚动查看，
+        // 不再受屏幕高度限制。
+        val rows = if (window.isEmpty()) 0 else (window.size + CandidateGrid.PER_ROW - 1) / CandidateGrid.PER_ROW
         // 行数变了就补/删行容器。每行固定高度，容器高度 = 行数 × 行高。
         while (col.childCount > rows) col.removeViewAt(col.childCount - 1)
         while (col.childCount < rows) {
@@ -2708,7 +2758,12 @@ class FeiheIme : InputMethodService() {
             }
             // 高度改完必须重排，否则本帧读到的还是旧值（=0）
             sv.requestLayout()
-            sv.scrollTo(0, 0)
+            // **只在首次展开时归零滚动位置，追加批次时保持不动。**
+            //
+            // 懒加载滚动到底部会追加下一批（expandedLoaded 变大后重新渲染）。
+            // 如果每次都 scrollTo(0,0)，用户滑到底 → 追加 → 被打回顶部 →
+            // 再滑到底 → 又被打回顶部，永远看不完后面的候选。
+            if (resetScrollHere) sv.scrollTo(0, 0)
         }
         window.forEachIndexed { idx, word ->
             val row = col.getChildAt(idx / CandidateGrid.PER_ROW) as LinearLayout
@@ -2817,8 +2872,21 @@ class FeiheIme : InputMethodService() {
     /** 展开 / 收起按钮。图标用 ▾ / ▴，点一下切换。 */
     private fun bindExpandToggle(v: TextView) {
         v.background = null
-        v.text = if (candidateExpanded) "▴" else "▾"
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        // **文案要能表达「还有更多」。**
+        //
+        // 收起态一屏只放三五个候选（这样渲染才不卡），但一个字可能有几百个候选
+        // （实测 l=565、li=281）。只画一个 ▾ 箭头，用户根本不知道点开有多少东西，
+        // 多半以为候选就这么几个、输入法词库不行。
+        //
+        // 所以有剩余候选时显示「▾ 565」，把总数直接摆出来：既说明还有多少，
+        // 也成了「想看全量就往这儿点」的入口。
+        val total = candidates.size
+        v.text = when {
+            candidateExpanded -> "▴"
+            total > 0 -> "▾ $total"
+            else -> "▾"
+        }
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (candidateExpanded) 16f else 13f)
         // **点击区要够大**：14sp 的字加 8dp padding 只有约 30dp 宽，
         // 手指点上去经常落到相邻的候选词上（表现为「点展开没反应」）。
         // 横向撑到 44dp，是安卓无障碍建议的最小可点尺寸。
@@ -2826,7 +2894,8 @@ class FeiheIme : InputMethodService() {
         v.gravity = Gravity.CENTER
         v.setPadding(dp(6f), 0, dp(6f), 0)
         v.setTextColor(Palette.of(this).sub)
-        v.contentDescription = if (candidateExpanded) "收起候选" else "展开候选，显示更多"
+        v.contentDescription =
+            if (candidateExpanded) "收起候选" else "展开候选，共 $total 个"
         v.setOnClickListener {
             candidateExpanded = !candidateExpanded
             renderCandidates()
@@ -2901,38 +2970,62 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
+     * 收起态一页几个候选。
+     *
+     * **这是「打字卡顿」的修复点。** 原先传 `Int.MAX_VALUE`，等于告诉分页逻辑
+     * 「一页装得下全部候选」，于是 `window()` 返回 281 个，`renderCandidates`
+     * 为每一个建 TextView —— 实测单键 170ms，其中 168ms 在渲染。
+     *
+     * 现在按屏宽算出一屏实际放得下的个数（3~7，见 [CandidateGrid.collapseSlotCount]），
+     * 候选总数仍然不设上限：全部候选都在 `candidates` 里，靠 ‹ › 翻页逐个拿到。
+     * 用户要的「无限候选」和「不卡」在这里并不冲突——卡的是渲染，不是候选数量。
+     */
+    private fun collapsePageSize(): Int {
+        val dm = resources.displayMetrics
+        val widthDp = (dm.widthPixels / dm.density).toInt()
+        val fontScale = if (dm.density > 0f) dm.scaledDensity / dm.density else 1f
+        return CandidateGrid.collapseSlotCount(
+            screenWidthDp = widthDp,
+            textSizeDp = 20f * fontScale,
+        )
+    }
+
+    /**
      * 一页几个候选。收起态单行 + 展开态多行，两种模式的页窗口计算。
      *
-     * **候选不再有数量上限**：`collapseSize` 传 `Int.MAX_VALUE` 时，
-     * 收起态直接给出全部候选（靠横滑看），不再按 5/7/9 分页。
      * 展开态本来就是一屏铺满（行 × 列），继续按实际能放的行数算。
-     *
-     * 以前这里是「一页 = 设置里的候选个数」，用户一屏只能看到 9 个，
-     * 第 10 个起要按 › 翻页。翻页箭头和候选挤在同一行，找起来费劲，
-     * 而且「有多少候选」本来就该由横滑/滚动表达，不需要人来设一个数字。
      */
     private fun pageSize(): Int =
         CandidateGrid.pageSize(
             candidates.size,
             candidateExpanded,
-            if (candidateExpanded) 1 else Int.MAX_VALUE,
+            collapsePageSize(),
             expandedRows(),
         )
 
     /**
-     * 当前页的候选。
+     * 当前要渲染的候选。
      *
-     * 收起态返回**全部**（横滑看），展开态返回一屏能放下的那些。
+     * - **收起态**：按屏宽分页，一次只给一屏（3~5 个）。这是不卡的关键——
+     *   原先给全部，一个字 565 个候选就要建 565 个 View，卡 170ms。
+     * - **展开态**：从第一个开始给「已加载」那么多（懒加载，初始 60 个），
+     *   整片放进 ScrollView 连续滚，滑到底再追加。展开的语义是「摊开看全部」，
+     *   所以不分页——565 个分 14 页翻比滚动更累。
      */
-    private fun visibleCandidates(): List<String> =
-        CandidateGrid.window(
+    private fun visibleCandidates(): List<String> {
+        if (candidateExpanded) {
+            val n = CandidateGrid.expandedLoaded(candidates.size, expandedLoaded)
+            return if (n <= 0) emptyList() else candidates.subList(0, n)
+        }
+        return CandidateGrid.window(
             candidates,
             candPage,
             candidates.size,
-            candidateExpanded,
-            if (candidateExpanded) 1 else Int.MAX_VALUE,
-            expandedRows(),
+            expanded = false,
+            collapseSize = collapsePageSize(),
+            maxRows = expandedRows(),
         )
+    }
 
     /** 翻页箭头。`delta` = -1 上一页 / +1 下一页。 */
     private fun bindPageView(v: TextView, label: String, delta: Int) {

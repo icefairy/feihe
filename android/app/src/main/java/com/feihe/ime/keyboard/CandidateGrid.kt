@@ -216,6 +216,77 @@ object CandidateGrid {
     }
 
     /**
+     * 收起态（单行横滑）一屏实际能放几个候选。
+     *
+     * ## 为什么收起态也要分页——这曾经是「打字卡顿」的根因
+     *
+     * 收起态原先传 `collapseSize = Int.MAX_VALUE`，意思是「全部候选都交给横滑」。
+     * 但横滑并不会省掉渲染：`window()` 返回全部候选，`renderCandidates` 就为
+     * 每一个建一个 TextView 并 bind。实测按一下 `l`（281 个候选）要 170ms，
+     * 其中 168ms 全在建 View —— 按键肉眼可见地卡。
+     *
+     * 正确的做法是**渲染只处理一屏的量**，候选总数依然不设上限（还是全在
+     * `candidates` 里，翻页/滑动都能拿到）。所以这里算出「一屏能放几个」，
+     * 让分页真正生效。
+     *
+     * ## 一屏几个怎么算
+     *
+     * 收起态是横向滚动，屏宽能并排几个「两字词宽度的格子」就放几个，再多留
+     * 一个作为「还有更多」的视觉提示（用户看到右边缘半截候选才知道能滑/翻页）。
+     *
+     * @param screenWidthDp 屏幕可用宽度
+     * @param textSizeDp 候选字号
+     * @param cellPaddingDp 单格左右 padding 之和
+     * @param minSlots 最少给几个（极窄屏也不能只显示 1 个）
+     * @param maxSlots 最多给几个：一屏放太多会挤成一片，翻页反而更清楚
+     */
+    fun collapseSlotCount(
+        screenWidthDp: Int,
+        textSizeDp: Float = 20f,
+        cellPaddingDp: Int = CELL_PADDING_DP,
+        minSlots: Int = 3,
+        maxSlots: Int = 5,
+    ): Int {
+        if (screenWidthDp <= 0) return minSlots
+        // 收起态一格按「两字词」算宽度：两字最常见，也保证单字不会被浪费太多空间
+        val cellDp = textSizeDp * 2 + cellPaddingDp
+        if (cellDp <= 0f) return minSlots
+        val fit = (screenWidthDp / cellDp).toInt()
+        // **故意留出余量**：候选条右边还要放「展开」箭头和「›」翻页键，
+        // 它们也占格子。按屏宽算满会让候选把箭头挤出可视区，用户根本点不到。
+        // 所以按算出来的个数再减 1~2 个，把位置让给操作键。
+        val forCandidates = fit - 2
+        return forCandidates.coerceIn(minSlots, maxSlots)
+    }
+
+    /** 展开态每屏至少渲染这么多，滚动到底再追加一批（懒加载的批大小）。 */
+    const val EXPAND_BATCH = 60
+
+    /**
+     * 展开态一次渲染多少个候选。**不是分页，是懒加载的批大小。**
+     *
+     * ## 为什么要分批而不是一次全渲染
+     *
+     * 一个字最多 565 个候选（实测 l=565）。一次性建 565 个 View 会卡 170ms
+     * 以上——用户点开展开就白屏一下。实测建 View 的成本约 0.3ms/个，所以
+     * 60 个约 18ms（一帧内），滑到底再追加 60 个，体验连续不卡。
+     *
+     * ## 为什么不是分页
+     *
+     * 展开的语义是「我要看到全部候选」。一屏 40 个、565 个要翻 14 页，
+     * 翻页比重度滚动还累。整片放进 ScrollView 连续滚，符合用户对
+     * 「展开＝摊开看」的直觉。
+     *
+     * @param total 候选总数
+     * @param loaded 已经渲染了多少
+     */
+    fun expandedLoaded(total: Int, loaded: Int): Int {
+        if (total <= 0) return 0
+        if (loaded <= 0) return minOf(total, EXPAND_BATCH)
+        return minOf(total, maxOf(loaded, EXPAND_BATCH))
+    }
+
+    /**
      * 收起态候选条里一共有几个格子。
      *
      * 这个数必须和 `FeiheIme.renderCandidates()` 里实际绑定的顺序**逐项对齐**，

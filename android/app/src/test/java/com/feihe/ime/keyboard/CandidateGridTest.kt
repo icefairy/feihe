@@ -285,6 +285,82 @@ class CandidateGridTest {
         )
     }
 
+    // ── 收起态分页：修「打字卡顿」的核心契约 ──────────────────────
+
+    @Test
+    fun `收起态一屏放得下的个数按屏宽算`() {
+        // 392dp：两字词 40dp + padding 12dp = 52dp 一格 → 7 格，
+        // 但要留 2 格给「展开」「›」操作键 → 5 个候选，夹在 3~5 内
+        assertEquals(5, CandidateGrid.collapseSlotCount(screenWidthDp = 392))
+        // 360dp：6 格 − 2 = 4
+        assertEquals(4, CandidateGrid.collapseSlotCount(screenWidthDp = 360))
+        // 320dp：6 格 − 2 = 4
+        assertEquals(4, CandidateGrid.collapseSlotCount(screenWidthDp = 320))
+    }
+
+    @Test
+    fun `收起态格子数有上下限`() {
+        // 极窄屏不能只显示 1 个候选
+        assertEquals(3, CandidateGrid.collapseSlotCount(screenWidthDp = 60))
+        // 宽屏也不铺太多：收起态只是「快速挑一个」，全量交给展开
+        assertEquals(5, CandidateGrid.collapseSlotCount(screenWidthDp = 2000))
+        // 非法输入也要给个能用的值
+        assertEquals(3, CandidateGrid.collapseSlotCount(screenWidthDp = 0))
+    }
+
+    @Test
+    fun `系统字号放大时收起态格子数减少`() {
+        // 字号 1.5 倍：一格 (20*1.5)*2 + 12 = 72dp → 360/72 = 5
+        val big = CandidateGrid.collapseSlotCount(screenWidthDp = 360, textSizeDp = 30f)
+        val normal = CandidateGrid.collapseSlotCount(screenWidthDp = 360, textSizeDp = 20f)
+        assertTrue("字号放大后格子数应变少（$normal → $big）", big < normal)
+    }
+
+    /**
+     * **卡顿修复的核心断言**：281 个候选，收起态一次只能渲染一页的量，
+     * 绝不能因为「候选很多」就把 281 个 View 全建出来。
+     */
+    @Test
+    fun `281 个候选收起态只渲染一页`() {
+        val many = (1..281).map { "候选$it" }
+        val slots = CandidateGrid.collapseSlotCount(screenWidthDp = 392)
+        val w = CandidateGrid.window(many, 0, many.size, expanded = false, collapseSize = slots)
+        assertEquals("一页最多渲染 $slots 个", slots, w.size)
+        assertTrue("绝不能把 281 个全渲染出来（那是 170ms 卡顿的根因）", w.size < 20)
+    }
+
+    /** 候选总数不受影响：还能翻到最后一页的最后一个。 */
+    @Test
+    fun `无限候选靠翻页仍能全部取到`() {
+        val many = (1..281).map { "候选$it" }
+        val slots = CandidateGrid.collapseSlotCount(screenWidthDp = 392)
+        val lastPage = (many.size - 1) / slots
+        val last = CandidateGrid.window(many, lastPage, many.size, expanded = false, collapseSize = slots)
+        assertEquals("最后一页的最后一个必须是第 281 个", "候选281", last.last())
+        assertTrue("281 个候选确实有 $lastPage 页，翻页是必需的", lastPage >= 30)
+    }
+
+    /** 翻页不能漏也不能重：把所有页拼起来必须等于原列表。 */
+    @Test
+    fun `翻页拼接后与原始候选完全一致`() {
+        val many = (1..281).map { "候选$it" }
+        val slots = CandidateGrid.collapseSlotCount(screenWidthDp = 360)
+        val pages = (many.size + slots - 1) / slots
+        val rebuilt = (0 until pages).flatMap { p ->
+            CandidateGrid.window(many, p, many.size, expanded = false, collapseSize = slots)
+        }
+        assertEquals("翻完所有页应还原出全部 281 个，不能漏或重", many, rebuilt)
+    }
+
+    /** hasNext 必须跟着新页大小走，否则「›」会消失或点了没反应。 */
+    @Test
+    fun `收起态 281 个候选有下一页`() {
+        val slots = CandidateGrid.collapseSlotCount(screenWidthDp = 392)
+        assertTrue(CandidateGrid.hasNext(281, 0, expanded = false, collapseSize = slots))
+        val lastPage = (281 - 1) / slots
+        assertFalse("最后一页不该再有下一页", CandidateGrid.hasNext(281, lastPage, expanded = false, collapseSize = slots))
+    }
+
     // ── 列数自适应：换屏 / 系统字号都不能把三字词挤掉 ──────────────
 
     @Test
