@@ -84,20 +84,37 @@
             android:foregroundServiceType="dataSync" />
 
         <!--
-          设置页。三个入口都指向它：键盘状态条上的齿轮、系统设置里的「设置」、桌面图标。
-          桌面图标（MAIN/LAUNCHER）是刻意加的——输入法装完不会自动出现在桌面上，
-          用户想找设置时第一反应是翻应用列表。
+          引导页。**桌面图标的落点**。
+          
+          为什么不是设置页：输入法装完是「不可用」状态，用户第一时间需要的是
+          「怎么才能开始打字」，而不是候选个数、双拼方案这些细节。别的输入法
+          （豆包/搜狗/讯飞）都有一页两步引导，我们以前没有，用户只能靠猜。
+          
+          引导页自己判断状态：两步都完成时只显示「完成」按钮，不会挡住设置入口。
         -->
         <activity
-            android:name=".SettingsActivity"
+            android:name=".SetupActivity"
             android:exported="true"
-            android:label="@string/settings_title"
+            android:label="@string/app_name"
             android:theme="@style/Theme.Feihe">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          设置页。三个入口：键盘状态条上的齿轮、系统设置里的「设置」（走 service 的
+          android:settingsActivity）、以及引导页底部的「进入设置」。
+          
+          **不加 MAIN/LAUNCHER**：桌面图标必须唯一，两个 LAUNCHER Activity 会让
+          应用列表里出现两个「飞鹤输入法」图标，用户点哪个都不对。
+        -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true"
+            android:label="@string/settings_title"
+            android:theme="@style/Theme.Feihe" />
     </application>
 
 </manifest>

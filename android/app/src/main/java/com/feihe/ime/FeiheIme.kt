@@ -1057,6 +1057,7 @@ class FeiheIme : InputMethodService() {
         // 它必须在键盘**前面**（更靠上）——键盘会被 GONE 掉，这条是唯一退路。
         collapseBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            // 内容居中：条本身是整宽（点哪儿都能收），但**胶囊框**跟着文字走。
             gravity = Gravity.CENTER
             visibility = View.GONE
             setPadding(dp(8f), dp(6f), dp(8f), dp(6f))
@@ -1065,11 +1066,36 @@ class FeiheIme : InputMethodService() {
                 renderCandidates()
                 refreshStatus()
             }
-            addView(TextView(this@FeiheIme).apply {
-                text = "▴ 收起候选"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            // **给「收起」一个看得见的外框。**
+            //
+            // 以前它只是一行 13sp 的灰字孤零零浮在空白区顶上，用户反馈「看着很单薄」
+            // ——确实是：没有边界的东西在同一屏里既不像按钮、也不知道点哪里有效。
+            // 展开态下这块区域是整块空白（键盘被藏了），一行没有容器的字就更像
+            // 排版残留而不是可点控件。
+            //
+            // 所以给一个**胶囊描边**：圆角 = 高度的一半（药丸形），细描边 + 透明底，
+            // 不抢候选的视觉重心，但明确圈出「这是能点的东西」。
+            // 描边用 stroke 色而不是强调色：收起是次要动作，红色/蓝色会喧宾夺主。
+            addView(LinearLayout(this@FeiheIme).apply {
+                orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
-                setTextColor(Palette.of(this@FeiheIme).sub)
+                // 内容不接收点击，让事件冒到外层整宽条（点空白也能收）
+                isClickable = false
+                isFocusable = false
+                val pal = Palette.of(this@FeiheIme)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(15f).toFloat()
+                    setColor(android.graphics.Color.TRANSPARENT)
+                    setStroke(dp(1f), pal.stroke)
+                }
+                // 左右留白比上下大：药丸需要横向余量才像按钮
+                setPadding(dp(16f), dp(7f), dp(16f), dp(7f))
+                addView(TextView(this@FeiheIme).apply {
+                    text = "▴ 收起候选"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    gravity = Gravity.CENTER
+                    setTextColor(pal.sub)
+                })
             })
         }
         root.addView(

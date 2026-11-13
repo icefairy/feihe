@@ -186,7 +186,7 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
             val sizeScale = UiPrefs.keyScale(ctx)
             setTextSize(
                 TypedValue.COMPLEX_UNIT_SP,
-                (if (key.kind == KeyKind.CHAR || key.kind == KeyKind.TEXT) 20f else 16f) * sizeScale,
+                keyTextSizeSp(key) * sizeScale,
             )
             // 点亮的 ⇧ 用反色（底色是强调色），其余按「可打的字 / 功能键」分两档
             setTextColor(
@@ -542,4 +542,25 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
 
     private fun dp(ctx: Context, v: Float): Int =
         (v * ctx.resources.displayMetrics.density + 0.5f).toInt()
+}
+
+/**
+ * 键帽文字的字号（sp，未乘缩放）。
+ *
+ * ## 只有回车单独一档
+ *
+ * 以前是两档：字母/文本键 20，其余一律 16。问题是回车键宽 1.8 倍、是底排最宽的键，
+ * 而 `↵` 这个字形本身笔画细、留白多，16sp 摊在那么大一块键帽上**又细又小**，
+ * 用户原话「回车键上的符号也太单薄或者太小」。
+ *
+ * 所以只给回车抬到 22sp，**其余功能键保持 16sp 不动**——用户明确说过
+ * 「其他按键体积不大」，不要顺手把 ⇧ ⌫ 123 中 ⌘ 都放大，那会让底排拥挤。
+ *
+ * 22 而不是更大：回车右侧紧邻键盘边界，`↵` 放太大会贴边；22sp 已经比
+ * 同字号汉字显得实一档（符号笔画比汉字细），视觉上刚好压过键面积差。
+ */
+internal fun keyTextSizeSp(key: Key): Float = when (key.kind) {
+    KeyKind.CHAR, KeyKind.TEXT -> 20f
+    KeyKind.ENTER -> 26f
+    else -> 16f
 }
