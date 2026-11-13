@@ -1561,9 +1561,17 @@ class FeiheIme : InputMethodService() {
                     forgetContext()
                     return
                 }
-                // 分段态：空格 = 整句上屏（chip 视图末尾写了「↵上屏」提示）。
-                // 必须放在最前面，否则会落到「选第一个候选」把整句当成第一条候选。
-                if (commitSegmentIfActive()) return
+                // 分段态：空格 = **确认当前段，前进到下一段**（等价于点当前候选）。
+                //
+                // ## 为什么要这么改（用户原话）
+                // 「长任务这三个字，我想用空格确认第一个字，实际直接三个字都用第一个
+                //   候选上屏了。」——以前这里是 `commitSegmentIfActive()`，一下把整句
+                // 拼好上屏，用户在逐字挑选时按空格等于放弃了后面所有选择机会。
+                //
+                // 点候选是逐段确认的，空格应该给同一个语义：这是所有输入法的肌肉记忆
+                // （打一个字 → 空格确认 → 接着打下一个）。只有在**最后一段**选完，
+                // 空格才承担「整句上屏」——那时确实没有下一段可去了。
+                if (commitSegmentStepOrFinish()) return
                 if (pending.isEmpty()) {
                     commitText(" ")
                     // 空格断开上下文：下一个词和上一个词之间没有直接关系
@@ -2137,6 +2145,33 @@ class FeiheIme : InputMethodService() {
      * 选「和」），而它全程不经过 [commitWord]，所以以前这条路一个字都没记住。
      * 用户体感就是「自组词功能依然不生效」。
      */
+    /**
+     * 分段态下按空格的语义：**确认当前段 → 前进下一段**；没有下一段时整句上屏。
+     *
+     * 等价于「点一下当前高亮的那个候选」，只是不用手指去点。
+     *
+     * @return 是否处理了（false = 当前不在分段态，调用方继续走普通空格逻辑）
+     */
+    private fun commitSegmentStepOrFinish(): Boolean {
+        val state = segmentState ?: return false
+        // chip 视图（focus = -1）：没有"当前段"可确认，空格就是整句上屏
+        if (state.focus !in state.segments.indices) {
+            return commitSegmentIfActive()
+        }
+        // 形码筛过时界面显示的是子集，必须按**词**选，不能用下标
+        // （下标是子集里的位置，和 segments[focus] 对不上）
+        val next = if (assistActive) {
+            val word = state.wordAt(state.focus)
+            if (word.isEmpty()) return commitSegmentIfActive()
+            state.chooseWord(word, keepOpen = true)
+        } else {
+            // 未筛选：直接确认当前选中的那一个（不动下标，只推进 focus）
+            state.choose(state.selected[state.focus])
+        }
+        afterSegmentChosen(next)
+        return true
+    }
+
     private fun commitSegmentIfActive(): Boolean {
         val state = segmentState ?: return false
         val sentence = state.sentence()

@@ -7,7 +7,7 @@ name = "feihe-android"
 # 所以版本只能手抄，而手抄就会漂——曾经停在 0.3.21 好多个版本没动，导致编译日志
 # 里出现 `feihe-android v0.3.21` 而 APK 是 0.3.26，排查时一度以为在跑旧代码。
 # 现在 gradle 的 checkJniVersion 任务会在编译 .so 前校验这一行，漂了就构建失败。
-version = "0.3.78"
+version = "0.3.79"
 edition = "2021"
 publish = false
 
