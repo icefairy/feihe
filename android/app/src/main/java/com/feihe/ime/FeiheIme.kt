@@ -339,6 +339,7 @@ class FeiheIme : InputMethodService() {
     /** 状态条上的「收起键盘」按钮。 */
     private var hideButton: TextView? = null
 
+
     /** 上次读剪贴板的时间（毫秒）。onStartInputView 和 onWindowShown 常常连着来，别读两遍。 */
     private var lastClipReadAt = 0L
 
@@ -873,25 +874,37 @@ class FeiheIme : InputMethodService() {
         // 用户第一次装完根本不知道去哪调方案。
         // Palette 只在这里取一次：apply{} 里的  是 TextView，不是 Context
         val statusPalette = Palette.of(this)
-        val gear = TextView(this).apply {
-            text = "⚙"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            gravity = Gravity.CENTER
-            setTextColor(statusPalette.sub)
-            setPadding(dp(14f), dp(6f), dp(14f), dp(6f))
-            contentDescription = "输入法设置"
+
+        // 状态条上全是图标按钮（齿轮/剪贴板/麦克风/收起）。**必须统一带框**：
+        // 没框的图标和候选文字混在一起时，用户分不清哪个能点。
+        // 这几个原来全是裸 emoji/字符，用户反馈「收起键盘的小按钮也没有边框」——
+        // 其实四个都没有，只是那个最刺眼。统一走这个工厂，别各写一份。
+        fun iconButton(text0: String, desc: String, sizeSp: Float = 18f): TextView =
+            TextView(this).apply {
+                text = text0
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+                gravity = Gravity.CENTER
+                setPadding(0, 0, 0, 0)
+                setTextColor(statusPalette.sub)
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(statusPalette.chipBg)
+                    setStroke(dp(1.5f), statusPalette.chipStroke)
+                    cornerRadius = dp(4f).toFloat()
+                }
+                // 显式尺寸：minWidth 在按内容测量的场景下不可靠（实测过 w=0）。
+                layoutParams = LinearLayout.LayoutParams(dp(44f), dp(30f)).apply {
+                    marginStart = dp(4f)
+                }
+                contentDescription = desc
+            }
+
+        val gear = iconButton("⚙", "输入法设置").apply {
             setOnClickListener { openSettings() }
         }
 
         // 剪贴板历史入口。放在状态条上而不是候选条里：候选条只在有候选项时才有意义，
         // 而剪贴板随时可能要用（复制了链接、地址、验证码之后）。
-        clipButton = TextView(this).apply {
-            text = "📋"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-            gravity = Gravity.CENTER
-            setTextColor(statusPalette.sub)
-            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
-            contentDescription = "剪贴板历史"
+        clipButton = iconButton("📋", "剪贴板历史", 17f).apply {
             setOnClickListener { toggleClipboard() }
         }
 
@@ -900,12 +913,7 @@ class FeiheIme : InputMethodService() {
         // 以前是按住说话（OnTouch DOWN 开录 / UP 停录），但状态条上的按钮离
         // 屏幕底边很近，长按容易滑出去触发 ACTION_CANCEL；而且用户腾不出另一只手
         // 去点「结束」。改成两态开关后，录多久都行，状态条会显示「正在录音」。
-        micButton = TextView(this).apply {
-            text = "🎤"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-            gravity = Gravity.CENTER
-            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
-            contentDescription = "语音输入"
+        micButton = iconButton("🎤", "语音输入", 17f).apply {
             visibility = if (voiceEnabled) View.VISIBLE else View.GONE
             setOnClickListener { toggleVoice() }
             // 长按 = 撤销上一次语音纠错。
@@ -929,13 +937,7 @@ class FeiheIme : InputMethodService() {
         // 系统键盘底部有自己的收起按钮，但它是**系统手势条**上的小箭头，
         // 各家 ROM 位置和样式不一致，有的还藏起来。自带一个更可靠：
         // 尤其在候选条展开、键盘被 GONE 掉的时候，这是唯一的退路。
-        hideButton = TextView(this).apply {
-            text = "⌄"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            gravity = Gravity.CENTER
-            setTextColor(statusPalette.sub)
-            setPadding(dp(12f), dp(6f), dp(14f), dp(6f))
-            contentDescription = "收起键盘"
+        hideButton = iconButton("⌄", "收起键盘").apply {
             setOnClickListener { requestHideSelf(0) }
         }
 
