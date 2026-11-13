@@ -389,18 +389,39 @@ const VALID_SYLLABLES: &[&str] = &[
     "zui", "zun", "zuo",
 ];
 
-/// 双拼码串（如 `fwhe`）→ 全拼串（`fei he`，音节用空格分隔）。
+/// 双拼码串 → 全拼串（`fwhe` → `fei he`，音节用空格分隔）。
 ///
 /// 码长必须是偶数（每个音节两键），任一对解不出来就整体返回 None——
 /// **宁可放弃也不拼一个残缺的全拼**，那会污染 phrases.txt。
+///
+/// **两种输入形态都要收**：
+/// - 连续码 `lqxbrj`（整码查询用的形态）
+/// - **按音节用空格分开的 `lq xb rj`**（`SegmentState.sentenceCode()` 给的就是这个）
+///
+/// 只处理连续码会出事：`"lq xb rj"` 有 8 个字符，是偶数，`len % 2` 这一关能过，
+/// 于是按两字符一组切成 `"lq" " x" " b" " r" "j"` —— 空格混进音节里，
+/// `decode_chars` 全部失败 → 返回 `None` → 调用方（逐字选词落库）判定「解不出全拼」
+/// 而**静默放弃**。用户看到的现象就是「词造过一次，下次打同一个码还是出不来」，
+/// 而且日志里 `sentenceCode` 明明是对的，很难往这里想。
+///
+/// 和 `encode_pinyin` 对齐：那边用 `split_whitespace()`，这边也必须按音节切。
 pub fn decode_pinyin(scheme: Scheme, code: &str) -> Option<String> {
-    let chars: Vec<char> = code.chars().collect();
-    if chars.is_empty() || chars.len() % 2 != 0 {
+    let code = code.trim();
+    if code.is_empty() {
         return None;
     }
-    let mut out: Vec<String> = Vec::with_capacity(chars.len() / 2);
-    for pair in chars.chunks(2) {
-        out.push(decode_chars(scheme, pair[0], pair[1])?);
+    let mut out: Vec<String> = Vec::new();
+    for syl in code.split_whitespace() {
+        let chars: Vec<char> = syl.chars().collect();
+        if chars.is_empty() || chars.len() % 2 != 0 {
+            return None;
+        }
+        for pair in chars.chunks(2) {
+            out.push(decode_chars(scheme, pair[0], pair[1])?);
+        }
+    }
+    if out.is_empty() {
+        return None;
     }
     Some(out.join(" "))
 }
@@ -782,4 +803,32 @@ mod split_tests {
             Some("zhong guo")
         );
     }
+    /// **按音节用空格分开的码也要能解**：`SegmentState.sentenceCode()` 给的是
+    /// `"lq xb rj"` 这种形态，而 `decode_pinyin` 以前只认连续码。
+    ///
+    /// 那时 `"lq xb rj"` 有 8 个字符（偶数，长度校验能过），按两字符切会变成
+    /// `"lq" " x" " b" " r" "j"`——空格混进音节，全部解不出来返回 None，
+    /// 调用方据此放弃落库。症状是「逐字选的词永远记不住」，而日志里码看着完全正常。
+    #[test]
+    fn decode_pinyin_accepts_space_separated_code() {
+        assert_eq!(
+            decode_pinyin(Scheme::Xiaohe, "lq xb rj").as_deref(),
+            Some("liu xin ran")
+        );
+        // 和连续写法的结果必须一致
+        assert_eq!(
+            decode_pinyin(Scheme::Xiaohe, "lq xb rj"),
+            decode_pinyin(Scheme::Xiaohe, "lqxbrj")
+        );
+        // 前后空格、多个空格都不该影响
+        assert_eq!(
+            decode_pinyin(Scheme::Xiaohe, "  lq  xb   rj ").as_deref(),
+            Some("liu xin ran")
+        );
+        // 奇数长度的单个音节仍然要拒绝
+        assert_eq!(decode_pinyin(Scheme::Xiaohe, "lq xbj"), None);
+        // 纯空白等于空串
+        assert_eq!(decode_pinyin(Scheme::Xiaohe, "   "), None);
+    }
+
 }

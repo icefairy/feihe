@@ -2353,9 +2353,16 @@ class FeiheIme : InputMethodService() {
         col.visibility = View.VISIBLE
         // 形码筛过的子集优先
         val words = if (assistActive) assistWords else state.focusedWords()
-        val rows = CandidateGrid.rows(words.size, expandedRows())
-        while (col.childCount > rows) col.removeViewAt(col.childCount - 1)
-        while (col.childCount < rows) {
+        // 第 0 行留给**操作行**（‹ 返回 / 形码 / 收起），候选从第 1 行排起。
+        //
+        // 为什么要这样：展开态把键盘整块藏起来了，如果这里只画候选，用户就
+        // 没有任何回退入口——既回不到 chip 视图（看整句分词），也没法在不开键盘的
+        // 情况下退出本次逐字选择。`collapseBar` 只能退回单行，退不回 chip。
+        val totalRows = CandidateGrid.rows(words.size + CandidateGrid.PER_ROW, expandedRows())
+            .coerceAtLeast(2)
+        val gridRows = totalRows - 1
+        while (col.childCount > totalRows) col.removeViewAt(col.childCount - 1)
+        while (col.childCount < totalRows) {
             col.addView(
                 LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -2370,7 +2377,7 @@ class FeiheIme : InputMethodService() {
         }
         expandedScroll?.let { sv ->
             val rowH = dp(CANDIDATE_ROW_DP)
-            val want = rowH * rows
+            val want = rowH * totalRows
             (sv.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
                 if (lp.height != want || lp.weight != 0f) {
                     lp.height = want
@@ -2392,8 +2399,33 @@ class FeiheIme : InputMethodService() {
             sv.requestLayout()
             sv.scrollTo(0, 0)
         }
+
+        // ── 第 0 行：操作行 ─────────────────────────────────────────
+        val head = col.getChildAt(0) as LinearLayout
+        head.removeAllViews()
+        head.addView(
+            TextView(this).apply {
+                text = "‹ 返回"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTextColor(Palette.of(this@FeiheIme).sub)
+                setPadding(dp(10f), 0, dp(14f), 0)
+                setOnClickListener {
+                    // 回 chip 视图：没有「当前段」了，形码态一起退掉
+                    resetAssist()
+                    candidateExpanded = false
+                    segmentState = state.back()
+                    renderCandidates()
+                }
+            },
+        )
+        if (assistAvailable()) {
+            head.addView(TextView(this).also { bindAssistView(it) })
+        }
+        head.addView(TextView(this).also { bindExpandToggle(it) })
+
+        // ── 第 1 行起：候选网格 ────────────────────────────────────
         words.forEachIndexed { idx, word ->
-            val row = col.getChildAt(idx / CandidateGrid.PER_ROW) as LinearLayout
+            val row = col.getChildAt(idx / CandidateGrid.PER_ROW + 1) as LinearLayout
             val slot = idx % CandidateGrid.PER_ROW
             val v = row.getChildAt(slot) as? TextView ?: TextView(this).also {
                 row.addView(it, LinearLayout.LayoutParams(0, dp(CANDIDATE_ROW_DP), 1f))
@@ -2424,13 +2456,14 @@ class FeiheIme : InputMethodService() {
                 afterSegmentChosen(next)
             }
         }
-        // 每行末尾多余的格子删掉（上一页这行有 6 个，现在可能只有 2 个）
-        for (r in 0 until rows) {
+        // 每行末尾多余的格子删掉（候选最后一行可能不满 6 个）
+        for (r in 1 until totalRows) {
             val row = col.getChildAt(r) as LinearLayout
-            val keep = minOf(CandidateGrid.PER_ROW, words.size - r * CandidateGrid.PER_ROW)
+            val keep = (words.size - (r - 1) * CandidateGrid.PER_ROW).coerceIn(0, CandidateGrid.PER_ROW)
             while (row.childCount > keep) row.removeViewAt(row.childCount - 1)
         }
     }
+
 
     private fun renderExpandedRows(col: LinearLayout, window: List<String>) {
         // **内容容器自己必须是 VISIBLE。**
@@ -2931,6 +2964,16 @@ class FeiheIme : InputMethodService() {
             if (assistAvailable()) {
                 bar.addView(TextView(this).also { bindAssistView(it) })
             }
+            // **展开按钮**：分段选字时一屏只有六七个字，逐字挑词要滑很久。
+            //
+            // 以前这里没有展开入口，而 `bindExpandToggle` 只挂在
+            // `renderCandidates` 的单行普通候选分支里——分段态在更早的分支就
+            // `return` 了，根本走不到那里。所以用户进了逐字选词之后，
+            // 屏幕上**没有任何办法**变成多行，这正是他报的「组词退格进选单字
+            // 时候依然没有展开成多行的途径」。
+            //
+            // 放在「‹ 返回」和形码之后：这两个是状态位/退路，要压在左边。
+            bar.addView(TextView(this).also { bindExpandToggle(it) })
             // 形码态下候选是筛过的子集，**必须用它**（哪怕是空表）：拿未筛的列表顶
             // 上去，用户会以为形码没生效。
             val words = if (assistActive) assistWords else state.focusedWords()
