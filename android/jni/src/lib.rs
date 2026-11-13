@@ -243,7 +243,14 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupInputNative<
         if input.is_empty() {
             return String::new();
         }
-        let n = limit.clamp(1, 60) as usize;
+        // **不要在这里限制上限。**
+        //
+        // 这里原本是 `limit.clamp(1, 60)`——Kotlin 侧无论传 200 还是 Int.MAX_VALUE，
+        // 到这一层都被砍到 60，是「候选永远不多」的真正闸门（比 SEG_CAND_LIMIT 更彻底）。
+        // 单键同码词实测最多 845 条也只要 0.57ms，没有截断的必要。
+        //
+        // 只保留下限 1：0 或负数在 core 里本来就会返回空，这里统一成 1 更明确。
+        let n = limit.max(1) as usize;
         let r = feihe_core::dict::lookup_input(&input, pinyin_mode != 0, n);
         if r.code.is_empty() {
             return String::new();
@@ -293,7 +300,10 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_lookupAssistNative
             return String::new();
         }
         let mode = feihe_core::config::get().assist_mode;
-        let n = limit.clamp(1, 60) as usize;
+        // 同样不设上限（见上面 lookupNative 的说明）。
+        // 这条是**带辅助码**的查询，Android 目前还没用，但 Windows 壳在用，
+        // 两边共用同一个 dict 层，上限应该一致，否则同一个码在不同端看到不同候选数。
+        let n = limit.max(1) as usize;
         let words = if pinyin_mode != 0 {
             feihe_core::dict::lookup_pinyin_filtered(&input, &assist, mode, n)
         } else {
