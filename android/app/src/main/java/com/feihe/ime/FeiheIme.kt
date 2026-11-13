@@ -1313,13 +1313,25 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
-     * 点了英文单词建议：用它**替换**输入框里未确认的那串。
+     * 点了英文单词建议：用它**替换**输入框里已经上屏的那串字母。
      *
-     * `commitText` 会把当前组合区整体替换掉，正好是「把 hel 换成 hello」
-     * 这个语义。绝不能用 append——那会得到 helhello。
+     * ## 为什么不能再用 commitText 覆盖
+     *
+     * 以前英文是「组合态」（`setComposingText`），`commitText` 会自动替换整个
+     * 组合区，正好是「把 hel 换成 hello」。
+     *
+     * 现在英文改成**直接上屏**（见 [pushComposingEnglish] 的说明），组合区根本不存在，
+     * `commitText` 就变成**插入**——用户会得到 `helhello`。
+     * 所以必须自己回删：先删掉光标前那 `pending.length` 个字符，再写建议词。
      */
     private fun pickEnglishWord(word: String) {
         val ic = currentInputConnection ?: return
+        val typed = pending.length
+        if (typed > 0) {
+            // 先删自己刚上屏的那些字母，再写建议词。
+            // 顺序不能反：先写后删会把刚写进去的也删掉。
+            ic.deleteSurroundingText(typed, 0)
+        }
         ic.commitText(word, 1)
         pending.setLength(0)
         englishWords = emptyList()
@@ -1392,20 +1404,17 @@ class FeiheIme : InputMethodService() {
                     pushComposing()
                     return
                 }
-                // **英文态：字母进组合态（带下划线），不是直接上屏。**
+                // **英文态：字母直接上屏（不走组合态）。**
                 //
-                // 参照豆包输入法的行为（用户实测那套用着习惯）：
-                //   - 打字母 → 进输入框但**带下划线**（未确认状态，setComposingText）
-                //   - 候选栏同时给出英文单词建议
-                //   - 点候选 → 用它替换掉未确认的那串
-                //   - 不点候选、直接空格/回车 → 原文确认上屏
+                // 原来是 setComposingText 组合态（豆包那种带下划线、可被候选词替换）。
+                // 改成直接上屏的唯一原因是 **Termux 这类终端宿主不渲染组合文本**：
+                // 用户在 Termux 命令行里打英文一个字都看不见，按空格才整串冒出来。
+                // 用户明确反馈了这个场景，而输入法在终端里打字是刚需。
                 //
-                // 为什么不能像拼音那样攒在 pending 里只显示在候选条：英文单词
-                // 长度不定，用户需要「边打边看到自己在打什么」。组合态让字母
-                // 直接出现在光标处、又保留可被候选替换的可能，这才是对的模型。
+                // 代价见 [pushComposingEnglish]：点建议词改成「回删 + 重写」。
                 //
-                // 注意这里**不再清空 pending**——英文也用它攒字母，只是渲染
-                // 走组合态那条路（见 pushComposingEnglish）。
+                // pending 仍然攒着，它是「已打进宿主的那串字母」的账本，
+                // 退格按它的长度回删、点建议按它的长度替换。
                 if (!chinese) {
                     pending.append(key.code)
                     pushComposingEnglish()
@@ -1426,16 +1435,15 @@ class FeiheIme : InputMethodService() {
                 if (!chinese) {
                     if (pending.isNotEmpty()) {
                         pending.setLength(pending.length - 1)
+                        // 英文是**直接上屏**的，退格就是真删——不再有任何组合区
+                        // 需要靠「setComposingText("")」去撤下划线。
+                        deleteOneCharBackward()
                         if (pending.isEmpty()) {
-                            // 组合区空了：必须用空串再 set 一次，宿主才会撤掉下划线
-                            currentInputConnection?.setComposingText("", 1)
                             englishWords = emptyList()
                             englishSuggest?.query("")
-                            refreshCandidates()
-                            refreshStatus()
-                        } else {
-                            pushComposingEnglish()
                         }
+                        refreshCandidates()
+                        refreshStatus()
                     } else {
                         deleteOneCharBackward()
                         forgetContext()
@@ -1576,28 +1584,36 @@ class FeiheIme : InputMethodService() {
 
             KeyKind.ENTER -> {
                 if (quickMode) quickMode = false
-                // 英文组合态：回车先确认原文，再换行。和空格同一条规则——
-                // 用户打了半个词直接回车，本意是「就这样，换行」，不是「丢掉」。
+                // 英文组合态：回车先确认原文。和空格同一条规则——
+                // 用户打了半个词直接回车，本意是「就这样上屏」，不是「丢掉」。
                 if (!chinese && pending.isNotEmpty()) {
                     commitEnglishComposing()
                 }
-                // **中文态回车 = 原样上屏那串字母，不选候选。**
+                // **中文态回车 = 原样上屏那串字母，不选候选，也不追加换行。**
                 //
                 // 这是 Windows 输入法的语义（用户明确要求对齐）：回车是「我不要
                 // 转换，就按我打的字母上屏」。它在这些场景不可替代：
                 //   - 打验证码/车牌/型号这类拼音正好不存在的串
                 //   - 引擎把码拆错了，用户想原样拿到那串字母
-                //   - 只想换行但手上还有半截码
+                //
+                // **有输入时不追加 `\n`**（用户明确要求）：上屏那串字母之后如果
+                // 自己再补一个换行，在很多宿主的单行输入框里会变成「提交」，或者
+                // 在聊天框里直接发出消息——用户只是想把它变成普通文本继续编辑，
+                // 不是想换行。换行是**没有输入时**才做的事（见下面最后一个分支）。
                 //
                 // 空格才是「选第一个」——这两个键必须分工，否则用户想原样上屏
                 // 时无路可走（以前回车也选候选，等于两个键干同一件事）。
                 if (chinese && pending.isNotEmpty()) {
                     commitPending()
-                    commitText("\n")
                     forgetContext()
                     return
                 }
-                if (!commitSegmentIfActive()) commitPending()
+                // 分段态也要收尾，同样不换行
+                if (commitSegmentIfActive()) {
+                    forgetContext()
+                    return
+                }
+                // 走到这里说明手上没有任何待处理输入 = 用户就是想换行
                 commitText("\n")
                 forgetContext()
             }
@@ -1823,20 +1839,38 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
-     * 英文组合态：字母进输入框并**带下划线**（未确认），同时查单词建议。
+     * 英文输入：逐字**直接上屏**，不再用组合态。
      *
-     * 这就是豆包输入法的英文行为：输入框里能看到自己在打什么，
-     * 下面给单词候选；点候选就替换，按空格/回车就确认原文。
+     * ## 为什么从 setComposingText 改成 commitText
      *
-     * `setComposingText` 正是「未确认」的官方语义：宿主会画下划线，
-     * 之后的 `commitText` 或再次 `setComposingText` 都不会留下残影。
+     * 组合态（`setComposingText`）本该让宿主机把未确认的文字画成带下划线的样子。
+     * 但**不是每个宿主都画**：Termux 这类终端视图只处理真正提交的文本，
+     * 组合区对它来说是不存在的——用户在 Termux 里打英文**一个字都看不见**，
+     * 按一下空格才突然冒出来一整串。这是实际反馈的场景。
+     *
+     * 拼音没这个问题（用户说的是「英文模式在 Termux 命令行看不到」），
+     * 因为拼音本来就只显示在候选条上，不进输入框。
+     *
+     * 换成直接上屏的代价：
+     * - 失去「点建议词自动替换组合区」的能力 → 改成 [pickEnglishWord] 里自己
+     *   回删 `pending.length` 个字符再写新词。
+     * - 输入框里立即出现最终文本，没有「未确认」这个中间态。
+     *   对输入法来说这是更安全的行为：用户看到的永远是真实上屏内容。
+     *
+     * `pending` 仍然保留，它是「我刚打进宿主的那串字母」的账本，退格和建议替换
+     * 都靠它的长度定位。
      */
     private fun pushComposingEnglish() {
         val ic = currentInputConnection ?: return
-        ic.setComposingText(pending.toString(), 1)
+        // 只把**最新一个字母**提交上去：调用方每敲一个键追加一个字符，
+        // 这里增量提交，避免每次都重写整串（重写会多一次光标移动，
+        // 在终端里表现为闪烁）。
+        val text = pending.toString()
+        if (text.isEmpty()) return
+        ic.commitText(text.takeLast(1), 1)
         refreshStatus()
         // 建议是异步的（跨进程问系统拼写检查器），回来再渲染
-        englishSuggest?.query(pending.toString())
+        englishSuggest?.query(text)
     }
 
     /** 英文建议回来了：存起来并只重画候选条，不动输入框。 */
@@ -1848,15 +1882,20 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
-     * 结束英文组合态：把当前未确认的字母变成正式文本。
+     * 结束英文输入：清掉账本。
      *
-     * `commitText` 会把组合区替换成同样的内容，效果就是「确认」——
-     * 下划线消失，字符留下。空格键和回车键都走这里。
+     * ## 为什么不再 commitText
+     *
+     * 英文改成逐字直接上屏之后（见 [pushComposingEnglish]），字母**已经在宿主里**了。
+     * 这里如果还 `commitText(pending.toString())`，用户会看到每个词都变成
+     * `hellohello` ——把同一串又打了一遍。
+     *
+     * 空格和回车都走这里，它们的职责只剩「结束这个词」：清账本、收起候选条。
+     *
+     * @return 是否确实结束了一次英文输入（空串返回 false，让调用方继续走原逻辑）
      */
     private fun commitEnglishComposing(): Boolean {
         if (chinese || pending.isEmpty()) return false
-        val ic = currentInputConnection ?: return false
-        ic.commitText(pending.toString(), 1)
         pending.setLength(0)
         englishWords = emptyList()
         englishSuggest?.query("")
