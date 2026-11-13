@@ -2456,9 +2456,25 @@ class FeiheIme : InputMethodService() {
         // 为什么要这样：展开态把键盘整块藏起来了，如果这里只画候选，用户就
         // 没有任何回退入口——既回不到 chip 视图（看整句分词），也没法在不开键盘的
         // 情况下退出本次逐字选择。`collapseBar` 只能退回单行，退不回 chip。
-        val totalRows = CandidateGrid.rows(words.size + CandidateGrid.PER_ROW, expandedRows())
-            .coerceAtLeast(2)
-        val gridRows = totalRows - 1
+        //
+        // ## 行数为什么不能按屏幕高度截断（这里崩过一次）
+        //
+        // 原来是 `CandidateGrid.rows(words.size + PER_ROW, expandedRows())`——
+        // 这个函数会把总行数**截到屏幕放得下的行数**，而下面的填充循环
+        // `words.forEachIndexed` 仍然遍历**全部**候选，行容器数对不上就
+        // `col.getChildAt(越界) as LinearLayout` → null → NPE，进程直接崩。
+        //
+        // 崩的后果特别难查：输入法进程被杀，组合区里那串字母被宿主刷出上屏，
+        // 用户看到的是「选到第 4 个字，前面选的全没了，直接把字母串上屏」。
+        // 单字候选多的（`vi` 有 99 个）必然触发，所以看起来像"特定字有问题"。
+        //
+        // 正解：**内容行数按候选总数算，一行不少；只把可视高度封顶，超出靠滚动。**
+        // ScrollView 本来就是干这个的，`col` 高度 WRAP_CONTENT 就能滚到底。
+        val gridRows = if (words.isEmpty()) 0 else
+            (words.size + CandidateGrid.PER_ROW - 1) / CandidateGrid.PER_ROW
+        val totalRows = gridRows + 1
+        // 可视区域封顶：操作行 + 最多 expandedRows() 行候选
+        val visibleRows = totalRows.coerceAtMost(expandedRows().coerceAtLeast(2))
         while (col.childCount > totalRows) col.removeViewAt(col.childCount - 1)
         while (col.childCount < totalRows) {
             col.addView(
@@ -2475,7 +2491,7 @@ class FeiheIme : InputMethodService() {
         }
         expandedScroll?.let { sv ->
             val rowH = dp(CANDIDATE_ROW_DP)
-            val want = rowH * totalRows
+            val want = rowH * visibleRows
             (sv.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
                 if (lp.height != want || lp.weight != 0f) {
                     lp.height = want
@@ -2546,10 +2562,13 @@ class FeiheIme : InputMethodService() {
                 }
             }
             v.setOnClickListener {
+                // 按**下标**选，不按词查：候选动辄几十上百个，同字重复出现是常态
+                // （`vi` 99 个候选里「只」可能不止一条），`indexOf(word)` 会定位到
+                // 第一个同名字，用户点第二个「只」结果跳到第一个。
                 val next = if (assistActive) {
                     state.chooseWord(word, keepOpen = true)
                 } else {
-                    state.choose(state.focusedWords().indexOf(word))
+                    state.choose(idx)
                 }
                 afterSegmentChosen(next)
             }

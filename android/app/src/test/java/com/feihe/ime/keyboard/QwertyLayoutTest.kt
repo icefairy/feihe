@@ -64,9 +64,35 @@ class QwertyLayoutTest {
      * 现在这些全部收进上滑（c/m/v），底排只剩功能键和空格。
      */
     @Test
-    fun `字母页没有独立标点键`() {
+    fun `字母页有且只有一个独立标点键，默认逗号上滑句号`() {
+        // 规格变更（用户 2026-11-13）：以前逗号句号全收进 c/v 上滑，用户反馈
+        // 「每次打标点都要上滑」太重，要求在 123 和 😊 之间加一个独立标点键，
+        // 默认逗号、上滑句号。
         val puncts = QwertyLayout.rows.flatten().filter { it.kind == KeyKind.PUNCT }
-        assertTrue("字母页不该再有独立的标点键，实际有：${puncts.map { it.label }}", puncts.isEmpty())
+        assertEquals("标点键应该正好一个，实际：${puncts.map { it.label }}", 1, puncts.size)
+        val p = puncts.first()
+        assertEquals("默认上屏应该是逗号", "，", p.code)
+        assertEquals("上滑应该是句号", "。", p.swipe)
+
+        // 位置：紧挨在 123 右边
+        val bottom = QwertyLayout.rows.last()
+        val pageIdx = bottom.indexOfFirst { it.kind == KeyKind.PAGE && it.code == "digits" }
+        assertEquals("标点键必须紧跟在 123 右边一位", p, bottom[pageIdx + 1])
+    }
+
+    /** 标点键必须用 PUNCT：它要先把候选上屏再粘标点，不能用 TEXT 直接怼。 */
+    @Test
+    fun `标点键是 PUNCT 型 —— 打拼音时点它得到汉字加标点`() {
+        val p = QwertyLayout.rows.flatten().first { it.kind == KeyKind.PUNCT }
+        assertEquals(KeyKind.PUNCT, p.kind)
+    }
+
+    /** 英文态标点键必须是半角：全角逗号进邮箱/命令行都是非法字符。 */
+    @Test
+    fun `英文态标点键是半角逗号上滑句号`() {
+        val p = QwertyLayout.rowsOf(chinese = false).flatten().first { it.kind == KeyKind.PUNCT }
+        assertEquals(",", p.code)
+        assertEquals(".", p.swipe)
     }
 
     /** 空格两侧必须都是功能键：不许是打字键或标点，否则盲按空格会误上屏。 */
@@ -101,11 +127,21 @@ class QwertyLayoutTest {
 
     /** 中文断句四件套都要能在字母页上滑打出来。 */
     @Test
-    fun `上滑能打出中文断句标点`() {
-        val swipes = QwertyLayout.rows.flatten().mapNotNull { it.swipe }
-        for (p in listOf("，", "。", "！", "？", "：", "；", "、")) {
+    fun `上滑能打出中文标点（逗号句号改由独立键承担）`() {
+        val rows = QwertyLayout.rows
+        val swipes = rows.flatten().mapNotNull { it.swipe }
+        // 逗号句号已经从 c/v 上滑移到独立标点键上，这里只查剩下的
+        for (p in listOf("！", "？", "：", "；", "、")) {
             assertTrue("上滑里缺「$p」", p in swipes)
         }
+        // c/v 上滑让位给书名号，两个都要能打出来
+        for (p in listOf("《", "》")) {
+            assertTrue("上滑里缺「$p」", p in swipes)
+        }
+        // 逗号句号仍然可达，只是换了位置：独立键本体 + 上滑
+        val punct = rows.flatten().first { it.kind == KeyKind.PUNCT }
+        assertEquals("，", punct.code)
+        assertEquals("。", punct.swipe)
     }
 
     /**
@@ -121,11 +157,39 @@ class QwertyLayoutTest {
      */
     @Test
     fun `英文上滑只有半角符号`() {
-        val allowed = "1234567890-/:;()~'\"@#&?!…,."
+        // 白名单 = 全部 ASCII 可见符号（可打印标点区）+ 省略号。
+        // 以前这里手写枚举，加个 `$`/`*`/`=` 就被误判成"非半角"——
+        // 真正的判据是「字符码位在 ASCII 标点范围内」，不是「我记得的那些符号」。
+        val allowed = (33..126).map { it.toChar() }.joinToString("") + "…"
         val bad = QwertyLayout.swipeMap(chinese = false).entries
             .filter { it.value.any { c -> c !in allowed } }
             .map { "${it.key}→${it.value}" }
         assertTrue("英文上滑里混进了非半角字符：$bad", bad.isEmpty())
+    }
+
+    /**
+     * **英文态不许丢符号。**
+     *
+     * 这条是被真改坏过才加的：重排上滑表时把 `…` 挤掉了，而当时的断言只查
+     * "有没有混进全角"，不查"该有的还在"，测试全绿但用户打不出省略号。
+     *
+     * 判据：字母页上滑 ∪ 底排标点键（本体+上滑）∪ 符号页，必须覆盖这组基准符号。
+     * 加新符号不加进来没关系，**但不能让已经能打的消失**。
+     */
+    @Test
+    fun `英文态基准符号一个都不能少`() {
+        val en = QwertyLayout.rowsOf(chinese = false).flatten()
+        val reachable = HashSet<String>()
+        en.forEach { k -> k.swipe?.let { reachable.add(it) } }
+        en.filter { it.kind == KeyKind.TEXT || it.kind == KeyKind.PUNCT }
+            .forEach { reachable.add(it.code) }
+        SymbolLayout.rowsOf(chinese = false).flatten()
+            .filter { it.kind == KeyKind.TEXT }.forEach { reachable.add(it.code) }
+        // 0.3.79 能打出的基准集合，只许增不许减
+        val baseline = "!\"#'(),-./:;?@~…".toList()
+        for (c in baseline) {
+            assertTrue("英文态打不出「$c」了", c.toString() in reachable)
+        }
     }
 
     /** 英文模式必须能直接打出单引号和双引号（代码/JSON/命令行刚需）。 */
@@ -193,9 +257,14 @@ class QwertyLayoutTest {
     @Test
     fun `英文模式上滑出半角标点`() {
         val en = QwertyLayout.rowsOf(chinese = false).flatten().mapNotNull { it.swipe }
-        for (p in listOf("!", "?", ",", ".", ":", ";")) {
+        // 逗号句号改由底排独立标点键承担（本体 , / 上滑 .），不在字母上滑里
+        for (p in listOf("!", "?", ":", ";", "-", "/", "'", "\"")) {
             assertTrue("英文模式上滑缺半角「$p」，实际：${en.filter { it.length == 1 }}", p in en)
         }
+        // 逗号句号仍然可达：底排独立键
+        val punct = QwertyLayout.rowsOf(chinese = false).flatten().first { it.kind == KeyKind.PUNCT }
+        assertEquals(",", punct.code)
+        assertEquals(".", punct.swipe)
     }
 
     /** 英文模式字母页上滑里**不许**再出现全角中文标点。 */
@@ -212,7 +281,8 @@ class QwertyLayoutTest {
     @Test
     fun `中文模式上滑仍是全角`() {
         val zh = QwertyLayout.rowsOf(chinese = true).flatten().mapNotNull { it.swipe }
-        for (p in listOf("！", "？", "，", "。")) {
+        // 逗号句号现在挂在独立标点键上（本体 ， / 上滑 。），见专门的用例
+        for (p in listOf("！", "？", "：", "；", "、", "《", "》")) {
             assertTrue("中文模式上滑缺全角「$p」", p in zh)
         }
         // 半角句号不该在中文模式里（邮箱是英文场景才要）
@@ -264,10 +334,17 @@ class QwertyLayoutTest {
      * 空格居中也会被破坏。
      */
     @Test
-    fun `底排总权重不变`() {
+    fun `底排总权重和字母排一致`() {
         val bottom = QwertyLayout.rows.last()
         val sum = bottom.sumOf { it.weight.toDouble() }
-        assertEquals("底排总权重变了会让每个键宽度都变", 10.0, sum, 0.001)
+        // 原值 10.0 是「底排 6 个键」时的配平。用户要求加一个独立标点键后
+        // 变成 7 个键：
+        //   123(1.0) + ，(1.0) + 😊(0.7) + 空格(3.9) + 中(1.0) + ⌘(0.7) + ↵(1.8) = 10.1
+        //
+        // 为什么是 10.1 而不是回到 10.0：把空格再压 0.1 会让它窄 2.5%，
+        // 而 10.1 与第一排（10 个字母，总权重 10.0）只差 1%——键宽视觉上看不出，
+        // 又不牺牲空格手感。硬凑整数是形式主义。
+        assertEquals("底排总权重应≈10（字母排 10.0）", 10.1, sum, 0.001)
     }
 
     /**

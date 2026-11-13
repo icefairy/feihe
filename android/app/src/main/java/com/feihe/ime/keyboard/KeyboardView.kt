@@ -402,7 +402,18 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
                     keyView.isPressed = false
                     preview(false)
                     if (swiped) {
-                        key.swipe?.let { onKey(Key(it, KeyKind.TEXT, it)) }
+                        // 上滑字符的 kind **跟随原键**，不能一律当 TEXT。
+                        //
+                        // TEXT 是「直接上屏、不碰候选」，而 PUNCT 是「先把候选上屏
+                        // 再粘标点」。底排的 `，` 键上滑出 `。` 时如果按 TEXT 处理，
+                        // 用户打着拼音上滑句号，会得到「lmhdilvi。」这种拼音标点混串
+                        // ——PUNCT 分支里的 commitPending 那一步被跳过了。
+                        //
+                        // 字母键的上滑仍然走 TEXT：那些是 `1` `！` `，` 这类独立符号，
+                        // 语义上确实不该触发候选上屏（打 `q` 上滑出 `1` 时把半截拼音
+                        // 顶上去反而更怪）。只有 PUNCT 键需要保序语义。
+                        val kind = if (key.kind == KeyKind.PUNCT) KeyKind.PUNCT else KeyKind.TEXT
+                        key.swipe?.let { onKey(Key(it, kind, it)) }
                     } else {
                         v.performClick()
                     }
