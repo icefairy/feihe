@@ -50,6 +50,7 @@ import com.feihe.ime.keyboard.NumberSelectLayout
 import com.feihe.ime.keyboard.Page
 import com.feihe.ime.keyboard.ShiftMachine
 import com.feihe.ime.keyboard.ShiftState
+import com.feihe.ime.keyboard.AssistExit
 import java.io.File
 
 /**
@@ -1576,9 +1577,10 @@ class FeiheIme : InputMethodService() {
                     if (assistKeys.isNotEmpty()) {
                         assistKeys.deleteCharAt(assistKeys.length - 1)
                     } else {
-                        // 形码删空后退出形码态 → 键盘要还原成正常字母/标点
-                        assistActive = false
-                        rebuildKeyboard()
+                        // 形码删空后退出形码态 → 键盘要还原成正常字母/标点。
+                        // 走 resetAssist()：它统一负责「退出就重建键盘」，别在这里
+                        // 再手写一遍 assistActive=false + rebuildKeyboard（两套会漂）。
+                        resetAssist()
                     }
                     refreshAssist()
                     return
@@ -2048,10 +2050,29 @@ class FeiheIme : InputMethodService() {
         assistMaxKeys() > 0 && chinese && !quickMode &&
             (pending.isNotEmpty() || (segmentState?.focus ?: -1) >= 0)
 
+    /**
+     * 退出形码态并清掉已打的形码。
+     *
+     * ## 为什么这里要重建键盘
+     *
+     * 形码态的按键是「字母小字 + 部件提示大字」的双层 FrameLayout，跟普通字母键
+     * **不是同一个 View 结构**。只把 [assistActive] 置 false，键帽不会自己变回去——
+     * 用户原话：「形码开启后 选了确定下来的字后 键盘上的形码还在 应该要自动收掉，
+     * 回归之前字母和标点符号的键盘布局」。
+     *
+     * 收敛到这一个函数，是因为退出形码态有八条路径：选词上屏（commitWord）、联想词、
+     * 原样上屏、切中英、英文态早退、回 chip 视图、分段选完……散落着补「重建」必漏。
+     * 判据见 [AssistExit.shouldRebuildKeyboard]：**只在 true→false 这一次跳变**重建，
+     * 普通选词（本来就 false）不重建，避免每选一个词都抖一下。
+     */
     private fun resetAssist() {
+        val wasActive = assistActive
         assistActive = false
         assistKeys.setLength(0)
         assistWords = emptyList()
+        if (AssistExit.shouldRebuildKeyboard(wasActive)) {
+            rebuildKeyboard()
+        }
     }
 
     /** 点「形」：进/出形码态。进出都清空已打的形码——上一次的筛选不该带过来。 */
@@ -2191,9 +2212,9 @@ class FeiheIme : InputMethodService() {
         assistKeys.setLength(0)
         if (next.focus < 0 && assistActive) {
             // **选完字自动退出形码态**（用户要求：选择了字之后退出这个模式）。
-            // 键盘同时还原，否则下次打字还顶着一屏部首提示。
-            assistActive = false
-            rebuildKeyboard()
+            // 走 resetAssist()：统一负责清状态 + 重建键盘回字母/标点布局，
+            // 别在这里手写 assistActive=false + rebuildKeyboard（会和上屏路径漂）。
+            resetAssist()
         }
         updateAssistWords()
         // **最后一段选完 = 整句齐了，直接上屏。**
