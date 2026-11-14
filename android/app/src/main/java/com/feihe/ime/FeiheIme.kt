@@ -336,6 +336,15 @@ class FeiheIme : InputMethodService() {
     private var clipButton: TextView? = null
     private var clipOpen = false
 
+    /**
+     * 状态条上的「表情」按钮。
+     *
+     * 2026-11-14 用户要求：把表情入口从字母页底排搬到状态条（和齿轮/剪贴板/
+     * 麦克风同一排），这样**任何时候**（字母页/数字页/符号页）都能一键进表情页，
+     * 而且不占键盘底排的位置（腾出来的宽度给空格）。
+     */
+    private var emojiButton: TextView? = null
+
     /** 状态条上的「收起键盘」按钮。 */
     private var hideButton: TextView? = null
 
@@ -932,6 +941,13 @@ class FeiheIme : InputMethodService() {
             }
         }
 
+        // 表情入口。原来在字母页底排（123 和空格之间），用户要求搬到状态条：
+        // 底排那个位置太窄、又只在字母页可见；放进状态条后任何页都能点，
+        // 且底排腾出的宽度还给了空格（盲按更不容易误触）。
+        emojiButton = iconButton("😊", "表情", 17f).apply {
+            setOnClickListener { showPage(Page.EMOJI) }
+        }
+
         // 收起键盘。放在最右边（拇指最远但按一次就消失，不需要高频）。
         //
         // 系统键盘底部有自己的收起按钮，但它是**系统手势条**上的小箭头，
@@ -950,6 +966,7 @@ class FeiheIme : InputMethodService() {
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
             )
             addView(clipButton)
+            addView(emojiButton)
             addView(micButton)
             addView(gear)
             addView(hideButton)
@@ -2490,6 +2507,16 @@ class FeiheIme : InputMethodService() {
         // 多绑一格而容器没扩容，getChildAt 返回 null，`as TextView` 直接 NPE 闪退
         // （现象就是按第一个键正常、按第二个键必崩）。
         val expandToggle = candidates.size > 1
+        // **候选条靠左再放一个 😊 表情入口（在「形」和验证码之后）。**
+        //
+        // 为什么必须在这里：字母页底排的 😊 键已按要求搬到状态条，但状态条在
+        // 「正在打字/有候选」时是 GONE 的（TOP_SLOT_DP 那个槽位让给了候选）。
+        // 只放状态条的话，打字打到一半想插个表情就没入口了——那正是最常用的时刻。
+        // 两者是同一个动作（showPage(EMOJI)），不冲突。
+        //
+        // **但不能排在「形」前面**：形码筛选态和验证码提示是状态位，压在最左是既有
+        // 约定，表情挤过去会让人以为筛选按钮消失了（见下面绑定顺序的注释）。
+        val emojiChip = true
         val total = CandidateGrid.barSlots(
             assistChip = assistChip,
             otp = otp != null,
@@ -2500,6 +2527,7 @@ class FeiheIme : InputMethodService() {
             expandToggle = expandToggle,
             suggestionCount = suggestions.size,
             emailSuffixCount = emailSuffixes.size,
+            emojiChip = emojiChip,
         )
         while (bar.childCount > total) bar.removeViewAt(bar.childCount - 1)
         while (bar.childCount < total) bar.addView(TextView(this))
@@ -2512,10 +2540,13 @@ class FeiheIme : InputMethodService() {
         // 以前放在最末尾：候选一多（比如 45 个），它就排到要横滑到最右边才看得见，
         // 等于把入口藏起来了。收起态候选条是横滑的，左边永远默认可见，放这才找得到。
         //
-        // 注意要排在 assistChip/otp 之后：那两个是「形码筛选」「验证码提示」这种
-        // 状态位，必须压在最左，箭头挤到它们前面会让人以为筛选按钮没了。
+        // **绑定顺序：形码筛选 → 验证码 → 表情 → 展开箭头 → 候选…**
+        //
+        // 表情入口排在 assistChip/otp 之后：那两个是「形码筛选」「验证码提示」这种
+        // **状态位**，必须压在最左，表情挤到它们前面会让人以为筛选按钮没了。
         if (assistChip) nextSlot()?.let { bindAssistView(it) }
         if (otp != null) nextSlot()?.let { bindOtpView(it, otp) }
+        if (emojiChip) nextSlot()?.let { bindEmojiChip(it) }
         if (expandToggle) nextSlot()?.let { bindExpandToggle(it) }
         if (hasPrev) nextSlot()?.let { bindPageView(it, "‹", -1) }
         if (emptyAssist) nextSlot()?.let { bindHintView(it, "形码无匹配，退格重试") }
@@ -3279,6 +3310,34 @@ class FeiheIme : InputMethodService() {
         clearComposing()
         commitText(code)
         refreshCandidates()
+    }
+
+    /**
+     * 候选条靠左的 😊 入口（形/验证码之后）：点一下进表情页。
+     *
+     * 视觉规格和「形」按钮一致（chip 底色 + 描边 + 4dp 圆角），因为它们是**同一排
+     * 里的同类控件**——凡是有框的都是能点的，没框的是候选文字。宽度钉死 44dp，
+     * 避免 HorizontalScrollView 下被量成 0（这是「形」按钮踩过的坑）。
+     */
+    private fun bindEmojiChip(v: TextView) {
+        val p = Palette.of(this)
+        v.text = "😊"
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        v.gravity = Gravity.CENTER
+        v.setPadding(0, 0, 0, 0)
+        v.background = GradientDrawable().apply {
+            setColor(p.chipBg)
+            setStroke(dp(CHIP_STROKE_DP), p.chipStroke)
+            cornerRadius = dp(4f).toFloat()
+        }
+        v.layoutParams = LinearLayout.LayoutParams(dp(44f), dp(32f)).apply {
+            marginStart = dp(4f)
+            marginEnd = dp(4f)
+        }
+        v.contentDescription = "表情"
+        v.isClickable = true
+        v.setOnClickListener { showPage(Page.EMOJI) }
+        v.setOnLongClickListener(null)
     }
 
     /**

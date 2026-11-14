@@ -168,28 +168,49 @@ class QwertyLayoutTest {
     }
 
     /**
-     * **英文态不许丢符号。**
-     *
-     * 这条是被真改坏过才加的：重排上滑表时把 `…` 挤掉了，而当时的断言只查
-     * "有没有混进全角"，不查"该有的还在"，测试全绿但用户打不出省略号。
-     *
-     * 判据：字母页上滑 ∪ 底排标点键（本体+上滑）∪ 符号页，必须覆盖这组基准符号。
-     * 加新符号不加进来没关系，**但不能让已经能打的消失**。
+     * 某语言下**所有能打出的字符**：字母页上滑 ∪ 字母页直出 ∪ 符号页（主键+上滑）
+     * ∪ 数字页（主键+上滑）。数字页中英一致，所以两边都要算进来——`+ - / : ; %`
+     * 这些在中文态其实是从数字页的上滑打的，漏了它们会出现「假丢失」。
      */
+    private fun reachable(chinese: Boolean): Set<String> {
+        val out = HashSet<String>()
+        fun eat(keys: List<Key>) = keys.forEach { k ->
+            out.add(k.code)
+            k.swipe?.let { out.add(it) }
+        }
+        eat(QwertyLayout.rowsOf(chinese).flatten())
+        eat(SymbolLayout.rowsOf(chinese).flatten())
+        eat(NumericLayout.rows.flatten())
+        return out
+    }
+
     @Test
     fun `英文态基准符号一个都不能少`() {
-        val en = QwertyLayout.rowsOf(chinese = false).flatten()
-        val reachable = HashSet<String>()
-        en.forEach { k -> k.swipe?.let { reachable.add(it) } }
-        en.filter { it.kind == KeyKind.TEXT || it.kind == KeyKind.PUNCT }
-            .forEach { reachable.add(it.code) }
-        SymbolLayout.rowsOf(chinese = false).flatten()
-            .filter { it.kind == KeyKind.TEXT }.forEach { reachable.add(it.code) }
-        // 0.3.79 能打出的基准集合，只许增不许减
-        val baseline = "!\"#'(),-./:;?@~…".toList()
+        val reachable = reachable(chinese = false)
+        // 0.3.79 能打出的基准集合，只许增不许减。2026-11-14 重排后把
+        // `# $ * < = > \ _ ` { | } ~ & [ ]` 这批也钉进来——它们每一个都曾被
+        // 「重排上滑表」顺手挤掉过（`$` 就是重排时真丢过一次，靠这条拦下的）。
+        val baseline = "!\"#'()*+,-./:;<=>?@\\_`{|}~…$%&[]".toList()
         for (c in baseline) {
             assertTrue("英文态打不出「$c」了", c.toString() in reachable)
         }
+    }
+
+    /**
+     * **中文态同样一个都不能少**（照英文那条的思路补上，2026-11-14）。
+     *
+     * 中文符号页这轮把 `；‘’《》·` 从主键降到了上滑、双引号提升为主键，很容易
+     * 「降着降着就丢了」。这条把重排前 `docs/标点布局-频次依据与重排方案.md`
+     * 统计到的可达集全部钉住。
+     */
+    @Test
+    fun `中文态基准符号一个都不能少`() {
+        val reachable = reachable(chinese = true)
+        val baseline = ("，。、；“”：！？…—（）" +
+            "‘’《》·" +
+            "()+-/:;<=>[\\]|~%").toList()
+        val missing = baseline.filter { it.toString() !in reachable }
+        assertTrue("中文态打不出这些符号了：$missing", missing.isEmpty())
     }
 
     /** 英文模式必须能直接打出单引号和双引号（代码/JSON/命令行刚需）。 */
@@ -209,6 +230,56 @@ class QwertyLayoutTest {
     }
 
     /**
+     * **中英上滑必须「同键同位」**（2026-11-14 用户硬要求）。
+     *
+     * 以前中文 `z=！ x=？`、英文 `z=? x=!`，`c v b n m` 两套完全错位：同一个问号
+     * 中文在 x、英文在 z，切模式后肌肉记忆全废。这条锁住「两套表的键集合完全一致」，
+     * 再锁几个必须**逐键对应同类**的位置。
+     */
+    @Test
+    fun `中英上滑的键集合完全一致`() {
+        assertEquals(
+            "中英上滑必须覆盖同一批字母键",
+            QwertyLayout.swipeMap(chinese = true).keys,
+            QwertyLayout.swipeMap(chinese = false).keys,
+        )
+        assertEquals("26 个字母键都要有上滑", 26, QwertyLayout.swipeMap(chinese = true).size)
+    }
+
+    /** 同一类标点必须落在同一个键上，只换全角/半角。 */
+    @Test
+    fun `同类标点中英同键`() {
+        val zh = QwertyLayout.swipeMap(chinese = true)
+        val en = QwertyLayout.swipeMap(chinese = false)
+        val pairs = listOf(
+            'a' to ("—" to "-"),   // 破折/连字符
+            's' to ("/" to "/"),   // 斜杠
+            'd' to ("：" to ":"),   // 冒号
+            'f' to ("；" to ";"),   // 分号
+            'g' to ("（" to "("),   // 左括号
+            'h' to ("）" to ")"),   // 右括号
+            'z' to ("！" to "!"),   // 叹号
+            'x' to ("？" to "?"),   // 问号
+            'c' to ("《" to "<"),   // 左尖括号/书名号
+            'v' to ("》" to ">"),   // 右尖括号/书名号
+            'b' to ("、" to "_"),   // 顿号 / 下划线（下划线一级路径）
+        )
+        for ((key, v) in pairs) {
+            assertEquals("中文 $key 应是「${v.first}」", v.first, zh[key])
+            assertEquals("英文 $key 应是「${v.second}」", v.second, en[key])
+        }
+    }
+
+    /** 下划线必须在字母区上滑可达（用户实测痛点：符号页翻不到）。 */
+    @Test
+    fun `英文上滑能打出下划线`() {
+        assertTrue(
+            "英文上滑里必须有 _",
+            "_" in QwertyLayout.swipeMap(chinese = false).values,
+        )
+    }
+
+    /**
      * 每个字母键都要有上滑字符，且互不重复。
      *
      * 少了某一个 → 那个键上滑没反应（用户会以为手势时灵时不灵）；重复 → 两个键
@@ -224,13 +295,19 @@ class QwertyLayoutTest {
         assertEquals("上滑字符不能重复", swipes.size, swipes.toSet().size)
     }
 
-    /** 字母页必须能直接进表情页：聊天时八成时间都在字母页。 */
+    /**
+     * 表情入口**已从字母页底排移除**，改到状态条上（2026-11-14 用户要求）。
+     *
+     * 底排的 😊 键占 0.7 权重又只在字母页可见；搬到状态条后任何页都能点，
+     * 腾出的宽度给了空格。这条锁住「底排别再冒出表情键」——
+     * 状态条那条入口在 FeiheIme 里建，不在布局表里，所以这里只断言布局表干净。
+     */
     @Test
-    fun `字母页有表情入口`() {
+    fun `字母页底排不再有表情键`() {
         val emoji = QwertyLayout.rows.flatten().firstOrNull {
             it.kind == KeyKind.PAGE && it.code == "emoji"
         }
-        assertTrue("字母页缺 😊 入口", emoji != null)
+        assertTrue("表情入口应已移到状态条，字母页不该再有 😊 键", emoji == null)
     }
 
     /**
@@ -360,11 +437,11 @@ class QwertyLayoutTest {
         // 1.8 是照豆包（换行键≈1.76 个字母键宽）定的。
         // 这里只断言「明显比别人宽」，不钉死具体值——以后微调 1.7/1.9 不该挂测试。
         assertTrue("回车权重 ${enter.weight} 应 ≥1.7（豆包 1.76）", enter.weight >= 1.7f)
-        // 比 123/中 之外的窄键都要宽
-        val narrow = bottom.filter { it.kind == KeyKind.PAGE && it.code == "emoji" }
+        // 比 ⌘ 这类窄功能键都要宽（表情键已移出底排，用导航键做参照）
+        val narrow = bottom.filter { it.kind == KeyKind.PAGE || it.kind == KeyKind.MODE }
         assertTrue(
-            "回车必须比 😊 宽，否则还是按不中",
-            enter.weight > narrow.first().weight,
+            "回车必须比最窄的功能键还宽，否则还是按不中",
+            enter.weight > narrow.minOf { it.weight },
         )
     }
 

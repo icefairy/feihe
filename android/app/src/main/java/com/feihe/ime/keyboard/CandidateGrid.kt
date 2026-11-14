@@ -296,7 +296,15 @@ object CandidateGrid {
      * 抽成纯函数就是为了让这条容易漏的条件链能被单测盯住——它散在渲染代码里，
      * 加一种新格子忘了同步 total，崩的是整个输入法。
      *
-     * 绑定顺序（和 renderCandidates 一致）：形 → 验证码 → ‹ → 空提示 → 候选 → › → 箭头 → 分隔符 → 联想
+     * 绑定顺序（和 renderCandidates 一致）：形 → 验证码 → 表情 → 箭头 → ‹ → 空提示
+     * → 候选 → › → 分隔符 → 联想 → 邮箱后缀
+     *
+     * 「形」和验证码必须压在表情前面——它们是有状态的状态位（形码筛选态、验证码
+     * 提示），挤到后面用户会以为按钮没了。
+     *
+     * @param emojiChip 候选条靠左是否放「😊 表情」入口（形/验证码之后）。默认 false（老调用点不变），
+     *   renderCandidates 会传 true——因为字母页底排的 😊 键已移到状态条，而状态条
+     *   在**有候选时是隐藏的**，打字过程中必须另有入口（见 FeiheIme.updateTopSlot）。
      */
     fun barSlots(
         assistChip: Boolean,
@@ -308,8 +316,10 @@ object CandidateGrid {
         expandToggle: Boolean,
         suggestionCount: Int,
         emailSuffixCount: Int = 0,
+        emojiChip: Boolean = false,
     ): Int =
-        (if (assistChip) 1 else 0) +
+        (if (emojiChip) 1 else 0) +
+            (if (assistChip) 1 else 0) +
             (if (otp) 1 else 0) +
             (if (hasPrev) 1 else 0) +
             candidateCount +

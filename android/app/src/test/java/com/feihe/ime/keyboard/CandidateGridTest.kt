@@ -220,6 +220,25 @@ class CandidateGridTest {
         assertEquals("4 条邮箱候选要占 1 分隔 + 4 自身 = 5 格", base + 5, withEmail)
     }
 
+    /**
+     * 候选条首位那个 😊 表情入口也必须计入格子数（2026-11-14 新增）。
+     *
+     * 它和「形」一样是**固定占一格**的按钮，漏算就是 0.3.22 那次 NPE 的翻版。
+     */
+    @Test
+    fun `表情入口占一格`() {
+        val without = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 3,
+            hasNext = false, emptyAssist = false, expandToggle = false, suggestionCount = 0,
+        )
+        val with = CandidateGrid.barSlots(
+            assistChip = false, otp = false, hasPrev = false, candidateCount = 3,
+            hasNext = false, emptyAssist = false, expandToggle = false, suggestionCount = 0,
+            emojiChip = true,
+        )
+        assertEquals("😊 入口要正好占一格", without + 1, with)
+    }
+
     // ── 展开态格子宽度：两字词不能折行 ────────────────────────────────
     //
     // 用户报的现象：展开候选后，两字词「智慧」显示成上下两行（上面智、下面慧），
