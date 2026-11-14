@@ -144,11 +144,12 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
         val sizeScale = UiPrefs.keyScale(ctx)
         val base = keyTextSizeSp(key) * sizeScale
 
-        // 上层：字母，缩小到 55% 并淡化，只作方位参考
+        // 上层：字母，缩小淡化，只作方位参考。形码态键面信息量比普通键大
+        // （字母 + 两个部件），两行都按普通键字号会挤，所以字母压到 45%。
         val letter = TextView(ctx).apply {
             text = key.label
             gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, base * 0.55f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, base * ASSIST_LETTER_SCALE)
             setTextColor(p.fnText)
             alpha = 0.55f
             isClickable = false
@@ -158,14 +159,18 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
                 FrameLayout.LayoutParams.WRAP_CONTENT,
             ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL }
         }
-        // 下层：形码提示，比字母大
+        // 下层：形码提示。用户原话「可以用小一些的字号」——0.82 太大，
+        // 两个汉字摊在 36dp 键宽里发胀。压到 0.60（20sp 基值 → 12sp），
+        // 仍清晰但不抢字母、不撑键帽。
         val hintView = TextView(ctx).apply {
             text = hint
             gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, base * 0.82f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, base * ASSIST_HINT_SCALE)
             setTextColor(p.keyText)
             isClickable = false
             isFocusable = false
+            // 部件提示可能有 1~2 个字，统一单行显示，不给它换行把键撑高的机会
+            isSingleLine = true
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -696,3 +701,13 @@ internal fun keyTextSizeSp(key: Key): Float = when (key.kind) {
     KeyKind.ENTER -> 26f
     else -> 16f
 }
+
+/**
+ * 形码态键帽两行文字相对 [keyTextSizeSp] 基值的缩放。
+ *
+ * 用户原话「可以用小一些的字号」：旧值形码 0.82 / 字母 0.55，两个汉字摊在
+ * 约 36dp 宽的键上发胀。整体压一档到 0.60 / 0.45（20sp 基值 → 12sp / 9sp），
+ * 仍清晰但不撑键帽。测试 `AssistKeyFaceTest` 钉死这两个值和「提示必须比字母大」。
+ */
+internal const val ASSIST_HINT_SCALE = 0.60f
+internal const val ASSIST_LETTER_SCALE = 0.45f
