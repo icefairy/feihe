@@ -306,17 +306,21 @@ object NativeEngine {
     }
 
     /**
-     * 读用户自造词库（`phrases.txt`），解析成「词面 + 全拼」。
+     * 读自造词库，返回 (词面, 全拼, 使用次数)。
      *
      * 文件格式：`词<TAB>全拼<TAB>次数`，全拼音节用空格分隔（`退格\ttui ge\t3`）。
-     * 次数列可能不存在（老版本的文件只有两列），所以按列数宽松解析。
+     * 次数列可能不存在（老版本的文件只有两列）或为空/非法，一律按 1 处理
+     * ——和 core/src/phrase.rs 的 parse() 口径一致（缺省 1）。
      *
      * 为什么直接读文件而不是加一个 JNI 列接口：自造词是**低频小文件**
      * （一个人一天造不了几个词），整读一次几毫秒；而 JNI 每加一个接口就要
      * 在 Rust/Kotlin 两侧各写一份序列化，为这点收益不值得。
      * 用户真正需要的是「纠错时能用上这些词」，不是「有个 API」。
+     *
+     * 第三列「次数」是语音纠错按用户频率优先的依据（用户 2026-11-14 反馈）：
+     * 同音同长的两个候选，用户打得多的那个更该被选中。
      */
-    fun phrases(): List<Pair<String, String>> {
+    fun phrases(): List<Triple<String, String, Long>> {
         if (!ensureLoaded()) return emptyList()
         val f = runCatching { java.io.File(filesDirPath(), "phrases.txt") }.getOrNull() ?: return emptyList()
         if (!f.isFile) return emptyList()
@@ -326,9 +330,11 @@ object NativeEngine {
                 if (parts.size < 2) return@mapNotNull null
                 val word = parts[0].trim()
                 val pinyin = parts[1].trim()
+                // 次数缺省/坏值都当 1，和 core 端 parse() 一致；负数也归 1
+                val freq = parts.getOrNull(2)?.trim()?.toLongOrNull()?.takeIf { it > 0 } ?: 1L
                 // 全拼必须是「音节 空格 音节」的形式，空或带制表符的都算坏数据
                 if (word.isEmpty() || pinyin.isEmpty() || pinyin.contains('\t')) null
-                else word to pinyin
+                else Triple(word, pinyin, freq)
             }
         }.getOrDefault(emptyList())
     }
@@ -359,6 +365,21 @@ object NativeEngine {
             if (rs.isNotEmpty()) out[ch] = rs
         }
         return out
+    }
+
+    /**
+     * 把一段待上屏的文字按「输出繁体」开关转换。
+     *
+     * 开关判断在 JNI 侧 core 的 `zhconv::apply` 里（关着就原样返回、纯 ASCII
+     * 走快路径），这里只做「引擎没加载 / JNI 抛异常 → 原样返回」的兜底：
+     * **绝不能因为转换把用户要打的字吞掉**。
+     *
+     * 学习/记录仍用未转换的简体原文（词库按简体索引），所以只在上屏那一刻
+     * 调用，别把转换后的字回灌进 learn/record。
+     */
+    fun convert(text: String): String {
+        if (text.isEmpty() || !ensureLoaded()) return text
+        return runCatching { convertTextNative(text) }.getOrDefault(text)
     }
 
     /**
@@ -573,6 +594,9 @@ object NativeEngine {
     private external fun readingsNative(text: String): String
 
     private external fun configNative(): String
+
+    /** 按「输出繁体」开关转换文字（JNI 侧调 core 的 zhconv::apply）。 */
+    private external fun convertTextNative(text: String): String
 
     private external fun setConfigNative(key: String, value: String)
 

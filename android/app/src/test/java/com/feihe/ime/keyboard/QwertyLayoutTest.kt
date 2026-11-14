@@ -450,6 +450,9 @@ class QwertyLayoutTest {
      *
      * 曾经把退格压到 1（想让它和回车对调宽度），结果第三排合计变 9.5，
      * Z 排字母键比 Q 排窄 1.5%，换页时键宽会跳。这条守着别再犯。
+     *
+     * 2026-11-14 起两端一起缩到 1.2（用户要「上档键缩小、zxc 左移」），
+     * 缩出的权重摊给 7 个字母键，**合计仍严格 = 10**——下面两条不变量不变。
      */
     @Test
     fun `退格和上档键等宽 第三排才对称`() {
@@ -459,5 +462,26 @@ class QwertyLayoutTest {
         assertEquals("退格与 ⇧ 必须等宽", shift.weight, del.weight, 0.001f)
         val sum = third.sumOf { it.weight.toDouble() }
         assertEquals("第三排合计必须是 10，否则字母键宽和第一排不一致", 10.0, sum, 0.001)
+    }
+
+    /**
+     * 用户 2026-11-14 反馈「第三行的上档键宽度缩小一点，让 zxc 那些按键整体
+     * 左移一点，不然容易误触」：⇧ 必须比旧的 1.5 窄，且 zxcvbnm 每个字母键
+     * 必须比普通字母键(1.0)宽——缩出来的权重确实摊给了字母区、左边界左移。
+     */
+    @Test
+    fun `上档键缩窄且第三排字母键摊宽_字母区左移`() {
+        val third = QwertyLayout.rows[2]
+        val shift = third.first { it.kind == KeyKind.SHIFT }
+        assertTrue("⇧ 应比旧的 1.5 窄", shift.weight < 1.5f)
+        assertTrue("⇧ 也不能窄到点不中（≥1.0）", shift.weight >= 1.0f)
+        val letters = third.filter { it.kind == KeyKind.CHAR }
+        assertEquals("第三排应有 7 个字母键", 7, letters.size)
+        for (k in letters) {
+            assertTrue("字母键 ${k.label} 应分摊到缩出来的宽度(>1.0)", k.weight > 1.0f)
+        }
+        // 字母区左边界 = ⇧ 的宽度，比旧的 1.5 小 → 确实左移
+        val first = QwertyLayout.rows[0].first()
+        assertEquals("第一排字母键仍是基准 1.0", 1.0f, first.weight, 0.001f)
     }
 }

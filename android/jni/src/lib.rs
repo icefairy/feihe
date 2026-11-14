@@ -22,6 +22,10 @@ use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jint, jstring};
 use jni::JNIEnv;
 
+/// Android 自带的简繁转换器（core 的 `zhconv::Converter` 实现）。
+/// 详见该模块内的说明：Windows 用系统 NLS，Android 用自含的 s2t 字表。
+mod zhconv_android;
+
 /// 建一个 Java 字符串。失败（OOM / JNI 异常）时返回 null——这是唯一该返回 null
 /// 的场合，因为此时确实「没有字符串可给」。
 fn make_string<'local>(env: &mut JNIEnv<'local>, s: &str) -> jstring {
@@ -123,6 +127,11 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_initNative<'local>
         // 系统 API），Android 这边拿不到能捕获 Context 的闭包，所以用下面那个
         // 进程级静态中转：Kotlin 读完剪贴板推上来，core 要的时候再取。
         feihe_core::fancha::set_clipboard_reader(clipboard_for_core);
+        // **简繁转换器**：Windows 在 DllMain 里注册系统 NLS，Android 这里用自含的
+        // s2t 字表注册。漏了这一步，config.traditional 就只是个死值——
+        // 「输出繁体」开着也打简体（2026-11-14 反馈的根因）。
+        // OnceLock 只认第一次，和 initNative 可重复调用兼容。
+        feihe_core::zhconv::set_converter(zhconv_android::to_traditional);
     });
 }
 
@@ -581,9 +590,14 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_pinyinOfNative<'lo
 
 /// `NativeEngine.configNative()` —— 设置页要显示的开关快照，`key=value;…`。
 ///
-/// 用「自己拼串」而不是 JSON：这里只有五个布尔/枚举，引序列化库得不偿失，
-/// 而且拼串的格式错一眼能看出来。值和 `config.ini` 里一致（`xiaohe` / `ms`、`0` / `1`），
-/// 设置页原样回写。
+/// 用「自己拼串」而不是 JSON：这里只有几个布尔/枚举，引序列化库得不偿失，
+/// 而且拼串的格式错一眼能看出来。值和 `config.ini` 里一致（`xiaohe` / `ms`、
+/// `0` / `1`、`off`/`ziranma`/`xiaohe`），设置页原样回写。
+///
+/// **assist_mode 必须在这里输出**：设置页的 `setConfigNative` 确实把它写进了
+/// config.ini，但输入法进程靠 `NativeEngine.settings()` 读这份快照——以前这串
+/// 漏了 assist_mode，配置解析就永远走默认 `xiaohe`，用户选了「自然码」
+/// 进形码态键盘显示的还是小鹤部件（2026-11-14 反馈的根因）。
 #[no_mangle]
 pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_configNative<'local>(
     mut env: JNIEnv<'local>,
@@ -597,16 +611,39 @@ pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_configNative<'loca
             Scheme::Ms => "ms",
         };
         format!(
-            "scheme={scheme};pinyin={};traditional={};suggest={};learn={};xuanxue={}",
+            "scheme={scheme};pinyin={};traditional={};suggest={};learn={};xuanxue={};assist_mode={}",
             u8::from(c.pinyin_mode),
             u8::from(c.traditional),
             u8::from(c.suggest),
             u8::from(c.learn),
             u8::from(c.xuanxue),
+            c.assist_mode.key(),
         )
     })
     .unwrap_or_default();
     make_string(&mut env, &s)
+}
+
+/// `NativeEngine.convertTextNative(text)` —— 按当前「输出繁体」开关转换一段文字。
+///
+/// 直接复用 core 的 `zhconv::apply`：它自己判断 `config.traditional`（关着就
+/// 原样返回、纯 ASCII 走快路径），调用点不需要也不该重复判断。Android 的
+/// commit 路径（commitWord/commitQuick/commitSuggestion）在 `ic.commitText`
+/// 之前过一遍这里，繁体开关才真正作用到上屏。
+///
+/// 失败（panic / 表异常）一律回退原串：**绝不能因为转换把字吞掉**。
+#[no_mangle]
+pub extern "system" fn Java_com_feihe_ime_engine_NativeEngine_convertTextNative<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    text: JString<'local>,
+) -> jstring {
+    let input = read_string(&mut env, &text);
+    let out = std::panic::catch_unwind(|| {
+        feihe_core::zhconv::apply(&input).into_owned()
+    })
+    .unwrap_or(input);
+    make_string(&mut env, &out)
 }
 
 /// `NativeEngine.setConfigNative(key, value)` —— 改一项设置并落盘。

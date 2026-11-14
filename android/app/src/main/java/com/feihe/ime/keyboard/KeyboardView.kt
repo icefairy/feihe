@@ -39,6 +39,16 @@ object KeyboardView {
 private const val VOICE_HOLD_MS = 400L
 
 /**
+ * 字母键长按多久算「要输大写」。
+ *
+ * 用户 2026-11-14 反馈：英文模式下长按字母应直接输入该键大写。字母键带
+ * 上滑手势（withSwipe 自己接管触摸、消费全部事件），系统 setOnLongClickListener
+ * 收不到 DOWN→ 定时器不会触发，所以这里得自己 postDelayed 判长持。
+ * 略长于系统默认长按，避免和「想上滑但手慢了」混淆。
+ */
+private const val CHAR_LONG_PRESS_MS = 450L
+
+/**
  * 手指移动超过这个距离（dp）就取消语音判定。
  *
  * 打字时手指常带一点滑动，尤其空格这种大键。不判移动的话「手一歪」
@@ -446,7 +456,7 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
         // 有上滑字符的键要包一层：键帽右上角画小字，并接管触摸判方向。
         // 长按类（⌫/⇧）没有上滑，两套手势不会撞。
         if (key.swipe != null) {
-            return withSwipe(ctx, view, key, onKey)
+            return withSwipe(ctx, view, key, onKey, onLongKey)
         }
         return view
     }
@@ -466,6 +476,7 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
         keyView: TextView,
         key: Key,
         onKey: (Key) -> Unit,
+        onLongKey: (Key) -> Unit,
     ): View {
         val p = Palette.of(ctx)
         val hint = TextView(ctx).apply {
@@ -515,6 +526,17 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
         val threshold = dp(ctx, 14f).toFloat()
         var downY = 0f
         var swiped = false
+        var longHandled = false
+        // 英文态长按字母键输大写。只对 CHAR 键判定：底排 PUNCT 键也有上滑，
+        // 但长按它们没有语义，不该抢走「点一下上滑」的手感。
+        // 系统 LongClick 定时器在这套自接管触摸里收不到 DOWN，所以自己 postDelayed。
+        val longRunnable = Runnable {
+            if (!swiped && keyView.isPressed) {
+                longHandled = true
+                keyView.isPressed = false
+                onLongKey(key)          // FeiheIme.onLongKey：英文态 CHAR → 输大写
+            }
+        }
         // **监听必须挂在键本身**：事件先派给可点的子 View，挂在外层 FrameLayout 上
         // 永远收不到 DOWN（被 keyView 吃掉了），表现就是「上滑完全没反应」。
         keyView.setOnTouchListener { v, e ->
@@ -522,23 +544,32 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
                 MotionEvent.ACTION_DOWN -> {
                     downY = e.rawY
                     swiped = false
+                    longHandled = false
                     keyView.isPressed = true
+                    if (key.kind == KeyKind.CHAR) {
+                        v.postDelayed(longRunnable, CHAR_LONG_PRESS_MS)
+                    }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     // 只认「明显向上」：横向抖动和轻微下滑都不算，否则点一下字母
-                    // 手抖几个像素就变成打数字了
+                    // 手抖几个像素就变成打数字了。上滑一旦成立，长按判定作废。
                     if (!swiped && downY - e.rawY > threshold) {
                         swiped = true
+                        v.removeCallbacks(longRunnable)
                         keyView.isPressed = false
                         preview(true)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
+                    v.removeCallbacks(longRunnable)
                     keyView.isPressed = false
                     preview(false)
-                    if (swiped) {
+                    if (longHandled) {
+                        // 长按已输出大写，不再补一次点击（否则又打个小写在后面）。
+                        longHandled = false
+                    } else if (swiped) {
                         // 上滑字符的 kind **跟随原键**，不能一律当 TEXT。
                         //
                         // TEXT 是「直接上屏、不碰候选」，而 PUNCT 是「先把候选上屏
@@ -557,9 +588,11 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    v.removeCallbacks(longRunnable)
                     keyView.isPressed = false
                     preview(false)
                     swiped = false
+                    longHandled = false
                     false
                 }
                 else -> false

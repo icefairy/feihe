@@ -187,13 +187,29 @@ object QwertyLayout {
     fun swipeMap(chinese: Boolean): Map<Char, String> =
         if (chinese) SWIPE else SWIPE_EN
 
-        private fun ch(c: Char, chinese: Boolean = true) =
+        private fun ch(c: Char, chinese: Boolean = true, weight: Float = 1f) =
         Key(
             c.uppercaseChar().toString(),
             KeyKind.CHAR,
             c.toString(),
+            // 第三排字母键会带一个 >1 的权重：⇧/⌫ 缩窄后把腾出的宽度摊给
+            // zxcvbnm，让字母区整体左移又不破坏「第三排合计 = 第一排」的键宽对齐。
+            weight = weight,
             swipe = swipeMap(chinese)[c],
         )
+
+    /**
+     * 第三排 ⇧ / ⌫ 的权重。
+     *
+     * 用户 2026-11-14 反馈：「第三行的上档键宽度缩小一点，让 zxc 那些按键整体
+     * 左移一点，不然容易误触」。原来 1.5，⇧ 太宽把 zxc 推到偏右、拇指够着费劲。
+     * 缩到 1.2（↓20%），两端**一起缩**保持对称，腾出的 0.6 全摊给 7 个字母键
+     * （见 [THIRD_LETTER_WEIGHT]），于是字母区起点左移、且第三排合计仍 = 10
+     * —— 字母键宽和第一排一致，换页不会跳宽。
+     */
+    private const val THIRD_EDGE_WEIGHT = 1.2f
+    /** 第三排每个字母键权重：(10 - 2×1.2) / 7，保证合计严格 = 第一排的 10。 */
+    private const val THIRD_LETTER_WEIGHT = (10f - 2f * THIRD_EDGE_WEIGHT) / 7f
 
     private val CHINESE_ROWS: List<List<Key>> = listOf(
         // 第一排 10 键
@@ -208,18 +224,12 @@ object QwertyLayout {
         // 关于底排标点键：`，` `、` `。` 原来在这里占三个位置（夹在空格两边），已按
         // 用户要求**全部去掉**，改由 `c`/`m`/`v` 上滑输入。空格两侧现在只有功能键，
         // 拇指盲按时不会再蹭到标点。
-        listOf(Key("⇧", KeyKind.SHIFT, weight = 1.5f)) +
-            listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map{ ch(it, true) } +
-            // **退格回到 1.5，和 ⇧ 对称**。
-            //
-            // 曾经想把它压到 1、把回车抬到 1.5，但那样第三排合计变成 9.5，
-            // 和第一/四排的 10 差 0.5，Z 排每个字母键会比 Q 排窄 1.5%——
-            // 换页时键宽会跳，看着像没对齐。
-            //
-            // 所以两个键各占各的：退格管第三排右端（和左侧 ⇧ 对称，
-            // 视觉平衡），回车管第四排右端（1.5，比原来 1 宽一半）。
-            // 两排都是 10，键宽全键盘一致。
-            listOf(Key("⌫", KeyKind.DELETE, weight = 1.5f)),
+        //
+        // ⇧ / ⌫ 各 1.2（原 1.5），缩出来的 0.6 摊进 zxcvbnm：字母区整体左移、
+        // 键宽还和第一排对齐（合计恒 10）。见 [THIRD_EDGE_WEIGHT]。
+        listOf(Key("⇧", KeyKind.SHIFT, weight = THIRD_EDGE_WEIGHT)) +
+            listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map{ ch(it, true, THIRD_LETTER_WEIGHT) } +
+            listOf(Key("⌫", KeyKind.DELETE, weight = THIRD_EDGE_WEIGHT)),
 
         // 第四排：数字页 / 中英 / 表情 / 控制 / 空格 / 回车
         //
@@ -279,9 +289,10 @@ object QwertyLayout {
     private val ENGLISH_ROWS: List<List<Key>> = listOf(
         listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p').map{ ch(it, false) },
         listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l').map{ ch(it, false) },
-        listOf(Key("⇧", KeyKind.SHIFT, weight = 1.5f)) +
-            listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map{ ch(it, false) } +
-            listOf(Key("⌫", KeyKind.DELETE, weight = 1.5f)),
+        // 和中文态同一套第三排权重：⇧/⌫ 缩窄、zxcvbnm 摊宽，键宽对齐不跳。
+        listOf(Key("⇧", KeyKind.SHIFT, weight = THIRD_EDGE_WEIGHT)) +
+            listOf('z', 'x', 'c', 'v', 'b', 'n', 'm').map{ ch(it, false, THIRD_LETTER_WEIGHT) } +
+            listOf(Key("⌫", KeyKind.DELETE, weight = THIRD_EDGE_WEIGHT)),
         functionRow(false),
     )
 

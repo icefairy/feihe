@@ -23,6 +23,50 @@ class VoiceCorrectTest {
     private val pinyinOf = VoiceCorrect.PinyinOf { pinyinMap[it] ?: "" }
 
     private fun phrase(word: String, pinyin: String) = VoiceCorrect.Phrase(word, pinyin)
+    /** 带使用频率的候选（用户 2026-11-14：频率高的优先）。 */
+    private fun phrase(word: String, pinyin: String, freq: Long) =
+        VoiceCorrect.Phrase(word, pinyin, freq)
+
+    // ---- 同音同长：按用户频率优先 ----
+
+    @Test
+    fun `同音同长时频率高的候选胜出`() {
+        // 「菲和」ASR 原字，词库里「飞鹤」「飞和」都念 fei/he、都是 2 字，
+        // 都能替换。用户天天打「飞鹤」(freq 9)，就该选它而不是少用的「飞和」。
+        val r = VoiceCorrect.correct(
+            "菲和",
+            listOf(
+                phrase("飞和", "fei he", 1),   // 故意放前面：文件序靠前也不能赢
+                phrase("飞鹤", "fei he", 9),   // 高频
+            ),
+            pinyinOf,
+        )
+        assertEquals("飞鹤", r.text)
+    }
+
+    @Test
+    fun `频率反过来时低频候选不抢高频`() {
+        val r = VoiceCorrect.correct(
+            "菲和",
+            listOf(
+                phrase("飞鹤", "fei he", 1),
+                phrase("飞和", "fei he", 9),
+            ),
+            pinyinOf,
+        )
+        assertEquals("飞和", r.text)
+    }
+
+    @Test
+    fun `不带频率时退化为稳定排序_行为与旧版一致`() {
+        // 两个候选 freq 都默认 0，Kotlin 稳定排序保持列表原序
+        val r = VoiceCorrect.correct(
+            "菲和",
+            listOf(phrase("飞和", "fei he"), phrase("飞鹤", "fei he")),
+            pinyinOf,
+        )
+        assertEquals("飞和", r.text)
+    }
 
     // ---- 该纠的 ----
 

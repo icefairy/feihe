@@ -31,11 +31,14 @@ package com.feihe.ime.voice
 object VoiceCorrect {
 
     /**
-     * 一条自造词：词面 + 全拼（音节用空格分隔，如 `tui ge`）。
+     * 一条自造词：词面 + 全拼（音节用空格分隔，如 `tui ge`）+ 使用次数。
      *
      * @param pinyin 全拼。空串表示这条不可用于纠错（没有可信拼音就没法比）
+     * @param freq 用户输入过的次数（来自 phrases.txt 第三列）。同音同长的
+     *   多个候选里，频率高的优先——用户天天打的词更可能是他真想说的。
+     *   默认 0 兼容老调用点/单测（没有频率信息时退化为原始的稳定排序）。
      */
-    data class Phrase(val word: String, val pinyin: String) {
+    data class Phrase(val word: String, val pinyin: String, val freq: Long = 0) {
         /** 按音节的列表形式，比对时用。 */
         val syllables: List<String>
             get() = pinyin.split(' ').filter { it.isNotEmpty() }
@@ -78,8 +81,13 @@ object VoiceCorrect {
         // 只留「能查到每个字拼音」的词，其余参与不了比对
         val usable = phrases.filter { it.syllables.isNotEmpty() && it.word.isNotEmpty() }
         if (usable.isEmpty()) return Result(text, text)
-        // 长词优先，避免短词抢走长词的前缀
-        val byLen = usable.sortedByDescending { it.word.length }
+        // 长词优先（避免短词抢走长词前缀）；**同长按使用频率降序**（用户
+        // 2026-11-14 反馈「频率高的比低的更优先」）。Kotlin 排序稳定，同长同频
+        // 保持词库文件原序，不带频率信息时行为与旧版完全一致。
+        val byLen = usable.sortedWith(
+            compareByDescending<Phrase> { it.word.length }
+                .thenByDescending { it.freq }
+        )
 
         val out = StringBuilder(text.length)
         val replaced = mutableListOf<Pair<String, String>>()

@@ -601,11 +601,27 @@ class FeiheIme : InputMethodService() {
      *
      * 打开这一刻**强制再读一次**剪贴板：用户点了这个按钮，多半是刚复制了什么，
      * 而系统不允许我们在后台监听剪贴板（Android 10+），这里就是最接近「实时」的时机。
+     *
+     * 面板高度 = 键盘区原本的高度（keyboardHost 此刻还 VISIBLE、能读到实测值）。
+     * 这样面板最多占输入法原来那块，条目多了走内部 ScrollView 纵向滚，
+     * 不会像 weight=1 那样把多条历史撑到全屏。读不到（尚未 measure）就退回
+     * 「顶槽 + 4 行字母键」的估算，量级一致。
      */
     private fun openClipboard() {
         readClipboard(force = true)
+        // 先把面板高度钉成键盘原高度，再藏键盘：顺序反了 keyboardHost.height 会变 0。
+        val kh = keyboardHost
+        val khH = kh?.height ?: 0
+        val panelH = if (khH > 0) khH else {
+            // 字母页 4 行 × 46dp + 顶槽兜底，和 KeyboardView 的行高量级一致
+            dp(46f) * 4 + dp(TOP_SLOT_DP)
+        }
+        clipPanel?.layoutParams?.let { lp ->
+            lp.height = panelH
+            clipPanel?.layoutParams = lp
+        }
         clipOpen = true
-        keyboardHost?.visibility = View.GONE
+        kh?.visibility = View.GONE
         clipPanel?.visibility = View.VISIBLE
         clipButton?.setTextColor(Palette.of(this).accent)
         renderClipboard()
@@ -616,8 +632,22 @@ class FeiheIme : InputMethodService() {
         clipPanel?.visibility = View.GONE
         keyboardHost?.visibility = View.VISIBLE
         clipButton?.setTextColor(Palette.of(this).sub)
-    }    private fun renderClipboard() {
+    }
+
+    /** 清空全部历史（含写盘）。面板里那个「清空」小按钮走这里。 */
+    private fun clearAllClips() {
+        if (clipEntries.isEmpty()) return
+        clipEntries = emptyList()
+        persistClips()
+        renderClipboard()
+        Toast.makeText(this, "剪贴板历史已清空", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun renderClipboard() {
         val list = clipList ?: return
+        // 「清空」按钮只在有历史时可点/可见，空面板不摆一个没用的按钮。
+        clipPanel?.findViewWithTag<View>("clipClear")?.visibility =
+            if (clipEntries.isEmpty()) View.GONE else View.VISIBLE
         list.removeAllViews()
         val p = Palette.of(this)
         if (clipEntries.isEmpty()) {
@@ -842,6 +872,24 @@ class FeiheIme : InputMethodService() {
      */
     override fun onEvaluateFullscreenMode(): Boolean = false
 
+    /**
+     * 返回键：剪贴板面板展开时**先收面板，再收键盘**（用户 2026-11-14 反馈）。
+     *
+     * InputMethodService 默认会把 KEYCODE_BACK 交给系统去隐藏输入法。这里只在
+     * clipOpen 时抢先拦截一次：closeClipboard() 把键盘还回来、面板 GONE，消费掉
+     * 这次按键（return true），系统不会连着把整个键盘也收掉。用户再按第二次，
+     * clipOpen 已是 false，走 super → 正常收起输入法。
+     *
+     * 其它键、其它面板态一律不动，避免改掉系统对该键的既有行为。
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && clipOpen) {
+            closeClipboard()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
     override fun onCreateInputView(): View {
         // 展开列的列数按真实屏宽算（换手机、折叠屏展开、系统字号变大都要重算）。
         // 放在建视图之前：后面所有 PER_ROW 的使用都依赖它已经是正确值。
@@ -945,8 +993,13 @@ class FeiheIme : InputMethodService() {
         // 表情入口。原来在字母页底排（123 和空格之间），用户要求搬到状态条：
         // 底排那个位置太窄、又只在字母页可见；放进状态条后任何页都能点，
         // 且底排腾出的宽度还给了空格（盲按更不容易误触）。
+        //
+        // **点一下展开、再点一下收起**（用户 2026-11-14 反馈）：状态条在打字时
+        // 让位给候选栏（GONE），只有「没在输入」时才露出来——正好和剪贴板按钮
+        // 同一套显隐逻辑。所以这个表情入口天然就是「无字母输入时可见」，
+        // 候选栏里那个打字时烦人的 emojiChip 已在 renderCandidates 里删掉。
         emojiButton = iconButton("😊", "表情", 17f).apply {
-            setOnClickListener { showPage(Page.EMOJI) }
+            setOnClickListener { toggleEmojiPage() }
         }
 
         // 收起键盘。放在最右边（拇指最远但按一次就消失，不需要高频）。
@@ -954,7 +1007,13 @@ class FeiheIme : InputMethodService() {
         // 系统键盘底部有自己的收起按钮，但它是**系统手势条**上的小箭头，
         // 各家 ROM 位置和样式不一致，有的还藏起来。自带一个更可靠：
         // 尤其在候选条展开、键盘被 GONE 掉的时候，这是唯一的退路。
-        hideButton = iconButton("⌄", "收起键盘").apply {
+        //
+        // 字符用 ▾ 而不是 ⌄：⌄(U+2304) 的墨量压在基线下沿，放在 30dp 高的框里
+        // 即使 gravity=CENTER 也看着偏下（用户 2026-11-14 反馈「收起键盘按钮应该
+        // 纵向居中」）。▾(U+25BE) 是实心下三角，字形本身上下对称，配合 CENTER
+        // 才真正落在框的垂直中线上。
+        hideButton = iconButton("▾", "收起键盘").apply {
+            gravity = Gravity.CENTER
             setOnClickListener { requestHideSelf(0) }
         }
 
@@ -1088,13 +1147,16 @@ class FeiheIme : InputMethodService() {
             setPadding(dp(10f).toInt(), dp(6f).toInt(), dp(10f).toInt(), dp(6f).toInt())
             setTint(Palette.of(this@FeiheIme).accent)
         }
-        root.addView(
-            voiceWave,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(CANDIDATE_ROW_DP),
-            ),
-        )
+        // 波形只在候选框**中间**画一条，宽度约屏宽的三分之一
+        // （用户 2026-11-14 反馈「只在候选框中间显示就行，宽度大约三分之一」）。
+        // 原来 MATCH_PARENT 铺满整行，看着像一整条进度条占掉整个候选区。
+        // root 是 VERTICAL LinearLayout，子 View 的水平位置由 layoutParams.gravity
+        // 决定；给固定宽度 + CENTER_HORIZONTAL 即居中，不用多套一层容器。
+        val waveW = resources.displayMetrics.widthPixels / 3
+        val waveLp = LinearLayout.LayoutParams(waveW, dp(CANDIDATE_ROW_DP)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        root.addView(voiceWave, waveLp)
 
         // 数字选词行：夹在候选条和键盘之间。没候选时整行 GONE（高度 0），
         // 所以它不占字母键的高度——这是 A2「不挤掉字母高度」的落点。
@@ -1197,7 +1259,7 @@ class FeiheIme : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             setBackgroundColor(Palette.of(this@FeiheIme).bg)
-            // 顶部一行「剪贴板」标题 + 关闭，下面才是列表
+            // 顶部一行「剪贴板」标题 + 清空 + 关闭，下面才是列表
             addView(
                 LinearLayout(this@FeiheIme).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -1210,6 +1272,23 @@ class FeiheIme : InputMethodService() {
                             setTextColor(Palette.of(this@FeiheIme).sub)
                         },
                         LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+                    )
+                    // 「清空历史」小按钮：长按能逐条删，但想一次性清掉时得有个总入口。
+                    // 只在有历史时显示（renderClipboard 里按条目数设显隐），空面板点了没意义。
+                    addView(
+                        TextView(this@FeiheIme).apply {
+                            text = "清空"
+                            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                            setTextColor(Palette.of(this@FeiheIme).sub)
+                            setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
+                            contentDescription = "清空剪贴板历史"
+                            tag = "clipClear"
+                            setOnClickListener { clearAllClips() }
+                        },
+                        LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                        ),
                     )
                     addView(
                         TextView(this@FeiheIme).apply {
@@ -1227,8 +1306,8 @@ class FeiheIme : InputMethodService() {
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 ),
             )
-            // 列表本体。长了好歹能滚：条数上限是 ClipHistory.LIMIT，但每条可能是
-            // 多行文本压成一行，屏小的时候仍然会顶出去。
+            // 列表本体：面板高度被钉死成键盘原高度（见 openClipboard），条目多了
+            // 由这层 ScrollView 纵向滚动，绝不把面板撑到全屏。
             addView(
                 android.widget.ScrollView(this@FeiheIme).apply {
                     isFillViewport = true
@@ -1245,8 +1324,11 @@ class FeiheIme : InputMethodService() {
             clipPanel,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
+                // 0 是占位：真正高度在 openClipboard() 里按 keyboardHost 的实测高度
+                // 写入（= 输入法键盘原来那块）。**不可以用 weight=1**——root 是
+                // WRAP_CONTENT 测量，weight 会把面板撑到吃掉整个输入法窗口，
+                // 多条历史时直接铺满全屏（用户 2026-11-14 反馈）。
                 0,
-                1f,
             ),
         )
         showPage(Page.LETTERS)
@@ -1302,6 +1384,17 @@ class FeiheIme : InputMethodService() {
         // 建完就把中/英键的字刷成当前模式：换页重建后不能又变回「中」
         KeyboardView.applyModeState(host, chinese)
         refreshStatus()
+    }
+
+    /**
+     * 表情入口开关（用户 2026-11-14 反馈「点一下展开，再点一下收起」）。
+     *
+     * 当前就在表情页 → 回字母页收起；否则 → 打开表情页。直接用 [page] 判断，
+     * 不另开布尔状态：布尔会和 showPage 的其它调用点（底排 NAV_EMOJI、
+     * 状态条其它入口）漂移，`page` 才是真相源。
+     */
+    private fun toggleEmojiPage() {
+        showPage(if (page == Page.EMOJI) Page.LETTERS else Page.EMOJI)
     }
 
     private fun openSettings() {
@@ -1393,8 +1486,9 @@ class FeiheIme : InputMethodService() {
         if (!UiPrefs.voiceCorrect(this)) return unchanged
         if (text.isEmpty()) return unchanged
         // 自造词库就是「用户天天用的词」，ASR 最容易认错的正是它们
+        // third = phrases.txt 里的使用次数，喂给纠错器做同音同长时的优先级
         val phrases = NativeEngine.phrases().map {
-            com.feihe.ime.voice.VoiceCorrect.Phrase(it.first, it.second)
+            com.feihe.ime.voice.VoiceCorrect.Phrase(it.first, it.second, it.third)
         }
         if (phrases.isEmpty()) return unchanged
         // 逐字读音**只查一次**：把原文里所有汉字一次交给引擎批量反查，
@@ -1862,6 +1956,15 @@ class FeiheIme : InputMethodService() {
 
     /** 长按回调。⇧ 切锁定态；空格键长按说话（松手上屏）。⌫ 的连删在 KeyboardView 内部消化了。 */
     private fun onLongKey(key: Key) {
+        // 用户 2026-11-14 反馈：英文模式下长按字母键直接输入该键大写。
+        // 字母键的长持由 KeyboardView.withSwipe 自己判定（系统的 LongClick 在
+        // 那套自接管触摸里收不到 DOWN），到点回调到这里。中文态不做任何事：
+        // 中文拼音里长按字母没有「大写」语义，且 assist 态字母归形码，别误触。
+        if (key.kind == KeyKind.CHAR && !chinese) {
+            commitText(key.code.uppercase())
+            forgetContext()
+            return
+        }
         if (key.kind == KeyKind.SPACE) {
             // 长按空格 = 按住说话。这是「手里已经在打字，突然想说一句」的最短路径：
             // 不用抬手去够状态条上的麦克风。
@@ -2528,16 +2631,18 @@ class FeiheIme : InputMethodService() {
         // 多绑一格而容器没扩容，getChildAt 返回 null，`as TextView` 直接 NPE 闪退
         // （现象就是按第一个键正常、按第二个键必崩）。
         val expandToggle = candidates.size > 1
-        // **候选条靠左再放一个 😊 表情入口（在「形」和验证码之后）。**
+        // **候选条里不再放 😊 表情入口**（用户 2026-11-14 反馈：「在输入过程中
+        // 候选栏不用显示表情图标，在没有任何字母输入的时候显示，和剪贴板按钮的
+        // 显隐逻辑一样」）。
         //
-        // 为什么必须在这里：字母页底排的 😊 键已按要求搬到状态条，但状态条在
-        // 「正在打字/有候选」时是 GONE 的（TOP_SLOT_DP 那个槽位让给了候选）。
-        // 只放状态条的话，打字打到一半想插个表情就没入口了——那正是最常用的时刻。
-        // 两者是同一个动作（showPage(EMOJI)），不冲突。
+        // 表情入口统一收敛到状态条上的 emojiButton：状态条在「正在打字/有候选」时
+        // 是 GONE（TOP_SLOT_DP 那个槽位让给候选），只有没有任何字母输入时才露出来
+        // ——这正是剪贴板按钮的显隐逻辑，两者同槽同进退。候选栏是打字时才出现的，
+        // 在这里放表情等于每次打字都多一个用不上的图标，用户明确嫌它烦。
         //
-        // **但不能排在「形」前面**：形码筛选态和验证码提示是状态位，压在最左是既有
-        // 约定，表情挤过去会让人以为筛选按钮消失了（见下面绑定顺序的注释）。
-        val emojiChip = true
+        // 状态条那个入口点一下展开表情页、再点一下收起（见 toggleEmojiPage）。
+        // barSlots 的 emojiChip 参数保持显式 false，让格子数和绑定顺序都不多算一格。
+        val emojiChip = false
         val total = CandidateGrid.barSlots(
             assistChip = assistChip,
             otp = otp != null,
@@ -2561,13 +2666,12 @@ class FeiheIme : InputMethodService() {
         // 以前放在最末尾：候选一多（比如 45 个），它就排到要横滑到最右边才看得见，
         // 等于把入口藏起来了。收起态候选条是横滑的，左边永远默认可见，放这才找得到。
         //
-        // **绑定顺序：形码筛选 → 验证码 → 表情 → 展开箭头 → 候选…**
+        // **绑定顺序：形码筛选 → 验证码 → 展开箭头 → 候选…**
         //
-        // 表情入口排在 assistChip/otp 之后：那两个是「形码筛选」「验证码提示」这种
-        // **状态位**，必须压在最左，表情挤到它们前面会让人以为筛选按钮没了。
+        // 形码筛选 / 验证码是**状态位**，必须压在最左，不能让别的东西挤到前面。
+        // 表情入口已移到状态条（见上），候选栏不再占这一格。
         if (assistChip) nextSlot()?.let { bindAssistView(it) }
         if (otp != null) nextSlot()?.let { bindOtpView(it, otp) }
-        if (emojiChip) nextSlot()?.let { bindEmojiChip(it) }
         if (expandToggle) nextSlot()?.let { bindExpandToggle(it) }
         if (hasPrev) nextSlot()?.let { bindPageView(it, "‹", -1) }
         if (emptyAssist) nextSlot()?.let { bindHintView(it, "形码无匹配，退格重试") }
@@ -3334,34 +3438,6 @@ class FeiheIme : InputMethodService() {
     }
 
     /**
-     * 候选条靠左的 😊 入口（形/验证码之后）：点一下进表情页。
-     *
-     * 视觉规格和「形」按钮一致（chip 底色 + 描边 + 4dp 圆角），因为它们是**同一排
-     * 里的同类控件**——凡是有框的都是能点的，没框的是候选文字。宽度钉死 44dp，
-     * 避免 HorizontalScrollView 下被量成 0（这是「形」按钮踩过的坑）。
-     */
-    private fun bindEmojiChip(v: TextView) {
-        val p = Palette.of(this)
-        v.text = "😊"
-        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-        v.gravity = Gravity.CENTER
-        v.setPadding(0, 0, 0, 0)
-        v.background = GradientDrawable().apply {
-            setColor(p.chipBg)
-            setStroke(dp(CHIP_STROKE_DP), p.chipStroke)
-            cornerRadius = dp(4f).toFloat()
-        }
-        v.layoutParams = LinearLayout.LayoutParams(dp(44f), dp(32f)).apply {
-            marginStart = dp(4f)
-            marginEnd = dp(4f)
-        }
-        v.contentDescription = "表情"
-        v.isClickable = true
-        v.setOnClickListener { showPage(Page.EMOJI) }
-        v.setOnLongClickListener(null)
-    }
-
-    /**
      * 「形」按钮。**文案里必须带上已打的形码**（`形 tl`）：形码是看不见的状态，
      * 只亮一个按钮的话，用户不知道刚才那两个键到底吃进去没有。
      */
@@ -3716,7 +3792,10 @@ class FeiheIme : InputMethodService() {
         val ic = currentInputConnection ?: return
         // commitText 会替换掉正在组合的区域，不需要先 finishComposingText；
         // 先 finish 再 commit 在部分宿主里会多出一次光标移动。
-        ic.commitText(word, 1)
+        // **只在上屏这一刻过繁体转换**：下面的 record / learn / rememberPhraseIfNew
+        // 全部仍用简体原文 word（词库、freq、自造词按简体索引，转成繁体再学
+        // 等于学了个查不到的词）。繁体只是「写进文档的样子」，不是数据口径。
+        ic.commitText(NativeEngine.convert(word), 1)
 
         val prev = prevWord
         prevWord = if (thenSuggest) word else ""
@@ -3790,7 +3869,8 @@ class FeiheIme : InputMethodService() {
     /** 点了联想词：上屏，并把联想链接着往下续（「北京 → 时间 → 安排」）。 */
     private fun commitSuggestion(word: String) {
         val ic = currentInputConnection ?: return
-        ic.commitText(word, 1)
+        // 同 commitWord：只把上屏的字转繁体，record 仍用简体原文 word
+        ic.commitText(NativeEngine.convert(word), 1)
 
         val prev = prevWord
         prevWord = word
@@ -3818,7 +3898,8 @@ class FeiheIme : InputMethodService() {
      */
     private fun commitQuick(word: String) {
         val ic = currentInputConnection ?: return
-        ic.commitText(word, 1)
+        // 快捷结果（/rq 日期等）同样按繁体开关上屏
+        ic.commitText(NativeEngine.convert(word), 1)
         quickMode = false
         quickWords = emptyList()
         pending.setLength(0)

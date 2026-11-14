@@ -172,6 +172,41 @@ class AssistKeyHintsTest {
         assertTrue("s 键的完整部首表应有 20 个以上，实际 ${sFull.length}", sFull.length > 20)
     }
 
+    /**
+     * 自然码用的是**本项目实际的「简版」规则**（用户 2026-11-14 特别叮嘱
+     * 「我们的自然码好像是修改的，记得按照实际的来」）：core/src/assist.rs 里
+     * 写得很清楚，自然码辅助码 = Unihan 康熙部首的**读音首字母**（RAD_INITIAL），
+     * 不是官方那套 26 键部件表（官方 日月目→o、扌→f、山石十食→u 那套）。
+     *
+     * 所以键面/长按表必须严格来自 RAD_INITIAL 的确定性反查：214 个部首按
+     * 首字母分到 21 个键，a/i/o/u/v 一个都没有。这里把 RAD_INITIAL 每个字母
+     * 的部首数钉死，ZIRANMA_FULL 的字数必须逐一相等——防止手写表漂移成
+     * 「看着像但和实际编码对不上」的东西（那样用户照键面按会筛空）。
+     */
+    @Test
+    fun `自然码全表与RAD_INITIAL简版规则逐一对应`() {
+        // tools/gen_assist.py 的 RAD_INITIAL（214 部首读音首字母）里每个字母的计数。
+        // 这是 core 实际编码用的真值，不是猜的。
+        val radCount = mapOf(
+            'b' to 12, 'c' to 16, 'd' to 7, 'e' to 4, 'f' to 8, 'g' to 17,
+            'h' to 6, 'j' to 13, 'k' to 2, 'l' to 10, 'm' to 14, 'n' to 4,
+            'p' to 6, 'q' to 5, 'r' to 5, 's' to 24, 't' to 3, 'w' to 8,
+            'x' to 10, 'y' to 25, 'z' to 15,
+        )
+        assertEquals("简版自然码应覆盖 21 个字母键", 21, radCount.size)
+        assertEquals("214 个部首", 214, radCount.values.sum())
+        for ((c, n) in radCount) {
+            assertEquals(
+                "键 $c 的完整部首表字数应等于 RAD_INITIAL 该字母的部首数 $n",
+                n, AssistKeyHints.fullHint(c, "ziranma").length,
+            )
+        }
+        // a/i/o/u/v 在简版里没有任何部首 → 长按气泡也必须是空的
+        for (c in listOf('a', 'i', 'o', 'u', 'v')) {
+            assertEquals("键 $c 不该有自然码全表", "", AssistKeyHints.fullHint(c, "ziranma"))
+        }
+    }
+
     /** 大小写都要能用（键盘内部传的是小写，但别依赖调用方）。 */
     @Test
     fun `大小写都返回同样结果`() {
