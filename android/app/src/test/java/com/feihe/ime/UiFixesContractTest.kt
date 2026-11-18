@@ -173,4 +173,51 @@ class UiFixesContractTest {
         assertTrue("要消费掉这次返回键 return true", keydown.contains("return true"))
         assertTrue("非面板态交回 super", keydown.contains("super.onKeyDown(keyCode, event)"))
     }
+
+    // ---- 问题10：英文态「先打字母再上滑/点符号」把字母重复一遍（m → mm.） ----
+
+    /** 取某个 `KeyKind.X ->` 分支到分支结尾之间的源码（下一个分支 或 该分支的收尾大括号）。 */
+    private fun keyBranch(all: String, marker: String): String {
+        val after = all.substringAfter(marker)
+        // 最后一个分支（NAV）后面没有下一个 KeyKind，要退回到同级缩进的收尾 "}"
+        val next = after.indexOf("\n            KeyKind.")
+        val end = if (next >= 0) next else after.indexOf("\n            }")
+        return if (end >= 0) after.substring(0, end) else after
+    }
+
+    @Test
+    fun `英文态上屏字面字符不得把已上屏字母重打一遍`() {
+        val ime = src("FeiheIme.kt")
+
+        // 前提：英文是逐字母真上屏，pending 只是「已进宿主那串字母」的账本。
+        // 一旦这条变了，下面所有断言的前提也就变了。
+        assertTrue(
+            "英文上屏必须是增量 commitText(text.takeLast(1))，否则账本语义不成立",
+            ime.contains("ic.commitText(text.takeLast(1), 1)"),
+        )
+
+        // 三个「字面字符」分支（标点/符号数字/光标跳转）都不得再自己判 commitSegmentIfActive，
+        // 必须走统一的 flushBeforeLiteral()：它会在英文态只清账本，不回打。
+        for (marker in listOf("KeyKind.PUNCT ->", "KeyKind.TEXT ->", "KeyKind.NAV ->")) {
+            val b = keyBranch(ime, marker)
+            assertFalse(
+                "$marker 不得自己调 commitSegmentIfActive（英文态会漏掉，导致重复上屏）",
+                b.contains("commitSegmentIfActive()"),
+            )
+            assertTrue("$marker 必须走 flushBeforeLiteral()", b.contains("flushBeforeLiteral()"))
+        }
+
+        // 收尾函数本身必须按中英分叉：英文只清账本，中文才提交。
+        val helper = ime.substringAfter("private fun flushBeforeLiteral()")
+            .substringBefore("\n    private fun clearComposing()")
+        assertTrue("flushBeforeLiteral 要判英文态", helper.contains("if (!chinese)"))
+        assertTrue("英文态要调 commitEnglishComposing()", helper.contains("commitEnglishComposing()"))
+        assertTrue("中文态才 commitPending()", helper.contains("commitPending()"))
+        // 英文分支必须在 commitPending 之前就 return，不能落到下一行。
+        assertTrue(
+            "英文分支必须提前 return，不能继续走到 commitPending()",
+            Regex("if \\(!chinese\\) \\{\\s*commitEnglishComposing\\(\\)\\s*return\\s*\\}")
+                .containsMatchIn(helper),
+        )
+    }
 }

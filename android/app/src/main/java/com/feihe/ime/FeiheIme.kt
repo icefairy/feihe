@@ -1799,13 +1799,8 @@ class FeiheIme : InputMethodService() {
                 // 拼音和标点混在一起的串。
                 // `thenSuggest = false`：标点之后不联想（「你好，」后面接什么都对，
                 // 联想只会给出噪音），Windows 端也是这么定的。
-                if (!commitSegmentIfActive()) {
-                    if (chinese && candidates.isNotEmpty()) {
-                        commitWord(candidates.first(), thenSuggest = false)
-                    } else {
-                        commitPending()
-                    }
-                }
+                // 统一收尾：中文态提交拼音/候选，英文态只清账本（不回打已上屏字母）
+                flushBeforeLiteral()
                 commitText(key.code)
                 forgetContext()
             }
@@ -1922,13 +1917,8 @@ class FeiheIme : InputMethodService() {
                 }
                 // 和标点同一套：先把手上半截拼音（或分段整句）处理掉，再打这个字符。
                 // 不这么做的话「nihao」+「1」会变成「nihao1」还在组合态里。
-                if (!commitSegmentIfActive()) {
-                    if (chinese && candidates.isNotEmpty()) {
-                        commitWord(candidates.first(), thenSuggest = false)
-                    } else {
-                        commitPending()
-                    }
-                }
+                // 统一收尾：中文态提交拼音/候选，英文态只清账本（不回打已上屏字母）
+                flushBeforeLiteral()
                 commitText(key.code)
                 forgetContext()
             }
@@ -1946,9 +1936,9 @@ class FeiheIme : InputMethodService() {
             }
 
             KeyKind.NAV -> {
-                // 光标/编辑控制。先把手上的组合串收尾，否则移动光标时那串拼音
-                // 还挂在输入框里，宿主会把它当成一次新的编辑。
-                if (!commitSegmentIfActive()) commitPending()
+                // 光标/编辑控制。先把手上的组合串收尾（英文态只清账本），否则移动光标时
+                // 那串拼音还挂在输入框里，宿主会把它当成一次新的编辑。
+                flushBeforeLiteral()
                 NavAction.of(key.code)?.let { performNav(it) }
             }
         }
@@ -3945,6 +3935,28 @@ class FeiheIme : InputMethodService() {
         // 原样上屏的是一串字母（或英文），不是中文词，不能拿它当联想上下文
         prevWord = ""
         clearComposing()
+    }
+
+    /**
+     * 上屏「字面字符」（标点 / 符号 / 数字 / 光标跳转）之前，把手上残留的输入收尾。
+     *
+     * 中文态：分段整句 → 候选首词 → 直接上屏那串拼音。此时 `commitPending()` 的语义是
+     * 真的有一串拼音还没进宿主，必须提交。
+     *
+     * 英文态：**绝不能走 `commitPending()`**。英文是逐字母真上屏
+     * （[pushComposingEnglish] → `commitText(takeLast(1))`），`pending` 只是
+     * 「已经进了宿主的那串字母」的账本，不是待提交的组合串。再 commit 一次就是
+     * 把这串重打一遍——打 `m` 再上滑逗号出点，得到 `mm.`。英文态只清账本，
+     * 一个字符都不要提交（[commitEnglishComposing]）。
+     */
+    private fun flushBeforeLiteral() {
+        if (commitSegmentIfActive()) return
+        if (!chinese) {
+            commitEnglishComposing()
+            return
+        }
+        if (candidates.isNotEmpty()) commitWord(candidates.first(), thenSuggest = false)
+        else commitPending()
     }
 
     private fun clearComposing() {

@@ -103,6 +103,16 @@ val buildRust by tasks.registering(Exec::class) {
         "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
         ndkClang().absolutePath,
     )
+    // 仓库根目录的 rust-toolchain.toml 是给 Windows 桌面构建固定 llvm-mingw 的
+    // （channel = "stable-x86_64-pc-windows-gnu"），cargo 在 android/jni 下会继承到它，
+    // 于是 Android 构建试图切到 Windows 工具链并报
+    // 「target tuple in channel name 'stable-x86_64-pc-windows-gnu'」。
+    // RUSTUP_TOOLCHAIN 环境变量优先级高于 toolchain 文件，这里钉死 Linux 工具链
+    // （android 的 aarch64/x86_64-linux-android target 装在这个 toolchain 上）。
+    environment("RUSTUP_TOOLCHAIN", "stable-x86_64-unknown-linux-gnu")
+    // 清掉可能从宿主 shell 漏进来的交叉编译专用变量：它们会让 host 侧的
+    // build script / proc-macro 按 android 目标链接而失败。
+    environment.remove("CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER")
     environment("RUSTFLAGS", "-Clink-arg=--target=aarch64-linux-android24")
     // 和 Windows 侧的发布构建同一个开关：**绝不能**把本机的个人词库
     // （`src/user_dict.txt`，从搜狗导出的真实打字记录）编进要发出去的包里。
