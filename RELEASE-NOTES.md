@@ -11,6 +11,17 @@
 
 一句话：**从「桌面 TSF 输入法」变成「桌面 + Android 双端」，并且手机端做到可日常使用。**
 
+### 安装包（已挂在 Release 资产里）
+
+| 资产 | 说明 | 校验 |
+|---|---|---|
+| `Feihe-Setup-0.3.90.exe` | Windows 安装包（NSIS，含 `feihe.dll` / `feihe32.dll`），2026-11-20 构建 | md5 `4e1d991ce1701cf165e5cc49d5d131e4` |
+| `feihe-0.3.91-arm64-release.apk` | Android arm64-v8a release 包，2026-11-18 构建，证书 `CN=Feihe Input Method`（SHA-256 `5ae2c7…6b29`） | md5 `815b07ba967d9f49c7b6de7050c4f2fb` |
+
+> 两个二进制是**本版发布前最后一次本地预编译产物**（Setup 0.3.90 / APK 0.3.91）；
+> v0.3.92 相对 0.3.91 只做版本号对齐 + 发布记录，没有代码改动，故未重新打包。
+> 严格对齐 0.3.92 的包在下次发版构建时统一产出。
+
 ### 新增：Android 手机版（本版最大改动）
 
 - **全新 Android IME 壳**：70 个 Kotlin 文件 / 约 1.7 万行，`core/` 与桌面共用同一套编码、词库、
