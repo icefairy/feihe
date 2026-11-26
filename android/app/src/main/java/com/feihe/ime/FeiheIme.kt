@@ -1640,6 +1640,20 @@ class FeiheIme : InputMethodService() {
                 pushComposing()
             }
 
+            KeyKind.CLEAR -> {
+                // 退格键上滑手势：清空整个输入框。
+                // deleteSurroundingText(前, 后) 相对光标删前后——前后都给一个大数，
+                // 宿主会 clamp 到实际长度，等价于清空整个输入框。
+                // 同时清 IME 内部态（组合区/候选/分段），否则残留拼音会重新弹候选。
+                val ic = currentInputConnection ?: return
+                pending.setLength(0)
+                segmentState = null
+                englishWords = emptyList()
+                ic.deleteSurroundingText(100_000, 100_000)
+                refreshCandidates()
+                refreshStatus()
+            }
+
             KeyKind.DELETE -> {
                 // **英文组合态：退格删掉未确认的最后一个字母。**
                 //

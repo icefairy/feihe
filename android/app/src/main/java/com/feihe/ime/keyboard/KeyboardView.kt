@@ -357,20 +357,86 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
         // 中/英键要能在切模式时就地改字（中 ⇄ 英），所以打上标记。
         if (key.kind == KeyKind.MODE) view.tag = MODE_TAG
 
-        // 删除键长按连续删。手感和搜狗对齐：先删一个，然后约 50ms 一个。
-        // 用 setOnLongClickListener 而不是自己算触摸时长——输入法窗口里
-        // 手算时长会和宿主的触摸分发打架。
+        // 退格键：**短按删一个 / 长按连续删 / 上滑清空整个输入框**，三手势共存。
+        //
+        // 为什么不用 setOnLongClickListener：它拿不到「手指往哪滑」，上滑判定得自己
+        // 接管触摸（DOWN 记 y、MOVE 判位移、UP 定夺），同 SPACE 键的自接管模式。
+        // 接管后连删要自己 postDelayed 维持（350ms 后每 50ms 一个，手感对齐搜狗）。
         if (key.kind == KeyKind.DELETE) {
-            view.setOnLongClickListener {
-                view.postDelayed(object : Runnable {
-                    override fun run() {
-                        if (!view.isPressed) return
-                        onKey(key)
-                        view.postDelayed(this, 50)
-                    }
-                }, 350)
-                true
+            val hint = TextView(ctx).apply {
+                text = "清空"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                setTextColor(p.sub)
+                setPadding(dp(ctx, 4f), dp(ctx, 1f), dp(ctx, 4f), 0)
+                isClickable = false
             }
+            val holder = FrameLayout(ctx).apply {
+                isClickable = true
+                addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                addView(
+                    hint,
+                    FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END),
+                )
+                contentDescription = "按键 退格：短按删除，长按连续删除，上滑清空输入框"
+            }
+            var downY = 0f
+            var swiped = false
+            var repeated = false
+            val threshold = dp(ctx, 14f).toFloat()
+            // 连删：350ms 后每 50ms 删一个。上滑（swiped）或松手即停。
+            val repeat = object : Runnable {
+                override fun run() {
+                    if (!view.isPressed || swiped) {
+                        repeated = false
+                        return
+                    }
+                    repeated = true
+                    onKey(key)
+                    view.postDelayed(this, 50)
+                }
+            }
+            view.setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        view.isPressed = true
+                        downY = ev.rawY
+                        swiped = false
+                        repeated = false
+                        v.postDelayed(repeat, 350)
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        // 明显向上（>14dp）= 上滑清空；一旦成立立即取消连删。
+                        if (!swiped && downY - ev.rawY > threshold) {
+                            swiped = true
+                            v.removeCallbacks(repeat)
+                            view.isPressed = false
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        v.removeCallbacks(repeat)
+                        view.isPressed = false
+                        when {
+                            swiped -> onKey(Key("", KeyKind.CLEAR, "")) // 上滑 → 清空输入框
+                            repeated -> { /* 已连删，不补删 */ }
+                            else -> v.performClick() // 短按 → OnClickListener 删一个
+                        }
+                        swiped = false
+                        repeated = false
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        v.removeCallbacks(repeat)
+                        view.isPressed = false
+                        swiped = false
+                        repeated = false
+                        true
+                    }
+                    else -> false
+                }
+            }
+            return holder
         }
 
         // 空格键：**普通点击 + 长按说话**，两套手势共存。
@@ -663,6 +729,7 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
     private fun accessibilityLabel(key: Key, shift: ShiftState = ShiftState.OFF): String = when (key.kind) {
         KeyKind.CHAR, KeyKind.TEXT -> key.label.ifEmpty { "空白键" }
         KeyKind.DELETE -> "删除"
+        KeyKind.CLEAR -> "清空"
         KeyKind.SHIFT -> shiftAccessibilityLabel(shift)
         KeyKind.SPACE -> "空格"
         KeyKind.ENTER -> "换行"
