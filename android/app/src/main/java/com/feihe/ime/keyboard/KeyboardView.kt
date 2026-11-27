@@ -98,9 +98,12 @@ private const val VOICE_CANCEL_SLOP_DP = 24f
                 // 空格键就和字母键一样宽了。
                 weightSum = row.sumOf { it.weight.toDouble() }.toFloat()
             }
+            // 每行可自带高度（[Key.rowHeightDp]）：顶排数字行 36dp 矮一档，
+            // 其余字母行用容器 [rowHeightDp]（46dp）。取本行第一个键的覆盖值。
+            val rh = row.firstOrNull()?.rowHeightDp ?: rowHeightDp
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(ctx, rowHeightDp),
+                dp(ctx, rh),
             ).apply { bottomMargin = dp(ctx, GAP_DP) }
 
             for (key in row) {

@@ -247,6 +247,12 @@ class SettingsActivity : Activity() {
                     alwaysEnabled = true,
                 ) { UiPrefs.setShowNumberRow(this, it) },
                 switchRow(
+                    "顶排数字行",
+                    "字母页最上面加一排 1-0 直按输数字（第一排上滑腾出放 @ 等常用符号）",
+                    UiPrefs.showQwertyDigitsRow(this),
+                    alwaysEnabled = true,
+                ) { UiPrefs.setShowQwertyDigitsRow(this, it) },
+                switchRow(
                     "语音输入",
                     "按住状态条上的麦克风说话；关闭后不申请录音权限",
                     UiPrefs.voiceEnabled(this),

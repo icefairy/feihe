@@ -23,6 +23,11 @@ data class Key(
      * 长按（连删、锁定），两套手势叠在一起必然互相抢。
      */
     val swipe: String? = null,
+    /**
+     * 本行高度（dp）。默认 null 跟容器 [rowHeightDp]（46dp 字母行）。
+     * 顶排数字行设为 36——加一排数字不能把整块键盘顶出屏，矮一档最稳。
+     */
+    val rowHeightDp: Float? = null,
 )
 
 /** 键盘页。切页只换容器里的行，不重建 InputView。 */
@@ -131,9 +136,12 @@ object QwertyLayout {
      * **只在这一张表里改**：键帽小字、上滑动作、单测三处都读它。
      */
     val SWIPE: Map<Char, String> = mapOf(
-        // 第一排：数字 1-0（和豆包一致）
-        'q' to "1", 'w' to "2", 'e' to "3", 'r' to "4", 't' to "5",
-        'y' to "6", 'u' to "7", 'i' to "8", 'o' to "9", 'p' to "0",
+        // 第一排：顶排数字行（[digitsRow]）上线后，数字 1-0 有了专属直按排，
+        // 这排上滑腾出来放**高频符号**——用户痛点是英文模式下找 `@` 要切好几次
+        // 键盘（邮箱/账号/网址场景），所以 @ 放 q（最左、左手拇指自然落点）。
+        // 中英第一排**同符号**（@ # $ % & + = ! ? *），避免切模式肌肉记忆作废。
+        'q' to "@", 'w' to "#", 'e' to "$", 'r' to "%", 't' to "&",
+        'y' to "+", 'u' to "=", 'i' to "!", 'o' to "?", 'p' to "*",
         // 第二排 a..l：中英**精确同键**，只换全角/半角（见 SWIPE_EN）。
         'a' to "—", 's' to "/", 'd' to "：", 'f' to "；", 'g' to "（",
         'h' to "）", 'j' to "~", 'k' to "“", 'l' to "”",
@@ -178,8 +186,9 @@ object QwertyLayout {
      * `@` 等退到英文符号页主键可达。
      */
     val SWIPE_EN: Map<Char, String> = mapOf(
-        'q' to "1", 'w' to "2", 'e' to "3", 'r' to "4", 't' to "5",
-        'y' to "6", 'u' to "7", 'i' to "8", 'o' to "9", 'p' to "0",
+        // 第一排与中文同符号（见 SWIPE 注释）：@ 在 q，邮箱场景一步到位。
+        'q' to "@", 'w' to "#", 'e' to "$", 'r' to "%", 't' to "&",
+        'y' to "+", 'u' to "=", 'i' to "!", 'o' to "?", 'p' to "*",
         'a' to "-", 's' to "/", 'd' to ":", 'f' to ";", 'g' to "(",
         'h' to ")", 'j' to "~", 'k' to "'", 'l' to "\"",
         'z' to "!", 'x' to "?", 'c' to "<", 'v' to ">",
@@ -301,9 +310,23 @@ object QwertyLayout {
 
     val rows: List<List<Key>> get() = CHINESE_ROWS
 
-    /** 按中英模式取行数据。中英切换要重建键盘才能换掉键帽小字和上滑内容。 */
-    fun rowsOf(chinese: Boolean): List<List<Key>> =
-        if (chinese) CHINESE_ROWS else ENGLISH_ROWS
+    /**
+     * 顶排数字行：1-0 直按输入（[KeyKind.TEXT] 直接上屏，数字场景一步到位），
+     * 高度 36dp（比字母行 46 矮一档）——加一排不能把整块键盘顶出屏。
+     * 上滑留给 QWERTY 第一排（高频符号 @ 等），这里专注数字。
+     */
+    private val DIGIT_ROW: List<Key> =
+        "1234567890".toCharArray().map { c ->
+            Key(c.toString(), KeyKind.TEXT, c.toString(), weight = 1f, rowHeightDp = 36f)
+        }
+
+    /**
+     * 按中英模式 + 是否显示顶排数字行取行数据。
+     * 中英切换 / 数字行开关切换都要重建键盘（键帽小字和上滑内容跟着变）。
+     */
+    fun rowsOf(chinese: Boolean, digitsRow: Boolean = true): List<List<Key>> =
+        (if (digitsRow) listOf(DIGIT_ROW) else emptyList()) +
+            (if (chinese) CHINESE_ROWS else ENGLISH_ROWS)
 
     /** 所有字母键的 code。测试用：必须是 26 个互不相同的小写字母。 */
     val letterCodes: List<String>
@@ -647,9 +670,10 @@ object KeyboardPages {
      *
      * 只有字母页/数字页/符号页区分中英——表情和控制页没有标点，不参与。
      * 中英切换时壳会调 `showPage` 重建键盘，所以这里只要保证"同一模式同一份数据"。
+     * [digitsRow] 控制字母页顶排数字行（可设置开关）。
      */
-    fun rows(page: Page, chinese: Boolean): List<List<Key>> = when (page) {
-        Page.LETTERS -> QwertyLayout.rowsOf(chinese)
+    fun rows(page: Page, chinese: Boolean, digitsRow: Boolean = true): List<List<Key>> = when (page) {
+        Page.LETTERS -> QwertyLayout.rowsOf(chinese, digitsRow)
         Page.DIGITS -> NumericLayout.rowsOf(chinese)
         Page.SYMBOLS -> SymbolLayout.rowsOf(chinese)
         Page.EMOJI -> EmojiLayout.rows

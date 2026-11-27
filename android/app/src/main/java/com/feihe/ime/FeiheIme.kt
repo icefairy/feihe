@@ -192,6 +192,8 @@ class FeiheIme : InputMethodService() {
 
     /** 「数字选词行」开关。设置页可关；关掉后这行连组合态都不出现。 */
     private var showNumberRow = true
+    /** 顶排数字行（1-0 直按）当前显示状态；设置切换时读回，变了就重建键盘。 */
+    private var showQwertyDigitsRow = true
 
 
     private var statusText: TextView? = null
@@ -425,6 +427,13 @@ class FeiheIme : InputMethodService() {
      */
     private fun readUiPrefs() {
         showNumberRow = UiPrefs.showNumberRow(this)
+        // 顶排数字行在键盘内部（rowsOf 生成），开关变了要重建键盘才生效——
+        // 跟「数字选词行」（独立 host，只改高度不销毁视图）是两码事。
+        val wantDigitsRow = UiPrefs.showQwertyDigitsRow(this)
+        if (wantDigitsRow != showQwertyDigitsRow) {
+            showQwertyDigitsRow = wantDigitsRow
+            rebuildKeyboard()
+        }
         voiceEnabled = UiPrefs.voiceEnabled(this)
         // 数字行开关只改高度，不销毁视图：高度恒定是「不触发宿主 resize」的前提
         numberRowHost?.layoutParams = numberRowHost?.layoutParams?.apply {
@@ -1358,7 +1367,7 @@ class FeiheIme : InputMethodService() {
         host.addView(
             KeyboardView.build(
                 this,
-                KeyboardPages.rows(target, chinese),
+                KeyboardPages.rows(target, chinese, UiPrefs.showQwertyDigitsRow(this)),
                 shiftState,
                 KeyboardPages.rowHeightDp(target) * UiPrefs.keyScale(this),
                 // **形码态才传方案名**：非 null 时按键换成「字母小字 + 形码提示大字」，

@@ -19,6 +19,7 @@ import android.content.Context
 object UiPrefs {
     private const val FILE = "feihe_ui"
     private const val KEY_NUMBER_ROW = "number_row"
+    private const val KEY_QWERTY_DIGITS_ROW = "qwerty_digits_row"
     private const val KEY_VOICE = "voice"
     private const val KEY_SMS_OTP = "sms_otp"
     private const val KEY_VOICE_CORRECT = "voice_correct"
@@ -29,6 +30,17 @@ object UiPrefs {
 
     /** 数字选词行是否显示。默认开——A2 要的是「可隐藏」而不是「默认关掉没人发现」。 */
     fun showNumberRow(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_NUMBER_ROW, true)
+
+    /**
+     * 字母页顶排数字行（1-0 直按输入）是否显示。默认开。
+     * 与 [showNumberRow]（候选区数字选词行）是**两个不同的东西**：
+     * 这个是键盘顶上一排实体数字键，那个是候选条上方按数字选词的行。
+     */
+    fun showQwertyDigitsRow(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_QWERTY_DIGITS_ROW, true)
+
+    fun setShowQwertyDigitsRow(ctx: Context, on: Boolean) =
+        prefs(ctx).edit().putBoolean(KEY_QWERTY_DIGITS_ROW, on).apply()
 
     fun setShowNumberRow(ctx: Context, on: Boolean) =
         prefs(ctx).edit().putBoolean(KEY_NUMBER_ROW, on).apply()

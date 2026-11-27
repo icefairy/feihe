@@ -73,10 +73,11 @@ class SymbolLayoutTest {
             assertTrue("${p} 没有行数据", KeyboardPages.rows(p).isNotEmpty())
             assertTrue("${p} 没有页名", KeyboardPages.label(p).isNotEmpty())
         }
-        assertEquals(QwertyLayout.rows, KeyboardPages.rows(Page.LETTERS))
-        assertEquals(NumericLayout.rows, KeyboardPages.rows(Page.DIGITS))
-        assertEquals(SymbolLayout.rows, KeyboardPages.rows(Page.SYMBOLS))
-        assertEquals(EmojiLayout.rows, KeyboardPages.rows(Page.EMOJI))
+        // 基础行（不含顶排数字行）：digitsRow=false 时 LETTERS 页就是 QwertyLayout.rows
+        assertEquals(QwertyLayout.rows, KeyboardPages.rows(Page.LETTERS, true, digitsRow = false))
+        assertEquals(NumericLayout.rows, KeyboardPages.rows(Page.DIGITS, true, digitsRow = false))
+        assertEquals(SymbolLayout.rows, KeyboardPages.rows(Page.SYMBOLS, true, digitsRow = false))
+        assertEquals(EmojiLayout.rows, KeyboardPages.rows(Page.EMOJI, true, digitsRow = false))
     }
 
     /**
